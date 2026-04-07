@@ -1,0 +1,8 @@
+# /Cargo.toml
+[workspace]
+members = [
+    "mstlo",
+    "mstlo/mstlo-macros",
+    "mstlo-python"
+]
+resolver = "3"

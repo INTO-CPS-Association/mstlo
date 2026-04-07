@@ -1,0 +1,505 @@
+formula_id,spec,semantics,algorithm,mode,n_samples,m_runs,avg_total_s,avg_per_sample_s,avg_per_sample_us,benchmark_kind,interval_len
+1,(x < 0.5) and (x > -0.5),DelayedQuantitative,Incremental,online,20000,50,0.003886225860,0.000000194311,0.194311,general,0
+2,"G[0,1000] (x > 0.5 -> F[0,100] (x < 0.0))",DelayedQuantitative,Incremental,online,20000,50,0.012787690040,0.000000639385,0.639385,general,1000
+3,"(G[0,100] (x < 0.5)) or (G[100,150] (x > 0.0))",DelayedQuantitative,Incremental,online,20000,50,0.011129122560,0.000000556456,0.556456,general,100
+4,"(x < 0.0) U[0,1] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.006721403320,0.000000336070,0.336070,general,1
+4,"(x < 0.0) U[0,100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.035929974120,0.000001796499,1.796499,general,100
+4,"(x < 0.0) U[0,200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.057641069160,0.000002882053,2.882053,general,200
+4,"(x < 0.0) U[0,300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.079149349960,0.000003957467,3.957467,general,300
+4,"(x < 0.0) U[0,400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.098269821660,0.000004913491,4.913491,general,400
+4,"(x < 0.0) U[0,500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.116720124140,0.000005836006,5.836006,general,500
+4,"(x < 0.0) U[0,600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.139990784960,0.000006999539,6.999539,general,600
+4,"(x < 0.0) U[0,700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.159879521660,0.000007993976,7.993976,general,700
+4,"(x < 0.0) U[0,800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.178918818340,0.000008945941,8.945941,general,800
+4,"(x < 0.0) U[0,900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.195858819180,0.000009792941,9.792941,general,900
+4,"(x < 0.0) U[0,1000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.214796458300,0.000010739823,10.739823,general,1000
+4,"(x < 0.0) U[0,1100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.242480079180,0.000012124004,12.124004,general,1100
+4,"(x < 0.0) U[0,1200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.260540010820,0.000013027001,13.027001,general,1200
+4,"(x < 0.0) U[0,1300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.279208956660,0.000013960448,13.960448,general,1300
+4,"(x < 0.0) U[0,1400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.297909935820,0.000014895497,14.895497,general,1400
+4,"(x < 0.0) U[0,1500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.316192544060,0.000015809627,15.809627,general,1500
+4,"(x < 0.0) U[0,1600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.334275174140,0.000016713759,16.713759,general,1600
+4,"(x < 0.0) U[0,1700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.352348046660,0.000017617402,17.617402,general,1700
+4,"(x < 0.0) U[0,1800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.367955304180,0.000018397765,18.397765,general,1800
+4,"(x < 0.0) U[0,1900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.384419871560,0.000019220994,19.220994,general,1900
+4,"(x < 0.0) U[0,2000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.401925374220,0.000020096269,20.096269,general,2000
+4,"(x < 0.0) U[0,2100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.429918905880,0.000021495945,21.495945,general,2100
+4,"(x < 0.0) U[0,2200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.447430359920,0.000022371518,22.371518,general,2200
+4,"(x < 0.0) U[0,2300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.468969372500,0.000023448469,23.448469,general,2300
+4,"(x < 0.0) U[0,2400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.480391744140,0.000024019587,24.019587,general,2400
+4,"(x < 0.0) U[0,2500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.496535422500,0.000024826771,24.826771,general,2500
+4,"(x < 0.0) U[0,2600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.511972992560,0.000025598650,25.598650,general,2600
+4,"(x < 0.0) U[0,2700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.526580070800,0.000026329004,26.329004,general,2700
+4,"(x < 0.0) U[0,2800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.542728896660,0.000027136445,27.136445,general,2800
+4,"(x < 0.0) U[0,2900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.558374211640,0.000027918711,27.918711,general,2900
+4,"(x < 0.0) U[0,3000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.572850064260,0.000028642503,28.642503,general,3000
+4,"(x < 0.0) U[0,3100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.586185109940,0.000029309255,29.309255,general,3100
+4,"(x < 0.0) U[0,3200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.601375246700,0.000030068762,30.068762,general,3200
+4,"(x < 0.0) U[0,3300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.616471926660,0.000030823596,30.823596,general,3300
+4,"(x < 0.0) U[0,3400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.630625980900,0.000031531299,31.531299,general,3400
+4,"(x < 0.0) U[0,3500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.645376284980,0.000032268814,32.268814,general,3500
+4,"(x < 0.0) U[0,3600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.661409169980,0.000033070458,33.070458,general,3600
+4,"(x < 0.0) U[0,3700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.675924055800,0.000033796203,33.796203,general,3700
+4,"(x < 0.0) U[0,3800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.689945590840,0.000034497280,34.497280,general,3800
+4,"(x < 0.0) U[0,3900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.704095357500,0.000035204768,35.204768,general,3900
+4,"(x < 0.0) U[0,4000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.717841446700,0.000035892072,35.892072,general,4000
+4,"(x < 0.0) U[0,4100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.797391215080,0.000039869561,39.869561,general,4100
+4,"(x < 0.0) U[0,4200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.810501508420,0.000040525075,40.525075,general,4200
+4,"(x < 0.0) U[0,4300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.824040717440,0.000041202036,41.202036,general,4300
+4,"(x < 0.0) U[0,4400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.838039180000,0.000041901959,41.901959,general,4400
+4,"(x < 0.0) U[0,4500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.850328861560,0.000042516443,42.516443,general,4500
+4,"(x < 0.0) U[0,4600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.863538979900,0.000043176949,43.176949,general,4600
+4,"(x < 0.0) U[0,4700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.875327311720,0.000043766366,43.766366,general,4700
+4,"(x < 0.0) U[0,4800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.888104893280,0.000044405245,44.405245,general,4800
+4,"(x < 0.0) U[0,4900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.901411070900,0.000045070554,45.070554,general,4900
+4,"(x < 0.0) U[0,5000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.913822843360,0.000045691142,45.691142,general,5000
+5,"G[0,1] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.002900705040,0.000000145035,0.145035,general,1
+5,"G[0,100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.005342118320,0.000000267106,0.267106,general,100
+5,"G[0,200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.006293975000,0.000000314699,0.314699,general,200
+5,"G[0,300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.006958585880,0.000000347929,0.347929,general,300
+5,"G[0,400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007334213340,0.000000366711,0.366711,general,400
+5,"G[0,500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007607890020,0.000000380395,0.380395,general,500
+5,"G[0,600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008082765000,0.000000404138,0.404138,general,600
+5,"G[0,700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008211362480,0.000000410568,0.410568,general,700
+5,"G[0,800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008336077540,0.000000416804,0.416804,general,800
+5,"G[0,900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008434585100,0.000000421729,0.421729,general,900
+5,"G[0,1000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008426266740,0.000000421313,0.421313,general,1000
+5,"G[0,1100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008567674140,0.000000428384,0.428384,general,1100
+5,"G[0,1200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008622265800,0.000000431113,0.431113,general,1200
+5,"G[0,1300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008521972500,0.000000426099,0.426099,general,1300
+5,"G[0,1400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008596151660,0.000000429808,0.429808,general,1400
+5,"G[0,1500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008516154960,0.000000425808,0.425808,general,1500
+5,"G[0,1600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008477405900,0.000000423870,0.423870,general,1600
+5,"G[0,1700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008559886600,0.000000427994,0.427994,general,1700
+5,"G[0,1800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008512582480,0.000000425629,0.425629,general,1800
+5,"G[0,1900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008572634120,0.000000428632,0.428632,general,1900
+5,"G[0,2000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008496486600,0.000000424824,0.424824,general,2000
+5,"G[0,2100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008541638400,0.000000427082,0.427082,general,2100
+5,"G[0,2200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008597541700,0.000000429877,0.429877,general,2200
+5,"G[0,2300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008559350060,0.000000427968,0.427968,general,2300
+5,"G[0,2400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008488850020,0.000000424443,0.424443,general,2400
+5,"G[0,2500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008464610020,0.000000423231,0.423231,general,2500
+5,"G[0,2600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008476450840,0.000000423823,0.423823,general,2600
+5,"G[0,2700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008575590080,0.000000428780,0.428780,general,2700
+5,"G[0,2800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008528354980,0.000000426418,0.426418,general,2800
+5,"G[0,2900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008537225900,0.000000426861,0.426861,general,2900
+5,"G[0,3000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008556431580,0.000000427822,0.427822,general,3000
+5,"G[0,3100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008552654180,0.000000427633,0.427633,general,3100
+5,"G[0,3200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008534497580,0.000000426725,0.426725,general,3200
+5,"G[0,3300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008526175840,0.000000426309,0.426309,general,3300
+5,"G[0,3400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008508861640,0.000000425443,0.425443,general,3400
+5,"G[0,3500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008502190000,0.000000425109,0.425109,general,3500
+5,"G[0,3600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008405472440,0.000000420274,0.420274,general,3600
+5,"G[0,3700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008393490800,0.000000419675,0.419675,general,3700
+5,"G[0,3800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008630978340,0.000000431549,0.431549,general,3800
+5,"G[0,3900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008485814160,0.000000424291,0.424291,general,3900
+5,"G[0,4000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008410875820,0.000000420544,0.420544,general,4000
+5,"G[0,4100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008343237480,0.000000417162,0.417162,general,4100
+5,"G[0,4200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008363923380,0.000000418196,0.418196,general,4200
+5,"G[0,4300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008425162540,0.000000421258,0.421258,general,4300
+5,"G[0,4400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008486799980,0.000000424340,0.424340,general,4400
+5,"G[0,4500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008397385000,0.000000419869,0.419869,general,4500
+5,"G[0,4600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008444363400,0.000000422218,0.422218,general,4600
+5,"G[0,4700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008433364920,0.000000421668,0.421668,general,4700
+5,"G[0,4800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008352676640,0.000000417634,0.417634,general,4800
+5,"G[0,4900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008454118280,0.000000422706,0.422706,general,4900
+5,"G[0,5000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.008358288300,0.000000417914,0.417914,general,5000
+6,"F[0,1] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.002862279180,0.000000143114,0.143114,general,1
+6,"F[0,100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.005232711760,0.000000261636,0.261636,general,100
+6,"F[0,200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.006033948420,0.000000301697,0.301697,general,200
+6,"F[0,300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.006412902460,0.000000320645,0.320645,general,300
+6,"F[0,400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.006606885800,0.000000330344,0.330344,general,400
+6,"F[0,500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.006888177540,0.000000344409,0.344409,general,500
+6,"F[0,600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007084867460,0.000000354243,0.354243,general,600
+6,"F[0,700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007096630960,0.000000354832,0.354832,general,700
+6,"F[0,800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007167330760,0.000000358367,0.358367,general,800
+6,"F[0,900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007227582500,0.000000361379,0.361379,general,900
+6,"F[0,1000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007260682440,0.000000363034,0.363034,general,1000
+6,"F[0,1100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007361345840,0.000000368067,0.368067,general,1100
+6,"F[0,1200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007332380780,0.000000366619,0.366619,general,1200
+6,"F[0,1300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007399566640,0.000000369978,0.369978,general,1300
+6,"F[0,1400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007330593320,0.000000366530,0.366530,general,1400
+6,"F[0,1500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007380188300,0.000000369009,0.369009,general,1500
+6,"F[0,1600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007301358360,0.000000365068,0.365068,general,1600
+6,"F[0,1700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007324504200,0.000000366225,0.366225,general,1700
+6,"F[0,1800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007347560000,0.000000367378,0.367378,general,1800
+6,"F[0,1900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007400169280,0.000000370008,0.370008,general,1900
+6,"F[0,2000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007366973400,0.000000368349,0.368349,general,2000
+6,"F[0,2100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007392490760,0.000000369625,0.369625,general,2100
+6,"F[0,2200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007290342500,0.000000364517,0.364517,general,2200
+6,"F[0,2300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007325528320,0.000000366276,0.366276,general,2300
+6,"F[0,2400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007374286600,0.000000368714,0.368714,general,2400
+6,"F[0,2500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007384713380,0.000000369236,0.369236,general,2500
+6,"F[0,2600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007317066740,0.000000365853,0.365853,general,2600
+6,"F[0,2700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007273174180,0.000000363659,0.363659,general,2700
+6,"F[0,2800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007320223260,0.000000366011,0.366011,general,2800
+6,"F[0,2900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007298375760,0.000000364919,0.364919,general,2900
+6,"F[0,3000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007337887520,0.000000366894,0.366894,general,3000
+6,"F[0,3100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007359321580,0.000000367966,0.367966,general,3100
+6,"F[0,3200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007282538420,0.000000364127,0.364127,general,3200
+6,"F[0,3300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007388792520,0.000000369440,0.369440,general,3300
+6,"F[0,3400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007273175900,0.000000363659,0.363659,general,3400
+6,"F[0,3500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007289365900,0.000000364468,0.364468,general,3500
+6,"F[0,3600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007257839080,0.000000362892,0.362892,general,3600
+6,"F[0,3700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007255990920,0.000000362800,0.362800,general,3700
+6,"F[0,3800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007358288260,0.000000367914,0.367914,general,3800
+6,"F[0,3900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007345057480,0.000000367253,0.367253,general,3900
+6,"F[0,4000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007294921740,0.000000364746,0.364746,general,4000
+6,"F[0,4100] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007227799940,0.000000361390,0.361390,general,4100
+6,"F[0,4200] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007387665820,0.000000369383,0.369383,general,4200
+6,"F[0,4300] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007417752440,0.000000370888,0.370888,general,4300
+6,"F[0,4400] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007343903380,0.000000367195,0.367195,general,4400
+6,"F[0,4500] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007227240980,0.000000361362,0.361362,general,4500
+6,"F[0,4600] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007184745880,0.000000359237,0.359237,general,4600
+6,"F[0,4700] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007160885860,0.000000358044,0.358044,general,4700
+6,"F[0,4800] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007300346600,0.000000365017,0.365017,general,4800
+6,"F[0,4900] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007193651640,0.000000359683,0.359683,general,4900
+6,"F[0,5000] (x > 0.0)",DelayedQuantitative,Incremental,online,20000,50,0.007187514980,0.000000359376,0.359376,general,5000
+1,(x < 0.5) and (x > -0.5),DelayedQualitative,Incremental,online,20000,50,0.003437485860,0.000000171874,0.171874,general,0
+2,"G[0,1000] (x > 0.5 -> F[0,100] (x < 0.0))",DelayedQualitative,Incremental,online,20000,50,0.007770444180,0.000000388522,0.388522,general,1000
+3,"(G[0,100] (x < 0.5)) or (G[100,150] (x > 0.0))",DelayedQualitative,Incremental,online,20000,50,0.007524319200,0.000000376216,0.376216,general,100
+4,"(x < 0.0) U[0,1] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.006483187500,0.000000324159,0.324159,general,1
+4,"(x < 0.0) U[0,100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.024562470840,0.000001228124,1.228124,general,100
+4,"(x < 0.0) U[0,200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.037589064960,0.000001879453,1.879453,general,200
+4,"(x < 0.0) U[0,300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.050808264960,0.000002540413,2.540413,general,300
+4,"(x < 0.0) U[0,400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.061989754240,0.000003099488,3.099488,general,400
+4,"(x < 0.0) U[0,500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.072291420880,0.000003614571,3.614571,general,500
+4,"(x < 0.0) U[0,600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.086674241600,0.000004333712,4.333712,general,600
+4,"(x < 0.0) U[0,700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.099973329940,0.000004998666,4.998666,general,700
+4,"(x < 0.0) U[0,800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.110879841700,0.000005543992,5.543992,general,800
+4,"(x < 0.0) U[0,900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.123485749220,0.000006174287,6.174287,general,900
+4,"(x < 0.0) U[0,1000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.135934825060,0.000006796741,6.796741,general,1000
+4,"(x < 0.0) U[0,1100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.150548649260,0.000007527432,7.527432,general,1100
+4,"(x < 0.0) U[0,1200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.162999510080,0.000008149976,8.149976,general,1200
+4,"(x < 0.0) U[0,1300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.175867100820,0.000008793355,8.793355,general,1300
+4,"(x < 0.0) U[0,1400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.188780177420,0.000009439009,9.439009,general,1400
+4,"(x < 0.0) U[0,1500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.200607020740,0.000010030351,10.030351,general,1500
+4,"(x < 0.0) U[0,1600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.211846786740,0.000010592339,10.592339,general,1600
+4,"(x < 0.0) U[0,1700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.223146296600,0.000011157315,11.157315,general,1700
+4,"(x < 0.0) U[0,1800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.231448577460,0.000011572429,11.572429,general,1800
+4,"(x < 0.0) U[0,1900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.242294493260,0.000012114725,12.114725,general,1900
+4,"(x < 0.0) U[0,2000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.252758106620,0.000012637905,12.637905,general,2000
+4,"(x < 0.0) U[0,2100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.267537775880,0.000013376889,13.376889,general,2100
+4,"(x < 0.0) U[0,2200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.278600859940,0.000013930043,13.930043,general,2200
+4,"(x < 0.0) U[0,2300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.289484756720,0.000014474238,14.474238,general,2300
+4,"(x < 0.0) U[0,2400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.298977480100,0.000014948874,14.948874,general,2400
+4,"(x < 0.0) U[0,2500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.308143524120,0.000015407176,15.407176,general,2500
+4,"(x < 0.0) U[0,2600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.318225981660,0.000015911299,15.911299,general,2600
+4,"(x < 0.0) U[0,2700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.328761984100,0.000016438099,16.438099,general,2700
+4,"(x < 0.0) U[0,2800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.337743490000,0.000016887175,16.887175,general,2800
+4,"(x < 0.0) U[0,2900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.348167546760,0.000017408377,17.408377,general,2900
+4,"(x < 0.0) U[0,3000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.355035325040,0.000017751766,17.751766,general,3000
+4,"(x < 0.0) U[0,3100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.363900710020,0.000018195036,18.195036,general,3100
+4,"(x < 0.0) U[0,3200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.372273562480,0.000018613678,18.613678,general,3200
+4,"(x < 0.0) U[0,3300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.383252650920,0.000019162633,19.162633,general,3300
+4,"(x < 0.0) U[0,3400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.392948503300,0.000019647425,19.647425,general,3400
+4,"(x < 0.0) U[0,3500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.401615724240,0.000020080786,20.080786,general,3500
+4,"(x < 0.0) U[0,3600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.409601729960,0.000020480086,20.480086,general,3600
+4,"(x < 0.0) U[0,3700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.418607001680,0.000020930350,20.930350,general,3700
+4,"(x < 0.0) U[0,3800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.427332148360,0.000021366607,21.366607,general,3800
+4,"(x < 0.0) U[0,3900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.435919852500,0.000021795993,21.795993,general,3900
+4,"(x < 0.0) U[0,4000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.443287600780,0.000022164380,22.164380,general,4000
+4,"(x < 0.0) U[0,4100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.488972728280,0.000024448636,24.448636,general,4100
+4,"(x < 0.0) U[0,4200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.496767461700,0.000024838373,24.838373,general,4200
+4,"(x < 0.0) U[0,4300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.506333564140,0.000025316678,25.316678,general,4300
+4,"(x < 0.0) U[0,4400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.515184854220,0.000025759243,25.759243,general,4400
+4,"(x < 0.0) U[0,4500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.522687303280,0.000026134365,26.134365,general,4500
+4,"(x < 0.0) U[0,4600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.529450420040,0.000026472521,26.472521,general,4600
+4,"(x < 0.0) U[0,4700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.536021563340,0.000026801078,26.801078,general,4700
+4,"(x < 0.0) U[0,4800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.543088176720,0.000027154409,27.154409,general,4800
+4,"(x < 0.0) U[0,4900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.549716774160,0.000027485839,27.485839,general,4900
+4,"(x < 0.0) U[0,5000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.557875255840,0.000027893763,27.893763,general,5000
+5,"G[0,1] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.002784981700,0.000000139249,0.139249,general,1
+5,"G[0,100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003299638380,0.000000164982,0.164982,general,100
+5,"G[0,200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003507429120,0.000000175371,0.175371,general,200
+5,"G[0,300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003402816680,0.000000170141,0.170141,general,300
+5,"G[0,400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003405023300,0.000000170251,0.170251,general,400
+5,"G[0,500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003457967500,0.000000172898,0.172898,general,500
+5,"G[0,600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003404066600,0.000000170203,0.170203,general,600
+5,"G[0,700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003501298260,0.000000175065,0.175065,general,700
+5,"G[0,800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003512466640,0.000000175623,0.175623,general,800
+5,"G[0,900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003498250060,0.000000174913,0.174913,general,900
+5,"G[0,1000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003498526800,0.000000174926,0.174926,general,1000
+5,"G[0,1100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003499895020,0.000000174995,0.174995,general,1100
+5,"G[0,1200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003540606680,0.000000177030,0.177030,general,1200
+5,"G[0,1300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003500026720,0.000000175001,0.175001,general,1300
+5,"G[0,1400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003536305860,0.000000176815,0.176815,general,1400
+5,"G[0,1500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003562931620,0.000000178147,0.178147,general,1500
+5,"G[0,1600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003521039160,0.000000176052,0.176052,general,1600
+5,"G[0,1700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003533892460,0.000000176695,0.176695,general,1700
+5,"G[0,1800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003524629980,0.000000176231,0.176231,general,1800
+5,"G[0,1900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003492046720,0.000000174602,0.174602,general,1900
+5,"G[0,2000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003487753440,0.000000174388,0.174388,general,2000
+5,"G[0,2100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003486432540,0.000000174322,0.174322,general,2100
+5,"G[0,2200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003488075880,0.000000174404,0.174404,general,2200
+5,"G[0,2300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003455673240,0.000000172784,0.172784,general,2300
+5,"G[0,2400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003478666620,0.000000173933,0.173933,general,2400
+5,"G[0,2500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003499114140,0.000000174956,0.174956,general,2500
+5,"G[0,2600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003500278320,0.000000175014,0.175014,general,2600
+5,"G[0,2700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003468163360,0.000000173408,0.173408,general,2700
+5,"G[0,2800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003437246700,0.000000171862,0.171862,general,2800
+5,"G[0,2900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003460904920,0.000000173045,0.173045,general,2900
+5,"G[0,3000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003492142500,0.000000174607,0.174607,general,3000
+5,"G[0,3100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003454534140,0.000000172727,0.172727,general,3100
+5,"G[0,3200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003425861720,0.000000171293,0.171293,general,3200
+5,"G[0,3300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003472016640,0.000000173601,0.173601,general,3300
+5,"G[0,3400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003464130800,0.000000173207,0.173207,general,3400
+5,"G[0,3500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003530167560,0.000000176508,0.176508,general,3500
+5,"G[0,3600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003447952540,0.000000172398,0.172398,general,3600
+5,"G[0,3700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003459975780,0.000000172999,0.172999,general,3700
+5,"G[0,3800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003471173360,0.000000173559,0.173559,general,3800
+5,"G[0,3900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003440313480,0.000000172016,0.172016,general,3900
+5,"G[0,4000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003438167380,0.000000171908,0.171908,general,4000
+5,"G[0,4100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003414060920,0.000000170703,0.170703,general,4100
+5,"G[0,4200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003408452480,0.000000170423,0.170423,general,4200
+5,"G[0,4300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003453494220,0.000000172675,0.172675,general,4300
+5,"G[0,4400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003501518360,0.000000175076,0.175076,general,4400
+5,"G[0,4500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003488557500,0.000000174428,0.174428,general,4500
+5,"G[0,4600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003455312440,0.000000172766,0.172766,general,4600
+5,"G[0,4700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003428914120,0.000000171446,0.171446,general,4700
+5,"G[0,4800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003442589140,0.000000172129,0.172129,general,4800
+5,"G[0,4900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003438714200,0.000000171936,0.171936,general,4900
+5,"G[0,5000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003448723360,0.000000172436,0.172436,general,5000
+6,"F[0,1] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.002848159120,0.000000142408,0.142408,general,1
+6,"F[0,100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003342570100,0.000000167129,0.167129,general,100
+6,"F[0,200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003471821660,0.000000173591,0.173591,general,200
+6,"F[0,300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003505347460,0.000000175267,0.175267,general,300
+6,"F[0,400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003474874180,0.000000173744,0.173744,general,400
+6,"F[0,500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003477057480,0.000000173853,0.173853,general,500
+6,"F[0,600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003518748240,0.000000175937,0.175937,general,600
+6,"F[0,700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003560715740,0.000000178036,0.178036,general,700
+6,"F[0,800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003587765800,0.000000179388,0.179388,general,800
+6,"F[0,900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003584098320,0.000000179205,0.179205,general,900
+6,"F[0,1000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003554295020,0.000000177715,0.177715,general,1000
+6,"F[0,1100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003548562500,0.000000177428,0.177428,general,1100
+6,"F[0,1200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003587918440,0.000000179396,0.179396,general,1200
+6,"F[0,1300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003583052540,0.000000179153,0.179153,general,1300
+6,"F[0,1400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003533838240,0.000000176692,0.176692,general,1400
+6,"F[0,1500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003568265040,0.000000178413,0.178413,general,1500
+6,"F[0,1600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003561853360,0.000000178093,0.178093,general,1600
+6,"F[0,1700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003623991580,0.000000181200,0.181200,general,1700
+6,"F[0,1800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003561703400,0.000000178085,0.178085,general,1800
+6,"F[0,1900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003660496620,0.000000183025,0.183025,general,1900
+6,"F[0,2000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003529948320,0.000000176497,0.176497,general,2000
+6,"F[0,2100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003497400800,0.000000174870,0.174870,general,2100
+6,"F[0,2200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003511478420,0.000000175574,0.175574,general,2200
+6,"F[0,2300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003448463340,0.000000172423,0.172423,general,2300
+6,"F[0,2400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003486709180,0.000000174335,0.174335,general,2400
+6,"F[0,2500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003485958320,0.000000174298,0.174298,general,2500
+6,"F[0,2600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003497736660,0.000000174887,0.174887,general,2600
+6,"F[0,2700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003461406660,0.000000173070,0.173070,general,2700
+6,"F[0,2800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003454679100,0.000000172734,0.172734,general,2800
+6,"F[0,2900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003489290840,0.000000174465,0.174465,general,2900
+6,"F[0,3000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003564885000,0.000000178244,0.178244,general,3000
+6,"F[0,3100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003591712480,0.000000179586,0.179586,general,3100
+6,"F[0,3200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003481244080,0.000000174062,0.174062,general,3200
+6,"F[0,3300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003520687500,0.000000176034,0.176034,general,3300
+6,"F[0,3400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003541425820,0.000000177071,0.177071,general,3400
+6,"F[0,3500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003565101640,0.000000178255,0.178255,general,3500
+6,"F[0,3600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003484709220,0.000000174235,0.174235,general,3600
+6,"F[0,3700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003475895040,0.000000173795,0.173795,general,3700
+6,"F[0,3800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003487616620,0.000000174381,0.174381,general,3800
+6,"F[0,3900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003556301700,0.000000177815,0.177815,general,3900
+6,"F[0,4000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003474535980,0.000000173727,0.173727,general,4000
+6,"F[0,4100] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003437651620,0.000000171883,0.171883,general,4100
+6,"F[0,4200] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003549733360,0.000000177487,0.177487,general,4200
+6,"F[0,4300] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003514123320,0.000000175706,0.175706,general,4300
+6,"F[0,4400] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003579285980,0.000000178964,0.178964,general,4400
+6,"F[0,4500] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003625169140,0.000000181258,0.181258,general,4500
+6,"F[0,4600] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003601541700,0.000000180077,0.180077,general,4600
+6,"F[0,4700] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003574590780,0.000000178730,0.178730,general,4700
+6,"F[0,4800] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003546421660,0.000000177321,0.177321,general,4800
+6,"F[0,4900] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003605802420,0.000000180290,0.180290,general,4900
+6,"F[0,5000] (x > 0.0)",DelayedQualitative,Incremental,online,20000,50,0.003523265820,0.000000176163,0.176163,general,5000
+1,(x < 0.5) and (x > -0.5),EagerQualitative,Incremental,online,20000,50,0.003663054160,0.000000183153,0.183153,general,0
+2,"G[0,1000] (x > 0.5 -> F[0,100] (x < 0.0))",EagerQualitative,Incremental,online,20000,50,0.006429270000,0.000000321464,0.321464,general,1000
+3,"(G[0,100] (x < 0.5)) or (G[100,150] (x > 0.0))",EagerQualitative,Incremental,online,20000,50,0.006540205860,0.000000327010,0.327010,general,100
+4,"(x < 0.0) U[0,1] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.005760432560,0.000000288022,0.288022,general,1
+4,"(x < 0.0) U[0,100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.013348607480,0.000000667430,0.667430,general,100
+4,"(x < 0.0) U[0,200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.016292461780,0.000000814623,0.814623,general,200
+4,"(x < 0.0) U[0,300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.018758494280,0.000000937925,0.937925,general,300
+4,"(x < 0.0) U[0,400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.021275429900,0.000001063771,1.063771,general,400
+4,"(x < 0.0) U[0,500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.023433930760,0.000001171697,1.171697,general,500
+4,"(x < 0.0) U[0,600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.026072910880,0.000001303646,1.303646,general,600
+4,"(x < 0.0) U[0,700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.028535148320,0.000001426757,1.426757,general,700
+4,"(x < 0.0) U[0,800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.030440717480,0.000001522036,1.522036,general,800
+4,"(x < 0.0) U[0,900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.032582700780,0.000001629135,1.629135,general,900
+4,"(x < 0.0) U[0,1000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.034623785040,0.000001731189,1.731189,general,1000
+4,"(x < 0.0) U[0,1100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.036522601680,0.000001826130,1.826130,general,1100
+4,"(x < 0.0) U[0,1200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.038403905060,0.000001920195,1.920195,general,1200
+4,"(x < 0.0) U[0,1300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.040503209940,0.000002025160,2.025160,general,1300
+4,"(x < 0.0) U[0,1400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.042508753280,0.000002125438,2.125438,general,1400
+4,"(x < 0.0) U[0,1500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.044532063300,0.000002226603,2.226603,general,1500
+4,"(x < 0.0) U[0,1600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.046626302520,0.000002331315,2.331315,general,1600
+4,"(x < 0.0) U[0,1700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.048411112540,0.000002420556,2.420556,general,1700
+4,"(x < 0.0) U[0,1800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.049951343300,0.000002497567,2.497567,general,1800
+4,"(x < 0.0) U[0,1900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.052256773260,0.000002612839,2.612839,general,1900
+4,"(x < 0.0) U[0,2000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.054336637500,0.000002716832,2.716832,general,2000
+4,"(x < 0.0) U[0,2100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.056525718220,0.000002826286,2.826286,general,2100
+4,"(x < 0.0) U[0,2200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.058233363280,0.000002911668,2.911668,general,2200
+4,"(x < 0.0) U[0,2300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.060431215800,0.000003021561,3.021561,general,2300
+4,"(x < 0.0) U[0,2400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.062556614140,0.000003127831,3.127831,general,2400
+4,"(x < 0.0) U[0,2500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.064544264980,0.000003227213,3.227213,general,2500
+4,"(x < 0.0) U[0,2600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.066404951640,0.000003320248,3.320248,general,2600
+4,"(x < 0.0) U[0,2700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.068633043260,0.000003431652,3.431652,general,2700
+4,"(x < 0.0) U[0,2800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.070719727360,0.000003535986,3.535986,general,2800
+4,"(x < 0.0) U[0,2900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.072706274120,0.000003635314,3.635314,general,2900
+4,"(x < 0.0) U[0,3000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.074480035080,0.000003724002,3.724002,general,3000
+4,"(x < 0.0) U[0,3100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.078612681800,0.000003930634,3.930634,general,3100
+4,"(x < 0.0) U[0,3200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.080273381740,0.000004013669,4.013669,general,3200
+4,"(x < 0.0) U[0,3300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.081606403280,0.000004080320,4.080320,general,3300
+4,"(x < 0.0) U[0,3400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.083829360940,0.000004191468,4.191468,general,3400
+4,"(x < 0.0) U[0,3500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.085858290820,0.000004292915,4.292915,general,3500
+4,"(x < 0.0) U[0,3600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.086352424100,0.000004317621,4.317621,general,3600
+4,"(x < 0.0) U[0,3700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.088134359200,0.000004406718,4.406718,general,3700
+4,"(x < 0.0) U[0,3800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.089997459080,0.000004499873,4.499873,general,3800
+4,"(x < 0.0) U[0,3900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.091069326680,0.000004553466,4.553466,general,3900
+4,"(x < 0.0) U[0,4000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.093270662560,0.000004663533,4.663533,general,4000
+4,"(x < 0.0) U[0,4100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.116358045040,0.000005817902,5.817902,general,4100
+4,"(x < 0.0) U[0,4200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.118327787520,0.000005916389,5.916389,general,4200
+4,"(x < 0.0) U[0,4300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.119615873260,0.000005980794,5.980794,general,4300
+4,"(x < 0.0) U[0,4400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.121322590780,0.000006066130,6.066130,general,4400
+4,"(x < 0.0) U[0,4500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.122932068280,0.000006146603,6.146603,general,4500
+4,"(x < 0.0) U[0,4600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.124544046600,0.000006227202,6.227202,general,4600
+4,"(x < 0.0) U[0,4700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.126244059140,0.000006312203,6.312203,general,4700
+4,"(x < 0.0) U[0,4800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.128129652500,0.000006406483,6.406483,general,4800
+4,"(x < 0.0) U[0,4900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.129663282540,0.000006483164,6.483164,general,4900
+4,"(x < 0.0) U[0,5000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.131595069100,0.000006579753,6.579753,general,5000
+5,"G[0,1] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002715903360,0.000000135795,0.135795,general,1
+5,"G[0,100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002859588320,0.000000142979,0.142979,general,100
+5,"G[0,200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002816920800,0.000000140846,0.140846,general,200
+5,"G[0,300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002831517540,0.000000141576,0.141576,general,300
+5,"G[0,400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002776935720,0.000000138847,0.138847,general,400
+5,"G[0,500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002779455000,0.000000138973,0.138973,general,500
+5,"G[0,600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002765687540,0.000000138284,0.138284,general,600
+5,"G[0,700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002799015000,0.000000139951,0.139951,general,700
+5,"G[0,800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002792835820,0.000000139642,0.139642,general,800
+5,"G[0,900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002762434120,0.000000138122,0.138122,general,900
+5,"G[0,1000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002763060760,0.000000138153,0.138153,general,1000
+5,"G[0,1100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002783985020,0.000000139199,0.139199,general,1100
+5,"G[0,1200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002777741620,0.000000138887,0.138887,general,1200
+5,"G[0,1300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002786431640,0.000000139322,0.139322,general,1300
+5,"G[0,1400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002765877460,0.000000138294,0.138294,general,1400
+5,"G[0,1500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002773512520,0.000000138676,0.138676,general,1500
+5,"G[0,1600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002805881680,0.000000140294,0.140294,general,1600
+5,"G[0,1700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002783092520,0.000000139155,0.139155,general,1700
+5,"G[0,1800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002777797420,0.000000138890,0.138890,general,1800
+5,"G[0,1900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002797764160,0.000000139888,0.139888,general,1900
+5,"G[0,2000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002779784920,0.000000138989,0.138989,general,2000
+5,"G[0,2100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002780831680,0.000000139042,0.139042,general,2100
+5,"G[0,2200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002757955060,0.000000137898,0.137898,general,2200
+5,"G[0,2300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002771482520,0.000000138574,0.138574,general,2300
+5,"G[0,2400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002796150840,0.000000139808,0.139808,general,2400
+5,"G[0,2500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002788375040,0.000000139419,0.139419,general,2500
+5,"G[0,2600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002747139220,0.000000137357,0.137357,general,2600
+5,"G[0,2700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002768784200,0.000000138439,0.138439,general,2700
+5,"G[0,2800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002775815860,0.000000138791,0.138791,general,2800
+5,"G[0,2900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002780260840,0.000000139013,0.139013,general,2900
+5,"G[0,3000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002785287500,0.000000139264,0.139264,general,3000
+5,"G[0,3100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002779910000,0.000000138995,0.138995,general,3100
+5,"G[0,3200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002776986600,0.000000138849,0.138849,general,3200
+5,"G[0,3300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002770342520,0.000000138517,0.138517,general,3300
+5,"G[0,3400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002775092500,0.000000138755,0.138755,general,3400
+5,"G[0,3500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002779458380,0.000000138973,0.138973,general,3500
+5,"G[0,3600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002781940800,0.000000139097,0.139097,general,3600
+5,"G[0,3700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002779078300,0.000000138954,0.138954,general,3700
+5,"G[0,3800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002760899160,0.000000138045,0.138045,general,3800
+5,"G[0,3900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002783894960,0.000000139195,0.139195,general,3900
+5,"G[0,4000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002781539220,0.000000139077,0.139077,general,4000
+5,"G[0,4100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002790593300,0.000000139530,0.139530,general,4100
+5,"G[0,4200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002775780840,0.000000138789,0.138789,general,4200
+5,"G[0,4300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002757575000,0.000000137879,0.137879,general,4300
+5,"G[0,4400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002787359200,0.000000139368,0.139368,general,4400
+5,"G[0,4500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002781895880,0.000000139095,0.139095,general,4500
+5,"G[0,4600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002801849180,0.000000140092,0.140092,general,4600
+5,"G[0,4700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002753042460,0.000000137652,0.137652,general,4700
+5,"G[0,4800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002773542500,0.000000138677,0.138677,general,4800
+5,"G[0,4900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002781862500,0.000000139093,0.139093,general,4900
+5,"G[0,5000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002781039040,0.000000139052,0.139052,general,5000
+6,"F[0,1] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002785095840,0.000000139255,0.139255,general,1
+6,"F[0,100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002845335000,0.000000142267,0.142267,general,100
+6,"F[0,200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002814708420,0.000000140735,0.140735,general,200
+6,"F[0,300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002804076680,0.000000140204,0.140204,general,300
+6,"F[0,400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002812280840,0.000000140614,0.140614,general,400
+6,"F[0,500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002801690780,0.000000140085,0.140085,general,500
+6,"F[0,600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002781312440,0.000000139066,0.139066,general,600
+6,"F[0,700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002778129980,0.000000138906,0.138906,general,700
+6,"F[0,800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002788299160,0.000000139415,0.139415,general,800
+6,"F[0,900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002783368340,0.000000139168,0.139168,general,900
+6,"F[0,1000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002781550820,0.000000139078,0.139078,general,1000
+6,"F[0,1100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002828406660,0.000000141420,0.141420,general,1100
+6,"F[0,1200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002847589120,0.000000142379,0.142379,general,1200
+6,"F[0,1300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002793086780,0.000000139654,0.139654,general,1300
+6,"F[0,1400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002816715000,0.000000140836,0.140836,general,1400
+6,"F[0,1500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002815952520,0.000000140798,0.140798,general,1500
+6,"F[0,1600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002779785020,0.000000138989,0.138989,general,1600
+6,"F[0,1700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002807853360,0.000000140393,0.140393,general,1700
+6,"F[0,1800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002804428300,0.000000140221,0.140221,general,1800
+6,"F[0,1900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002832254320,0.000000141613,0.141613,general,1900
+6,"F[0,2000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002771164100,0.000000138558,0.138558,general,2000
+6,"F[0,2100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002797031740,0.000000139852,0.139852,general,2100
+6,"F[0,2200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002818189080,0.000000140909,0.140909,general,2200
+6,"F[0,2300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002809093320,0.000000140455,0.140455,general,2300
+6,"F[0,2400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002787695800,0.000000139385,0.139385,general,2400
+6,"F[0,2500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002805023320,0.000000140251,0.140251,general,2500
+6,"F[0,2600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002802570880,0.000000140129,0.140129,general,2600
+6,"F[0,2700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002793495760,0.000000139675,0.139675,general,2700
+6,"F[0,2800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002791419940,0.000000139571,0.139571,general,2800
+6,"F[0,2900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002796970780,0.000000139849,0.139849,general,2900
+6,"F[0,3000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002798133380,0.000000139907,0.139907,general,3000
+6,"F[0,3100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002813370860,0.000000140669,0.140669,general,3100
+6,"F[0,3200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002786562440,0.000000139328,0.139328,general,3200
+6,"F[0,3300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002794556640,0.000000139728,0.139728,general,3300
+6,"F[0,3400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002795562500,0.000000139778,0.139778,general,3400
+6,"F[0,3500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002789319160,0.000000139466,0.139466,general,3500
+6,"F[0,3600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002790770860,0.000000139539,0.139539,general,3600
+6,"F[0,3700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002806589220,0.000000140329,0.140329,general,3700
+6,"F[0,3800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002783277500,0.000000139164,0.139164,general,3800
+6,"F[0,3900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002790000820,0.000000139500,0.139500,general,3900
+6,"F[0,4000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002784348320,0.000000139217,0.139217,general,4000
+6,"F[0,4100] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002793359100,0.000000139668,0.139668,general,4100
+6,"F[0,4200] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002793839920,0.000000139692,0.139692,general,4200
+6,"F[0,4300] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002782047560,0.000000139102,0.139102,general,4300
+6,"F[0,4400] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002789441640,0.000000139472,0.139472,general,4400
+6,"F[0,4500] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002775055760,0.000000138753,0.138753,general,4500
+6,"F[0,4600] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002792449120,0.000000139622,0.139622,general,4600
+6,"F[0,4700] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002798232480,0.000000139912,0.139912,general,4700
+6,"F[0,4800] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002787529920,0.000000139376,0.139376,general,4800
+6,"F[0,4900] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002780271700,0.000000139014,0.139014,general,4900
+6,"F[0,5000] (x > 0.0)",EagerQualitative,Incremental,online,20000,50,0.002787243260,0.000000139362,0.139362,general,5000
+1,(x < 0.5) and (x > -0.5),Rosi,Incremental,online,20000,50,0.003558793260,0.000000177940,0.177940,general,0
+2,"G[0,1000] (x > 0.5 -> F[0,100] (x < 0.0))",Rosi,Incremental,online,20000,50,21.131370310880,0.001056568516,1056.568516,general,1000
+3,"(G[0,100] (x < 0.5)) or (G[100,150] (x > 0.0))",Rosi,Incremental,online,20000,50,0.303077337540,0.000015153867,15.153867,general,100
+4,"(x < 0.0) U[0,1] (x > 0.0)",Rosi,Incremental,online,20000,50,0.006557615820,0.000000327881,0.327881,general,1
+4,"(x < 0.0) U[0,100] (x > 0.0)",Rosi,Incremental,online,20000,50,1.245798447520,0.000062289922,62.289922,general,100
+4,"(x < 0.0) U[0,200] (x > 0.0)",Rosi,Incremental,online,20000,50,4.229315389220,0.000211465769,211.465769,general,200
+4,"(x < 0.0) U[0,300] (x > 0.0)",Rosi,Incremental,online,20000,50,8.854530472480,0.000442726524,442.726524,general,300
+4,"(x < 0.0) U[0,400] (x > 0.0)",Rosi,Incremental,online,20000,50,15.151623573360,0.000757581179,757.581179,general,400
+4,"(x < 0.0) U[0,500] (x > 0.0)",Rosi,Incremental,online,20000,50,22.866916369220,0.001143345818,1143.345818,general,500
+4,"(x < 0.0) U[0,600] (x > 0.0)",Rosi,Incremental,online,20000,50,32.627599121760,0.001631379956,1631.379956,general,600
+4,"(x < 0.0) U[0,700] (x > 0.0)",Rosi,Incremental,online,20000,50,44.044858834140,0.002202242942,2202.242942,general,700
+4,"(x < 0.0) U[0,800] (x > 0.0)",Rosi,Incremental,online,20000,50,56.758633910800,0.002837931696,2837.931696,general,800
+4,"(x < 0.0) U[0,900] (x > 0.0)",Rosi,Incremental,online,20000,50,71.090314471720,0.003554515724,3554.515724,general,900
+4,"(x < 0.0) U[0,1000] (x > 0.0)",Rosi,Incremental,online,20000,50,86.967350522380,0.004348367526,4348.367526,general,1000
+5,"G[0,1] (x > 0.0)",Rosi,Incremental,online,20000,50,0.003002129100,0.000000150106,0.150106,general,1
+5,"G[0,100] (x > 0.0)",Rosi,Incremental,online,20000,50,0.092254987500,0.000004612749,4.612749,general,100
+5,"G[0,200] (x > 0.0)",Rosi,Incremental,online,20000,50,0.251338068360,0.000012566903,12.566903,general,200
+5,"G[0,300] (x > 0.0)",Rosi,Incremental,online,20000,50,0.449518834100,0.000022475942,22.475942,general,300
+5,"G[0,400] (x > 0.0)",Rosi,Incremental,online,20000,50,0.666522796700,0.000033326140,33.326140,general,400
+5,"G[0,500] (x > 0.0)",Rosi,Incremental,online,20000,50,0.897875704260,0.000044893785,44.893785,general,500
+5,"G[0,600] (x > 0.0)",Rosi,Incremental,online,20000,50,1.160851164960,0.000058042558,58.042558,general,600
+5,"G[0,700] (x > 0.0)",Rosi,Incremental,online,20000,50,1.413541510840,0.000070677076,70.677076,general,700
+5,"G[0,800] (x > 0.0)",Rosi,Incremental,online,20000,50,1.674067866620,0.000083703393,83.703393,general,800
+5,"G[0,900] (x > 0.0)",Rosi,Incremental,online,20000,50,1.939124281580,0.000096956214,96.956214,general,900
+5,"G[0,1000] (x > 0.0)",Rosi,Incremental,online,20000,50,2.206378516700,0.000110318926,110.318926,general,1000
+6,"F[0,1] (x > 0.0)",Rosi,Incremental,online,20000,50,0.003004287500,0.000000150214,0.150214,general,1
+6,"F[0,100] (x > 0.0)",Rosi,Incremental,online,20000,50,0.084374198380,0.000004218710,4.218710,general,100
+6,"F[0,200] (x > 0.0)",Rosi,Incremental,online,20000,50,0.221407811660,0.000011070391,11.070391,general,200
+6,"F[0,300] (x > 0.0)",Rosi,Incremental,online,20000,50,0.383189155060,0.000019159458,19.159458,general,300
+6,"F[0,400] (x > 0.0)",Rosi,Incremental,online,20000,50,0.554011863220,0.000027700593,27.700593,general,400
+6,"F[0,500] (x > 0.0)",Rosi,Incremental,online,20000,50,0.733010475860,0.000036650524,36.650524,general,500
+6,"F[0,600] (x > 0.0)",Rosi,Incremental,online,20000,50,0.929564169220,0.000046478208,46.478208,general,600
+6,"F[0,700] (x > 0.0)",Rosi,Incremental,online,20000,50,1.117483996680,0.000055874200,55.874200,general,700
+6,"F[0,800] (x > 0.0)",Rosi,Incremental,online,20000,50,1.309853180040,0.000065492659,65.492659,general,800
+6,"F[0,900] (x > 0.0)",Rosi,Incremental,online,20000,50,1.502147557520,0.000075107378,75.107378,general,900
+6,"F[0,1000] (x > 0.0)",Rosi,Incremental,online,20000,50,1.697462714200,0.000084873136,84.873136,general,1000

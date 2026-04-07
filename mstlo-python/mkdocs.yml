@@ -1,0 +1,23 @@
+site_name: mstlo Python
+theme:
+  name: material
+  palette:
+    scheme: glimpse # or 'default'
+  features:
+    - navigation.sections
+    - content.code.copy
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [python] # Points to the directory containing your mstlo_python module
+          options:
+            docstring_style: google
+            allow_inspection: false
+            show_source: false # Set to false because .pyi files don't contain implementation
+
+nav:
+  - Home: index.md
+  - Reference: reference.md

@@ -1,0 +1,5 @@
+Selected ICAPL usage mode for this distribution:
+
+GPL
+
+This distribution is made available under GPL version 3 as one of the ICAPL-supported subsidiary license modes.

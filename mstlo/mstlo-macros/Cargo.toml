@@ -1,0 +1,20 @@
+[package]
+name = "mstlo-macros"
+version = "0.1.0"
+edition = "2024"
+description = "Procedural macros for the mstlo online Signal Temporal Logic (STL) monitoring library."
+license-file = "../../LICENSE"
+repository = "https://github.com/INTO-CPS-Association/mstlo"
+homepage = "https://github.com/INTO-CPS-Association/mstlo"
+documentation = "https://docs.rs/mstlo-macros"
+readme = "../../README.md"
+keywords = ["stl", "monitoring", "temporal-logic", "macros"]
+categories = ["science", "mathematics"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }

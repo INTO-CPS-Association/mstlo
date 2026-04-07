@@ -1,0 +1,33 @@
+[build-system]
+requires = ["maturin>=1.11,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "mstlo-python"
+description = "Python bindings for the mstlo online Signal Temporal Logic (STL) monitoring library."
+readme = "README.md"
+authors = [{ name = "INTO-CPS Association" }]
+license = { text = "INTO-CPS Association Public License v1.0 OR GPL-3.0" }
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/INTO-CPS-Association/mstlo"
+Documentation = "https://INTO-CPS-Association.github.io/mstlo/"
+Repository = "https://github.com/INTO-CPS-Association/mstlo"
+
+[tool.maturin]
+# Python source directory for additional files (like .pyi)
+python-source = "python"
+
+[project.optional-dependencies]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings-python>=0.24",
+]
