@@ -2,12 +2,12 @@
 mod common;
 mod fixtures;
 
+use fixtures::formulas::*;
+use fixtures::signals::*;
 use mstlo::ring_buffer::Step;
 use mstlo::stl::core::RobustnessInterval;
 use mstlo::stl::formula_definition::FormulaDefinition;
 use mstlo::stl::monitor::{Algorithm, DelayedQuantitative, Rosi, StlMonitor};
-use fixtures::formulas::*;
-use fixtures::signals::*;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use std::collections::HashMap;
