@@ -1,0 +1,89 @@
+name: Python Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mstlo-python/**"
+      - ".github/workflows/python-tests.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "mstlo-python/**"
+      - ".github/workflows/python-tests.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test Python Interface
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mstlo-python
+
+      - name: Install maturin and pytest
+        run: pip install maturin pytest
+
+      - name: Build Python package
+        run: |
+          cd mstlo-python
+          maturin build --release --out dist
+
+      - name: Install package
+        shell: bash
+        run: |
+          pip install mstlo-python/dist/*.whl
+
+      - name: Run tests
+        run: |
+          cd mstlo-python
+          pytest tests/ -v --tb=short
+
+  lint:
+    name: Lint Python Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install pytest flake8 mypy
+
+      - name: Lint with flake8
+        run: |
+          cd mstlo-python
+          flake8 tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 tests/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        continue-on-error: true
+
+      - name: Type check with mypy
+        run: |
+          cd mstlo-python
+          mypy tests/ --ignore-missing-imports
+        continue-on-error: true

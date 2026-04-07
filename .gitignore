@@ -1,0 +1,7 @@
+__pycache__/
+*_log.txt
+.DS_Store
+.vscode/
+target/
+cobertura.xml
+_site/
