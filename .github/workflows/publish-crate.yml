@@ -1,14 +1,4 @@
-name: Prepare Rust Crate Release
-
-# NOTE: This workflow intentionally does NOT publish yet.
-# To enable real crates.io publishing, do ALL of the following:
-# 1) Add repository secret: CARGO_REGISTRY_TOKEN (crates.io API token).
-# 2) Replace the dry-run command for mstlo-macros with:
-#    cargo publish --manifest-path mstlo/mstlo-macros/Cargo.toml --locked --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
-# 3) Add a propagation wait/retry step (sleep/poll) after publishing mstlo-macros.
-# 4) Add an mstlo publish step after macros are visible on crates.io:
-#    cargo publish --manifest-path mstlo/Cargo.toml --locked --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
-# 5) Keep publish order strictly: mstlo-macros first, then mstlo.
+name: Publish Rust Crates
 
 on:
   workflow_dispatch:
@@ -18,7 +8,10 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+
+concurrency:
+  group: crates-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   validate-release:
@@ -37,3 +30,61 @@ jobs:
         run: |
           cargo metadata --manifest-path mstlo/Cargo.toml --format-version 1 > /dev/null
           cargo check --manifest-path mstlo/Cargo.toml --locked
+
+      - name: Dry-run mstlo publish
+        run: cargo publish --manifest-path mstlo/Cargo.toml --locked --dry-run
+
+  publish-macros:
+    name: Publish mstlo-macros
+    runs-on: ubuntu-latest
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: [validate-release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish mstlo-macros to crates.io
+        run: cargo publish --manifest-path mstlo/mstlo-macros/Cargo.toml --locked --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
+
+  publish-mstlo:
+    name: Publish mstlo
+    runs-on: ubuntu-latest
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: [publish-macros]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Wait for mstlo-macros index propagation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          macros_version=$(awk -F '"' '/^version = / { print $2; exit }' mstlo/mstlo-macros/Cargo.toml)
+          if [[ -z "${macros_version}" ]]; then
+            echo "Could not determine mstlo-macros version from Cargo.toml"
+            exit 1
+          fi
+
+          max_attempts=20
+          sleep_seconds=15
+
+          for attempt in $(seq 1 "$max_attempts"); do
+            if cargo search mstlo-macros --limit 1 | grep -E "^mstlo-macros = \"${macros_version}\""; then
+              echo "mstlo-macros ${macros_version} is visible on crates.io."
+              exit 0
+            fi
+
+            echo "Attempt ${attempt}/${max_attempts}: mstlo-macros ${macros_version} not visible yet."
+            sleep "$sleep_seconds"
+          done
+
+          echo "Timed out waiting for mstlo-macros to propagate on crates.io."
+          exit 1
+
+      - name: Publish mstlo to crates.io
+        run: cargo publish --manifest-path mstlo/Cargo.toml --locked --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"

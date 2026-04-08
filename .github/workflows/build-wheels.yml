@@ -7,6 +7,9 @@ name: Build Python Wheels
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -156,16 +159,16 @@ jobs:
           name: wheels-sdist
           path: mstlo-python/dist
 
-  release:
-    name: Release
+  release-testpypi:
+    name: Release (TestPyPI)
     runs-on: ubuntu-latest
-    if: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
     needs: [linux, musllinux, windows, macos, sdist]
     permissions:
       # Use to sign the release artifacts
       id-token: write
-      # Used to upload release artifacts
-      contents: write
+      # Used to download release artifacts
+      contents: read
       # Used to generate artifact attestation
       attestations: write
     steps:
@@ -175,10 +178,27 @@ jobs:
         with:
           subject-path: "wheels-*/*"
       - name: Install uv
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        uses: astral-sh/setup-uv@v7
+      - name: Publish to TestPyPI
+        run: uv publish --index testpypi 'wheels-*/*'
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+
+  release:
+    name: Release (PyPI)
+    runs-on: ubuntu-latest
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    needs: [release-testpypi]
+    permissions:
+      # Use to sign the release artifacts
+      id-token: write
+      # Used to upload release artifacts
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+      - name: Install uv
         uses: astral-sh/setup-uv@v7
       - name: Publish to PyPI
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
         run: uv publish 'wheels-*/*'
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
