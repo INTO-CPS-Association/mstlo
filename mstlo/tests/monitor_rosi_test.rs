@@ -4,9 +4,9 @@ mod fixtures;
 
 use fixtures::formulas::*;
 use fixtures::signals::*;
-use mstlo::{FormulaDefinition, RobustnessInterval};
-use mstlo::monitor::{Algorithm, DelayedQuantitative, Rosi, StlMonitor};
 use mstlo::Step;
+use mstlo::monitor::{Algorithm, DelayedQuantitative, Rosi, StlMonitor};
+use mstlo::{FormulaDefinition, RobustnessInterval};
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use std::collections::HashMap;

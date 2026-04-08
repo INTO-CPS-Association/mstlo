@@ -1,9 +1,9 @@
-use mstlo::{FormulaDefinition, RobustnessInterval, TimeInterval, Variables};
 use mstlo::monitor::{
     Algorithm, DelayedQualitative, DelayedQuantitative, EagerQualitative, MonitorOutput, Rosi,
     StlMonitor,
 };
 use mstlo::parse_stl;
+use mstlo::{FormulaDefinition, RobustnessInterval, TimeInterval, Variables};
 use mstlo::{Step, SynchronizationStrategy};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyList, PyTuple};

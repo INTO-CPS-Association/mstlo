@@ -2,11 +2,11 @@
 mod common;
 mod fixtures;
 
-use mstlo::{FormulaDefinition, RobustnessSemantics};
+use mstlo::Step;
 use mstlo::monitor::{
     Algorithm, DelayedQualitative, DelayedQuantitative, EagerQualitative, StlMonitor,
 };
-use mstlo::Step;
+use mstlo::{FormulaDefinition, RobustnessSemantics};
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use std::fmt::Debug;
