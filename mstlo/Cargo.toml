@@ -16,15 +16,15 @@ dyn-clone = "1.0.20"
 mstlo-macros = { version = "0.1.0", path = "mstlo-macros" }
 
 [dev-dependencies]
-proptest = "1.8.0"
+proptest = "1.11.0"
 rstest = "0.26.1"
 pretty_assertions = "1.4.1"
-rand = "0.9.2"
-rand_distr = "0.5.1"
+rand = "0.10.0"
+rand_distr = "0.6.0"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
-rumqttc = "0.25.0"
-criterion = "0.7.0"
+serde_json = "1.0.149"
+rumqttc = "0.25.1"
+criterion = "0.8.2"
 
 [[bench]]
 name = "monitor_benchmark"
