@@ -1,8 +1,8 @@
-use mstlo::core::Variables;
+use mstlo::SynchronizationStrategy;
+use mstlo::Variables;
 use mstlo::monitor::{Algorithm, StlMonitor, semantic_markers};
 use mstlo::step;
 use mstlo::stl;
-use mstlo::synchronizer::SynchronizationStrategy;
 use std::time::Duration;
 
 fn main() {
