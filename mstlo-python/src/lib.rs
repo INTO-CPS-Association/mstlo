@@ -19,7 +19,7 @@ fn py_parse_formula(formula_str: &str) -> PyResult<Formula> {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{}", e)))?;
     Ok(Formula { inner: formula })
 }
-#[pyclass(name = "Formula", module = "mstlo_python.mstlo_python")]
+#[pyclass(name = "Formula", module = "mstlo_python.mstlo_python", from_py_object)]
 #[derive(Clone)]
 struct Formula {
     inner: FormulaDefinition,
@@ -184,7 +184,11 @@ enum InnerMonitorOutput {
     Float(MonitorOutput<f64, f64>),
     Interval(MonitorOutput<f64, RobustnessInterval>),
 }
-#[pyclass(name = "MonitorOutput", module = "mstlo_python.mstlo_python")]
+#[pyclass(
+    name = "MonitorOutput",
+    module = "mstlo_python.mstlo_python",
+    from_py_object
+)]
 #[derive(Clone)]
 struct PyMonitorOutput {
     inner: InnerMonitorOutput,
@@ -376,7 +380,12 @@ impl PyMonitorOutput {
 // -----------------------------------------------------------------------------
 // 3.5 Variables Wrapper
 // -----------------------------------------------------------------------------
-#[pyclass(name = "Variables", module = "mstlo_python.mstlo_python", unsendable)]
+#[pyclass(
+    name = "Variables",
+    module = "mstlo_python.mstlo_python",
+    unsendable,
+    from_py_object
+)]
 #[derive(Clone)]
 struct PyVariables {
     inner: Variables,
