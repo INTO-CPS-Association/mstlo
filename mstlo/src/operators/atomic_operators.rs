@@ -5,7 +5,7 @@
 //! selected robustness domain `Y`.
 
 use crate::ring_buffer::Step;
-use crate::stl::core::{RobustnessSemantics, SignalIdentifier, StlOperatorTrait, Variables};
+use crate::core::{RobustnessSemantics, SignalIdentifier, StlOperatorTrait, Variables};
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::time::Duration;
@@ -179,7 +179,7 @@ impl<Y> Display for Atomic<Y> {
 mod tests {
     use super::*;
     use crate::ring_buffer::Step;
-    use crate::stl::core::StlOperatorTrait;
+    use crate::core::StlOperatorTrait;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 

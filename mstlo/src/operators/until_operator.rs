@@ -5,7 +5,7 @@
 //! const generics.
 
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
-use crate::stl::core::{
+use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
     TimeInterval,
 };
@@ -344,15 +344,15 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Display
 mod tests {
     use super::*;
     use crate::ring_buffer::{RingBuffer, Step};
-    use crate::stl::core::{StlOperatorTrait, TimeInterval};
-    use crate::stl::operators::atomic_operators::Atomic;
+    use crate::core::{StlOperatorTrait, TimeInterval};
+    use crate::operators::atomic_operators::Atomic;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 
     #[test]
     fn debug_rosi() {
-        use crate::stl::core::RobustnessInterval;
-        use crate::stl::operators::unary_temporal_operators::{Eventually, Globally};
+        use crate::core::RobustnessInterval;
+        use crate::operators::unary_temporal_operators::{Eventually, Globally};
         let interval = TimeInterval {
             start: Duration::from_secs(0),
             end: Duration::from_secs(6),
@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn debug_eager() {
-        use crate::stl::operators::unary_temporal_operators::{Eventually, Globally};
+        use crate::operators::unary_temporal_operators::{Eventually, Globally};
         let interval = TimeInterval {
             start: Duration::from_secs(0),
             end: Duration::from_secs(4),
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn debug_bool() {
-        use crate::stl::operators::unary_temporal_operators::{Eventually, Globally};
+        use crate::operators::unary_temporal_operators::{Eventually, Globally};
         let interval = TimeInterval {
             start: Duration::from_secs(0),
             end: Duration::from_secs(4),

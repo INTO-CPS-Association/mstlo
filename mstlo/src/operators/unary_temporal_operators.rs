@@ -5,7 +5,7 @@
 //! const generics.
 
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
-use crate::stl::core::{
+use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
     TimeInterval,
 };
@@ -569,8 +569,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Display
 mod tests {
     use super::*;
     use crate::ring_buffer::{RingBuffer, Step};
-    use crate::stl::core::{StlOperatorTrait, TimeInterval};
-    use crate::stl::operators::atomic_operators::Atomic;
+    use crate::core::{StlOperatorTrait, TimeInterval};
+    use crate::operators::atomic_operators::Atomic;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 
@@ -746,8 +746,8 @@ mod sparse_timestamp_tests {
 
     use super::*;
     use crate::ring_buffer::{RingBuffer, Step};
-    use crate::stl::core::{RobustnessInterval, StlOperatorTrait, TimeInterval};
-    use crate::stl::operators::atomic_operators::Atomic;
+    use crate::core::{RobustnessInterval, StlOperatorTrait, TimeInterval};
+    use crate::operators::atomic_operators::Atomic;
     use std::time::Duration;
 
     fn secs(s: u64) -> Duration {

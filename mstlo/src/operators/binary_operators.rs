@@ -7,7 +7,7 @@
 //! - refinable interval semantics (`IS_ROSI = true`).
 
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
-use crate::stl::core::{
+use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
 };
 use std::collections::HashSet;
@@ -495,8 +495,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Display
 mod tests {
     use super::*;
     use crate::ring_buffer::{RingBuffer, Step};
-    use crate::stl::core::StlOperatorTrait;
-    use crate::stl::operators::atomic_operators::Atomic;
+    use crate::core::StlOperatorTrait;
+    use crate::operators::atomic_operators::Atomic;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 

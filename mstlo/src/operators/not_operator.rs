@@ -4,7 +4,7 @@
 //! [`RobustnessSemantics::not`] to each emitted value.
 
 use crate::ring_buffer::Step;
-use crate::stl::core::{
+use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
 };
 use std::collections::HashSet;
@@ -84,8 +84,8 @@ impl<T, Y> Display for Not<T, Y> {
 mod tests {
     use super::*;
     use crate::ring_buffer::Step;
-    use crate::stl::core::StlOperatorTrait;
-    use crate::stl::operators::atomic_operators::Atomic;
+    use crate::core::StlOperatorTrait;
+    use crate::operators::atomic_operators::Atomic;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 

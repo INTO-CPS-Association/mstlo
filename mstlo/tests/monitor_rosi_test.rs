@@ -5,9 +5,9 @@ mod fixtures;
 use fixtures::formulas::*;
 use fixtures::signals::*;
 use mstlo::ring_buffer::Step;
-use mstlo::stl::core::RobustnessInterval;
-use mstlo::stl::formula_definition::FormulaDefinition;
-use mstlo::stl::monitor::{Algorithm, DelayedQuantitative, Rosi, StlMonitor};
+use mstlo::core::RobustnessInterval;
+use mstlo::formula_definition::FormulaDefinition;
+use mstlo::monitor::{Algorithm, DelayedQuantitative, Rosi, StlMonitor};
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use std::collections::HashMap;
@@ -201,7 +201,7 @@ fn test_library_formulas_rosi(
     )]
     signal: Vec<Step<f64>>,
 ) {
-    let lib_formulas = mstlo::stl::formulas::get_formulas(&[]);
+    let lib_formulas = mstlo::formulas::get_formulas(&[]);
     for (id, formula) in lib_formulas {
         println!("Testing library formula id: {}", id);
         run_final_rosi_verdicts_check(vec![formula.clone()], signal.clone());

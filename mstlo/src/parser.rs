@@ -38,14 +38,14 @@
 //! # Example
 //!
 //! ```
-//! use mstlo::stl::parser::parse_stl;
+//! use mstlo::parser::parse_stl;
 //!
 //! let formula = parse_stl("G[0, 10](x > 5)").unwrap();
 //! let complex = parse_stl("G[0, 10](x > 5) && F[0, 5](y < 3)").unwrap();
 //! ```
 
-use crate::stl::core::TimeInterval;
-use crate::stl::formula_definition::FormulaDefinition;
+use crate::core::TimeInterval;
+use crate::formula_definition::FormulaDefinition;
 use std::time::Duration;
 
 /// Error type for STL formula parsing.
@@ -86,7 +86,7 @@ impl std::error::Error for ParseError {}
 /// # Example
 ///
 /// ```
-/// use mstlo::stl::parser::parse_stl;
+/// use mstlo::parser::parse_stl;
 ///
 /// let formula = parse_stl("G[0, 10](x > 5)").unwrap();
 /// let nested = parse_stl("G[0, 10](F[0, 5](x > 0))").unwrap();

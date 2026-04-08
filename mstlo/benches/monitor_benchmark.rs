@@ -3,7 +3,7 @@ use criterion::{
     AxisScale, Criterion, PlotConfiguration, Throughput, criterion_group, criterion_main,
 };
 use mstlo::ring_buffer::Step;
-use mstlo::stl::monitor::{
+use mstlo::monitor::{
     Algorithm, DelayedQualitative, DelayedQuantitative, EagerQualitative, Rosi, StlMonitor,
 };
 use std::fs::File;
@@ -62,7 +62,7 @@ pub fn get_signals_from_csv() -> Vec<Vec<Step<f64>>> {
 // The Benchmark Function
 // ---
 fn benchmark_monitors(c: &mut Criterion) {
-    let formulas = mstlo::stl::formulas::get_formulas(&[4, 5, 6, 7, 8, 9]);
+    let formulas = mstlo::formulas::get_formulas(&[4, 5, 6, 7, 8, 9]);
     let signals = get_signals_from_csv();
 
     for (id, formula) in formulas {

@@ -3,7 +3,7 @@
 //! [`FormulaDefinition`] models predicate, boolean, and temporal operators used
 //! by the monitor and parser layers.
 
-use crate::stl::core::{SignalIdentifier, TimeInterval};
+use crate::core::{SignalIdentifier, TimeInterval};
 
 use std::fmt::Display;
 
@@ -289,7 +289,7 @@ impl FormulaDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stl::core::TimeInterval;
+    use crate::core::TimeInterval;
     use std::time::Duration;
 
     #[test]

@@ -13,7 +13,7 @@
 //!
 //! ```no_run
 //! use mstlo::ring_buffer::Step;
-//! use mstlo::stl::monitor::{Algorithm, DelayedQuantitative, StlMonitor};
+//! use mstlo::monitor::{Algorithm, DelayedQuantitative, StlMonitor};
 //! use std::time::Duration;
 //!
 //! // Build a monitor from the macro DSL.
@@ -38,8 +38,16 @@
 extern crate self as mstlo;
 
 pub mod ring_buffer;
-pub mod stl;
+pub mod core;
+pub mod formula_definition;
+pub mod formulas;
+pub mod monitor;
+pub mod naive_operators;
+pub mod operators;
+pub mod parser;
 pub mod synchronizer;
+
+pub use parser::{ParseError, parse_stl};
 
 // Re-export the stl macro at crate root for convenience
 pub use mstlo_macros::stl;
