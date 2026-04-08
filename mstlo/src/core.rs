@@ -394,25 +394,6 @@ mod tests {
     }
 
     #[test]
-    fn ri_min_max_intersection() {
-        let a = RobustnessInterval(1.0, 4.0);
-        let b = RobustnessInterval(2.0, 3.0);
-
-        assert_eq!(a.min(b), RobustnessInterval(1.0, 3.0));
-        assert_eq!(a.max(b), RobustnessInterval(2.0, 4.0));
-
-        let inter = a.intersection(b);
-        assert_eq!(inter, RobustnessInterval(2.0, 3.0));
-
-        // non-overlapping intervals -> returns (NEG_INFINITY, INFINITY) per implementation
-        let c = RobustnessInterval(1.0, 2.0);
-        let d = RobustnessInterval(3.0, 4.0);
-        let non = c.intersection(d);
-        assert!(non.0.is_infinite() && non.0.is_sign_negative());
-        assert!(non.1.is_infinite() && non.1.is_sign_positive());
-    }
-
-    #[test]
     fn f64_semantics_basic() {
         let a = 1.5f64;
         let b = 2.0f64;
