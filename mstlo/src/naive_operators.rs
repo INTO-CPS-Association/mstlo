@@ -439,58 +439,6 @@ impl StlOperator {
 
         Some(Step::new("output", result, t_eval))
     }
-
-    /// Recursively generates a tree-like string representation of the formula.
-    pub fn to_tree_string(&self, indent: usize) -> String {
-        let padding = " ".repeat(indent);
-        match self {
-            StlOperator::True => format!("{padding}True"),
-            StlOperator::False => format!("{padding}False"),
-            StlOperator::Not(f) => format!("{}Not\n{}", padding, f.to_tree_string(indent + 2)),
-            StlOperator::And(f1, f2) => format!(
-                "{}And\n{}\n{}",
-                padding,
-                f1.to_tree_string(indent + 2),
-                f2.to_tree_string(indent + 2)
-            ),
-            StlOperator::Or(f1, f2) => format!(
-                "{}Or\n{}\n{}",
-                padding,
-                f1.to_tree_string(indent + 2),
-                f2.to_tree_string(indent + 2)
-            ),
-            StlOperator::Globally(interval, f) => format!(
-                "{}Always [{} - {}]\n{}",
-                padding,
-                interval.start.as_secs_f64(),
-                interval.end.as_secs_f64(),
-                f.to_tree_string(indent + 2)
-            ),
-            StlOperator::Eventually(interval, f) => format!(
-                "{}Eventually [{} - {}]\n{}",
-                padding,
-                interval.start.as_secs_f64(),
-                interval.end.as_secs_f64(),
-                f.to_tree_string(indent + 2)
-            ),
-            StlOperator::Until(interval, f1, f2) => format!(
-                "{}Until [{} - {}]\n{}\n{}",
-                padding,
-                interval.start.as_secs_f64(),
-                interval.end.as_secs_f64(),
-                f1.to_tree_string(indent + 2),
-                f2.to_tree_string(indent + 2)
-            ),
-            StlOperator::Implies(f1, f2) => format!(
-                "{}Implies\n{}\n{}",
-                padding,
-                f1.to_tree_string(indent + 2),
-                f2.to_tree_string(indent + 2)
-            ),
-            StlOperator::GreaterThan(s, val) => format!("{padding}{s} > {val}"),
-            StlOperator::LessThan(s, val) => format!("{padding}{s} < {val}"),
-        }
-    }
 }
 impl Display for StlOperator {
     /// Formats the formula in compact mathematical notation.

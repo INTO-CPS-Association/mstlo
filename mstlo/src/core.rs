@@ -149,12 +149,6 @@ pub trait Max {
     fn max(self, other: Self) -> Self;
 }
 
-/// Set-like intersection operation for interval-like domains.
-pub trait Intersection {
-    /// Returns the intersection of `self` and `other`.
-    fn intersection(self, other: Self) -> Self;
-}
-
 impl Min for RobustnessInterval {
     fn min(self, other: Self) -> Self {
         RobustnessInterval(self.0.min(other.0), self.1.min(other.1))
@@ -166,23 +160,6 @@ impl Max for RobustnessInterval {
     }
 }
 
-impl Intersection for RobustnessInterval {
-    /// Calculates the intersection of two intervals.
-    ///
-    /// If there is no overlap, this implementation returns
-    /// `(-∞, +∞)` as an "unknown" sentinel used in the current design.
-    fn intersection(self, other: Self) -> Self {
-        let new_start = self.0.max(other.0);
-        let new_end = self.1.min(other.1);
-        if new_end < new_start {
-            // The intervals do not overlap.
-            RobustnessInterval(f64::NEG_INFINITY, f64::INFINITY)
-        } else {
-            // The intervals overlap. Return the new intersected interval.
-            RobustnessInterval(new_start, new_end)
-        }
-    }
-}
 
 /// Semantic operations required by STL operators for a robustness domain.
 ///
