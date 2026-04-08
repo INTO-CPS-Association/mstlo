@@ -8,7 +8,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Expr, Ident, LitBool, LitInt, Result, Token, bracketed, parenthesized};
 
-/// Convenience macro to construct a [`::mstlo::ring_buffer::Step`].
+/// Convenience macro to construct a `::mstlo::ring_buffer::Step`.
 ///
 /// # Syntax
 ///
