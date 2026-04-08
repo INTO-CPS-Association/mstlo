@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
-use mstlo::formula_definition::FormulaDefinition;
-use mstlo::stl;
+use mstlo::{FormulaDefinition, stl};
 use rstest::fixture;
 
 // ---

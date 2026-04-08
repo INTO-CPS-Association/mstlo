@@ -569,7 +569,7 @@ use std::rc::Rc;
 /// # Example
 ///
 /// ```
-/// use mstlo::core::Variables;
+/// use mstlo::Variables;
 ///
 /// let vars = Variables::new();
 /// vars.set("threshold", 5.0);

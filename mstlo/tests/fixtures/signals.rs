@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
-use mstlo::ring_buffer::Step;
-use mstlo::step;
+use mstlo::{Step, step};
 use rstest::fixture;
 use std::f64::consts::PI;
 use std::time::Duration;

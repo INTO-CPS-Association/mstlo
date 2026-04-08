@@ -1,5 +1,4 @@
-use mstlo::ring_buffer::Step;
-use mstlo::step;
+use mstlo::{Step, step};
 use std::time::Duration;
 
 pub fn convert_f64_vec_to_bool_vec(input: Vec<Vec<Step<f64>>>) -> Vec<Vec<Step<bool>>> {

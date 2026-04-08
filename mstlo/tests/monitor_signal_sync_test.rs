@@ -3,10 +3,9 @@ mod common;
 mod fixtures;
 
 use mstlo::monitor::{Algorithm, Rosi, StlMonitor};
-use mstlo::ring_buffer::Step;
 use mstlo::step;
 use mstlo::stl;
-use mstlo::synchronizer::SynchronizationStrategy;
+use mstlo::{Step, SynchronizationStrategy};
 use rstest::rstest;
 use std::time::Duration;
 use std::vec;
