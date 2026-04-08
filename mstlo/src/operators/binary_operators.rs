@@ -496,7 +496,8 @@ mod tests {
     use super::*;
     use crate::core::StlOperatorTrait;
     use crate::operators::atomic_operators::Atomic;
-    use crate::ring_buffer::{RingBuffer, Step};
+    use crate::ring_buffer::RingBuffer;
+    use crate::step;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 
@@ -533,7 +534,7 @@ mod tests {
         );
         and.get_signal_identifiers();
 
-        let step = Step::new("z", 15.0, Duration::from_secs(5));
+        let step = step!("z", 15.0, Duration::from_secs(5));
         let robustness = and.update(&step);
         assert_eq!(robustness.len(), 0);
 
@@ -545,7 +546,7 @@ mod tests {
         );
         or.get_signal_identifiers();
 
-        let step = Step::new("z", 15.0, Duration::from_secs(5));
+        let step = step!("z", 15.0, Duration::from_secs(5));
         let robustness = or.update(&step);
         assert_eq!(robustness.len(), 0);
     }
@@ -562,11 +563,11 @@ mod tests {
         );
         and.get_signal_identifiers();
 
-        let step = Step::new("x", 15.0, Duration::from_secs(5));
+        let step = step!("x", 15.0, Duration::from_secs(5));
         let robustness = and.update(&step);
         assert_eq!(
             robustness,
-            vec![Step::new("output", 5.0, Duration::from_secs(5))]
+            vec![step!("output", 5.0, Duration::from_secs(5))]
         );
     }
 
@@ -582,11 +583,11 @@ mod tests {
         );
         or.get_signal_identifiers();
 
-        let step = Step::new("x", 15.0, Duration::from_secs(5));
+        let step = step!("x", 15.0, Duration::from_secs(5));
         let robustness = or.update(&step);
         assert_eq!(
             robustness,
-            vec![Step::new("output", 5.0, Duration::from_secs(5))]
+            vec![step!("output", 5.0, Duration::from_secs(5))]
         );
     }
 

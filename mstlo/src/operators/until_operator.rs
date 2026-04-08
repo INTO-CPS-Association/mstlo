@@ -345,7 +345,8 @@ mod tests {
     use super::*;
     use crate::core::{StlOperatorTrait, TimeInterval};
     use crate::operators::atomic_operators::Atomic;
-    use crate::ring_buffer::{RingBuffer, Step};
+    use crate::ring_buffer::RingBuffer;
+    use crate::step;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 
@@ -391,12 +392,12 @@ mod tests {
         println!("Until operator: {}", until);
 
         let signals = vec![
-            Step::new("x", 1.0, Duration::from_secs(0)),
-            Step::new("x", 2.0, Duration::from_secs(1)),
-            Step::new("x", 3.0, Duration::from_secs(2)),
-            Step::new("x", 8.0, Duration::from_secs(3)),
-            Step::new("x", 10.0, Duration::from_secs(6)),
-            Step::new("x", 15.0, Duration::from_secs(8)),
+            step!("x", 1.0, Duration::from_secs(0)),
+            step!("x", 2.0, Duration::from_secs(1)),
+            step!("x", 3.0, Duration::from_secs(2)),
+            step!("x", 8.0, Duration::from_secs(3)),
+            step!("x", 10.0, Duration::from_secs(6)),
+            step!("x", 15.0, Duration::from_secs(8)),
         ];
         for signal in signals {
             let outputs = until.update(&signal);
@@ -454,12 +455,12 @@ mod tests {
         println!("Until operator: {}", until);
 
         let signals = vec![
-            Step::new("x", 1.0, Duration::from_secs(0)),
-            Step::new("x", 2.0, Duration::from_secs(1)),
-            Step::new("x", 3.0, Duration::from_secs(2)),
-            Step::new("x", 8.0, Duration::from_secs(3)),
-            Step::new("x", 12.0, Duration::from_secs(6)),
-            Step::new("x", 15.0, Duration::from_secs(8)),
+            step!("x", 1.0, Duration::from_secs(0)),
+            step!("x", 2.0, Duration::from_secs(1)),
+            step!("x", 3.0, Duration::from_secs(2)),
+            step!("x", 8.0, Duration::from_secs(3)),
+            step!("x", 12.0, Duration::from_secs(6)),
+            step!("x", 15.0, Duration::from_secs(8)),
         ];
         println!("Until operator: {}", until);
 
@@ -516,12 +517,12 @@ mod tests {
         println!("Until operator: {}", until);
 
         let signals = vec![
-            Step::new("x", 1.0, Duration::from_secs(0)),
-            Step::new("x", 2.0, Duration::from_secs(1)),
-            Step::new("x", 3.0, Duration::from_secs(2)),
-            Step::new("x", 8.0, Duration::from_secs(3)),
-            Step::new("x", 12.0, Duration::from_secs(6)),
-            Step::new("x", 15.0, Duration::from_secs(8)),
+            step!("x", 1.0, Duration::from_secs(0)),
+            step!("x", 2.0, Duration::from_secs(1)),
+            step!("x", 3.0, Duration::from_secs(2)),
+            step!("x", 8.0, Duration::from_secs(3)),
+            step!("x", 12.0, Duration::from_secs(6)),
+            step!("x", 15.0, Duration::from_secs(8)),
         ];
         for signal in signals {
             let outputs = until.update(&signal);
@@ -566,13 +567,13 @@ mod tests {
         let signal: Vec<_> = signal_values
             .into_iter()
             .zip(signal_timestamps)
-            .map(|(val, ts)| Step::new("x", val, Duration::from_secs(ts)))
+            .map(|(val, ts)| step!("x", val, Duration::from_secs(ts)))
             .collect();
 
         let expected_outputs = [
-            Step::new("output", false, Duration::from_secs(0)),
-            Step::new("output", true, Duration::from_secs(2)),
-            Step::new("output", true, Duration::from_secs(4)),
+            step!("output", false, Duration::from_secs(0)),
+            step!("output", true, Duration::from_secs(2)),
+            step!("output", true, Duration::from_secs(4)),
         ];
 
         let mut all_outputs = Vec::new();

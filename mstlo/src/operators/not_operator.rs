@@ -85,7 +85,7 @@ mod tests {
     use super::*;
     use crate::core::StlOperatorTrait;
     use crate::operators::atomic_operators::Atomic;
-    use crate::ring_buffer::Step;
+    use crate::step;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 
@@ -95,11 +95,11 @@ mod tests {
         let atomic = Atomic::<f64>::new_greater_than("x", 10.0);
         let mut not = Not::new(Box::new(atomic));
         not.get_signal_identifiers();
-        let step = Step::new("x", 15.0, Duration::from_secs(5));
+        let step = step!("x", 15.0, Duration::from_secs(5));
         let robustness = not.update(&step);
         assert_eq!(
             robustness,
-            vec![Step::new("output", -5.0, Duration::from_secs(5))]
+            vec![step!("output", -5.0, Duration::from_secs(5))]
         );
     }
 

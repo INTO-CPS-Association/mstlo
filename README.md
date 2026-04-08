@@ -115,7 +115,7 @@ The following snippet demonstrates how to create a monitor for the STL formula $
 mstlo utilizes the Builder pattern to configure the monitor's formula, semantics, and algorithm before processing the data stream.
 
 ```rust
-use mstlo::ring_buffer::Step;
+use mstlo::step;
 use mstlo::monitor::{Rosi, StlMonitor};
 use std::time::Duration;
 
@@ -131,10 +131,10 @@ fn main() {
         .expect("Failed to build monitor");
 
     // Feed data steps to the monitor
-    let out1 = monitor.update(&Step::new("x", 7.0, Duration::from_secs(0)));
+    let out1 = monitor.update(&step!("x", 7.0, 0s));
     println!("{:?}", out1.verdicts());
     // [Step { signal: "x", value: RobustnessInterval(-inf, 2.0), timestamp: 0ns }] // at time 0, robustness value is in interval (-inf, 2.0)
-    let out2 = monitor.update(&Step::new("x", 4.0, Duration::from_secs(1)));
+    let out2 = monitor.update(&step!("x", 4.0, 1s));
     println!("{:?}", out2.verdicts());
     // Output after second update: [Step { signal: "x", value: RobustnessInterval(-inf, -1.0), timestamp: 0ns }, Step { signal: "x", value: RobustnessInterval(-inf, -1.0), timestamp: 1s }] // early violation detection for times 0 and 1
 }
