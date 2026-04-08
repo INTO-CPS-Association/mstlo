@@ -2,6 +2,15 @@
 
 set -e
 
+# Warn if RUSTFLAGS is set — it would affect only the maturin build (pip install),
+# not cargo bench, causing the two Rust artefacts to be compiled differently.
+if [ -n "${RUSTFLAGS+x}" ]; then
+    echo "WARNING: RUSTFLAGS='$RUSTFLAGS' is set in the environment."
+    echo "         This will be applied to the maturin build but NOT to cargo bench,"
+    echo "         producing non-comparable binaries. Unsetting for this session."
+    unset RUSTFLAGS
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SIGNAL_DIR="$SCRIPT_DIR/BENCH_RESULTS/signal_generation/signals"
@@ -16,7 +25,10 @@ RTAMT_RESULTS="$OUTPUT_DIR/rtamt_benchmark_results.csv"
 
 mkdir -p "$SIGNAL_DIR" "$OUTPUT_DIR"
 
-# Generate signal for benchmarks
+# Generate signal for benchmarks.
+# The default sampling-rate=1.0 Hz produces integer timesteps 0,1,2,...
+# This means formula bounds (e.g. G[0,1000]) are numerically identical
+# between mstlo (Duration-based, seconds) and RTAMT (discrete step indices).
 python "$SCRIPT_DIR/signal_generation/signal_generator.py" --num-samples 20000 --output-path "$SIGNAL_DIR/signal_20000_chirp.csv" --signal-type chirp
 
 # ensure latest python is built in current python environment
@@ -26,19 +38,21 @@ pip install -e "$PROJECT_ROOT/mstlo-python" --force-reinstall
 python "$SCRIPT_DIR/python_benchmark.py" \
 	--signal-csv "$SIGNAL_DIR/signal_20000_chirp.csv" \
 	--m-runs 50 \
+	--warmup-runs 1 \
 	--output "$PY_RESULTS" \
 	# --overwrite
 
-python "$SCRIPT_DIR/rtamt_cpponline_benchmark.py" \
+python "$SCRIPT_DIR/rtamt_benchmark.py" \
 	--signal-csv "$SIGNAL_DIR/signal_20000_chirp.csv" \
 	--m-runs 50 \
+	--warmup-runs 1 \
 	--output "$RTAMT_RESULTS" \
  	# --overwrite
 
 (
 	cd "$PROJECT_ROOT/mstlo" || exit 1
-	M_RUNS=1 FORMULA_IDS="1,2,3" SIGNAL_PATH="$SIGNAL_DIR/signal_20000_chirp.csv" OUTPUT_CSV="$M1_RESULTS" cargo bench --bench paper_benchmark --features track-cache-size
-	M_RUNS=50 SIGNAL_PATH="$SIGNAL_DIR/signal_20000_chirp.csv" OUTPUT_CSV="$M50_RESULTS" cargo bench --bench paper_benchmark
+	WARMUP_RUNS=1 M_RUNS=1 FORMULA_IDS="1,2,3" SIGNAL_PATH="$SIGNAL_DIR/signal_20000_chirp.csv" OUTPUT_CSV="$M1_RESULTS" cargo bench --bench paper_benchmark --features track-cache-size
+	WARMUP_RUNS=1 M_RUNS=50 SIGNAL_PATH="$SIGNAL_DIR/signal_20000_chirp.csv" OUTPUT_CSV="$M50_RESULTS" cargo bench --bench paper_benchmark
 
 	python "$SCRIPT_DIR/data_analysis/regression_analysis.py" \
 		--native-csv "$M50_RESULTS" \

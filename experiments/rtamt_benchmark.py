@@ -2,7 +2,7 @@
 Comprehensive benchmark suite for rtamt monitoring.
 
 Tests formula families with varying temporal bounds and records performance metrics,
-matching the structure and approach of mstlo_results.py.
+matching the structure and approach of ostl_results.py.
 """
 
 import csv
@@ -29,7 +29,7 @@ DEFAULT_OUTPUT_CSV = os.path.join(
     "rtamt_benchmark_results_cpp.csv",
 )
 
-# Generate formulas matching the mstlo benchmark catalog
+# Generate formulas matching the ostl benchmark catalog
 # Uses the same structure: globally, eventually, until with varying bounds
 FORMULAS: dict[int, str] = {}
 
@@ -48,7 +48,9 @@ def load_signal(path: str) -> list[tuple[float, float]]:
     return signal
 
 
-def make_discrete_monitor_cpp(spec: str) -> rtamt.StlDiscreteTimeOnlineSpecificationCpp:
+def make_discrete_online_monitor_cpp(
+    spec: str,
+) -> rtamt.StlDiscreteTimeOnlineSpecificationCpp:
     """Create a fresh rtamt discrete-time online monitor using C++ backend."""
     monitor = rtamt.StlDiscreteTimeOnlineSpecificationCpp()
     monitor.declare_var("x", "float")
@@ -58,7 +60,9 @@ def make_discrete_monitor_cpp(spec: str) -> rtamt.StlDiscreteTimeOnlineSpecifica
     return monitor
 
 
-def make_discrete_monitor_python(spec: str) -> rtamt.StlDiscreteTimeOnlineSpecification:
+def make_discrete_online_monitor_python(
+    spec: str,
+) -> rtamt.StlDiscreteTimeOnlineSpecification:
     """Create a fresh rtamt discrete-time online monitor for online monitoring."""
     monitor = rtamt.StlDiscreteTimeOnlineSpecification()
     monitor.declare_var("x", "float")
@@ -74,19 +78,21 @@ def bench_discrete_online_monitor(
     signal: list[tuple[float, float]],
     m: int,
     monitor_func: callable,
+    warmup_runs: int = 1,
 ) -> dict:
     """Benchmark discrete-time online monitoring (one sample at a time)."""
     try:
         n_samples = len(signal)
         total_time = 0.0
 
-        for _ in range(m):
+        for i in range(-warmup_runs, m):
             monitor = monitor_func(spec)
-    """
-    A focused RTAMT benchmark script for STL formulas,
-    matching the structure and approach of mstlo_results.py.
-    """
-            total_time += t1 - t0
+            t0 = time.perf_counter()
+            for ts, val in signal:
+                monitor.update(ts, [("x", val)])
+            t1 = time.perf_counter()
+            if i >= 0:
+                total_time += t1 - t0
 
         avg_total = total_time / m
         avg_per_sample = avg_total / n_samples
@@ -124,6 +130,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite output CSV if it exists"
     )
+    parser.add_argument(
+        "--warmup-runs",
+        type=int,
+        default=1,
+        help="Untimed warmup runs before measurement",
+    )
     return parser.parse_args()
 
 
@@ -132,7 +144,7 @@ def main() -> None:
 
     signal = load_signal(args.signal_csv)
     print(f"Loaded signal with {len(signal)} samples from {args.signal_csv}")
-    print(f"Averaging over M = {args.m_runs} runs\n")
+    print(f"Averaging over M = {args.m_runs} runs (+ {args.warmup_runs} warmup)\n")
 
     # Initialize CSV file with headers
     out_path = args.output
@@ -163,7 +175,12 @@ def main() -> None:
     for fid, spec in pbar:
         pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
         res = bench_discrete_online_monitor(
-            fid, spec, signal, args.m_runs, make_discrete_monitor_cpp
+            fid,
+            spec,
+            signal,
+            args.m_runs,
+            make_discrete_online_monitor_cpp,
+            warmup_runs=args.warmup_runs,
         )
         if res is not None:
             res["monitor_type"] = "discrete-time-cpp"
@@ -176,7 +193,12 @@ def main() -> None:
     for fid, spec in pbar:
         pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
         res = bench_discrete_online_monitor(
-            fid, spec, signal, args.m_runs, make_discrete_monitor_python
+            fid,
+            spec,
+            signal,
+            args.m_runs,
+            make_discrete_online_monitor_python,
+            warmup_runs=args.warmup_runs,
         )
         if res is not None:
             writer.writerow(res)

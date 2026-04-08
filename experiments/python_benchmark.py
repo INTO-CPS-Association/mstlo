@@ -76,19 +76,26 @@ def bench_formula(
     m: int,
     semantics: str = "DelayedQuantitative",
     algorithm: str = "Incremental",
+    warmup_runs: int = 1,
 ) -> dict:
     """Run *m* passes of the formula and return per-sample timing stats.
 
     Each run creates a fresh monitor, then feeds the signal one sample at
-    a time via monitor.update() — true online monitoring.
+    a time via monitor.update_discard() — true online monitoring.
+    *warmup_runs* untimed passes are performed first to prime allocator and
+    OS page caches.
     """
     n_samples = len(signal)
     total_time = 0.0
     parsed_formula = mstlo.parse_formula(spec)
     temporal_depth = 0
 
-    for i in range(m):
-        print(f"  Run {i+1}/{m} for formula ID {formula_id}...", end="\r", flush=True)
+    for i in range(-warmup_runs, m):
+        is_warmup = i < 0
+        if not is_warmup:
+            print(
+                f"  Run {i+1}/{m} for formula ID {formula_id}...", end="\r", flush=True
+            )
         monitor = mstlo.Monitor(
             parsed_formula,
             semantics=semantics,
@@ -99,7 +106,8 @@ def bench_formula(
         for ts, val in signal:
             monitor.update("x", val, ts)
         t1 = time.perf_counter()
-        total_time += t1 - t0
+        if not is_warmup:
+            total_time += t1 - t0
         temporal_depth = monitor.get_temporal_depth()
 
     avg_total = total_time / m
@@ -152,6 +160,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite output CSV if it exists"
     )
+    parser.add_argument(
+        "--warmup-runs",
+        type=int,
+        default=1,
+        help="Untimed warmup runs before measurement",
+    )
     return parser.parse_args()
 
 
@@ -163,7 +177,7 @@ def main() -> None:
 
     signal = load_signal(args.signal_csv)
     print(f"Loaded signal with {len(signal)} samples from {args.signal_csv}")
-    print(f"Averaging over M = {args.m_runs} runs\n")
+    print(f"Averaging over M = {args.m_runs} runs (+ {args.warmup_runs} warmup)\n")
 
     semantics = [
         "DelayedQuantitative",
@@ -206,7 +220,13 @@ def main() -> None:
                 continue
             pbar.set_postfix({"fid": fid, "spec": spec[:30] + "..."})
             res = bench_formula(
-                fid, spec, signal, args.m_runs, semantics=sem, algorithm=algorithm
+                fid,
+                spec,
+                signal,
+                args.m_runs,
+                semantics=sem,
+                algorithm=algorithm,
+                warmup_runs=args.warmup_runs,
             )
             # Write result to CSV file
             writer.writerow(res)
