@@ -7,6 +7,7 @@ on:
       - "mstlo/**"
       - "mstlo-python/**"
       - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/rust.yml"
   pull_request:
     branches: [main]
@@ -14,6 +15,7 @@ on:
       - "mstlo/**"
       - "mstlo-python/**"
       - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/rust.yml"
 
 env:
@@ -134,7 +136,7 @@ jobs:
       - name: Generate coverage (mstlo)
         working-directory: ./mstlo
         run: >
-          cargo tarpaulin --verbose --all-features -p mstlo --timeout 120 --out xml --exclude-files benches/* --exclude-files tests/* --exclude-files examples/* --exclude-files mstlo-macros/*
+          cargo tarpaulin --verbose --all-features -p mstlo --timeout 120 --out xml --exclude-files benches/* --exclude-files tests/* --exclude-files examples/* --exclude-files mstlo-macros/* --exclude-files mstlo-python/*
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

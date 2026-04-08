@@ -4,12 +4,18 @@ on:
   push:
     branches: [main]
     paths:
+      - "mstlo/**"
       - "mstlo-python/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/python-tests.yml"
   pull_request:
     branches: [main]
     paths:
+      - "mstlo/**"
       - "mstlo-python/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/python-tests.yml"
 
 env:
@@ -47,7 +53,7 @@ jobs:
       - name: Build Python package
         run: |
           cd mstlo-python
-          maturin build --release --out dist
+          maturin build --release --out dist --locked
 
       - name: Install package
         shell: bash
