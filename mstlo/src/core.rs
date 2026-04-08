@@ -160,7 +160,6 @@ impl Max for RobustnessInterval {
     }
 }
 
-
 /// Semantic operations required by STL operators for a robustness domain.
 ///
 /// This trait abstracts the algebra used by boolean, quantitative (`f64`), and
