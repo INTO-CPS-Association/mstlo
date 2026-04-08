@@ -18,9 +18,9 @@
 //! - Keep IDs unchanged in your reports for reproducibility.
 //! - Compare the same IDs when testing new monitor configurations.
 
-use crate::stl;
 use crate::core::TimeInterval;
 use crate::formula_definition::FormulaDefinition;
+use crate::stl;
 use std::time::Duration;
 
 /// Returns the vector of Signal Temporal Logic formulas.

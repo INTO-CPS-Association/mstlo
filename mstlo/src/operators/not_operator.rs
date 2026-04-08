@@ -3,10 +3,10 @@
 //! This module provides [`Not`], which wraps a single child operator and applies
 //! [`RobustnessSemantics::not`] to each emitted value.
 
-use crate::ring_buffer::Step;
 use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
 };
+use crate::ring_buffer::Step;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::time::Duration;
@@ -83,9 +83,9 @@ impl<T, Y> Display for Not<T, Y> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ring_buffer::Step;
     use crate::core::StlOperatorTrait;
     use crate::operators::atomic_operators::Atomic;
+    use crate::ring_buffer::Step;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 

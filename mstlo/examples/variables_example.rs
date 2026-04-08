@@ -1,7 +1,7 @@
-use mstlo::ring_buffer::Step;
-use mstlo::stl;
 use mstlo::core::Variables;
 use mstlo::monitor::{Algorithm, StlMonitor, semantic_markers};
+use mstlo::ring_buffer::Step;
+use mstlo::stl;
 use mstlo::synchronizer::SynchronizationStrategy;
 use std::time::Duration;
 

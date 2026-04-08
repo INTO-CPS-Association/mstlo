@@ -4,10 +4,10 @@ mod fixtures;
 
 use fixtures::formulas::*;
 use fixtures::signals::*;
-use mstlo::ring_buffer::Step;
 use mstlo::core::RobustnessInterval;
 use mstlo::formula_definition::FormulaDefinition;
 use mstlo::monitor::{Algorithm, DelayedQuantitative, Rosi, StlMonitor};
+use mstlo::ring_buffer::Step;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use std::collections::HashMap;

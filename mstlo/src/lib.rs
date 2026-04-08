@@ -37,7 +37,6 @@
 // Enable use of ::mstlo:: paths within this crate for the proc-macro
 extern crate self as mstlo;
 
-pub mod ring_buffer;
 pub mod core;
 pub mod formula_definition;
 pub mod formulas;
@@ -45,6 +44,7 @@ pub mod monitor;
 pub mod naive_operators;
 pub mod operators;
 pub mod parser;
+pub mod ring_buffer;
 pub mod synchronizer;
 
 pub use parser::{ParseError, parse_stl};

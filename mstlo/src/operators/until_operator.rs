@@ -4,11 +4,11 @@
 //! streamed samples, supporting delayed, eager, and refinable (RoSI) modes via
 //! const generics.
 
-use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
 use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
     TimeInterval,
 };
+use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Display;
 use std::time::Duration;
@@ -343,9 +343,9 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Display
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ring_buffer::{RingBuffer, Step};
     use crate::core::{StlOperatorTrait, TimeInterval};
     use crate::operators::atomic_operators::Atomic;
+    use crate::ring_buffer::{RingBuffer, Step};
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 

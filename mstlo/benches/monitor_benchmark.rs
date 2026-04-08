@@ -2,10 +2,10 @@
 use criterion::{
     AxisScale, Criterion, PlotConfiguration, Throughput, criterion_group, criterion_main,
 };
-use mstlo::ring_buffer::Step;
 use mstlo::monitor::{
     Algorithm, DelayedQualitative, DelayedQuantitative, EagerQualitative, Rosi, StlMonitor,
 };
+use mstlo::ring_buffer::Step;
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::path::Path;

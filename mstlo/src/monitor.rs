@@ -9,7 +9,6 @@
 //! It also defines output containers ([`MonitorOutput`], [`SyncStepResult`]) and
 //! semantic selection markers used for type-driven output inference.
 
-use crate::ring_buffer::{RingBuffer, Step};
 use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
 };
@@ -20,6 +19,7 @@ use crate::operators::binary_operators::{And, Or};
 use crate::operators::not_operator::Not;
 use crate::operators::unary_temporal_operators::{Eventually, Globally};
 use crate::operators::until_operator::Until;
+use crate::ring_buffer::{RingBuffer, Step};
 use crate::synchronizer::{Interpolatable, SynchronizationStrategy, Synchronizer};
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -853,9 +853,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stl;
     use crate::core::TimeInterval;
     use crate::monitor::{Algorithm, StlMonitor};
+    use crate::stl;
     use std::time::Duration;
 
     #[test]

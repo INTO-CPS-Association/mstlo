@@ -4,8 +4,8 @@
 //! Atomic operators evaluate one input sample and emit one output sample in the
 //! selected robustness domain `Y`.
 
-use crate::ring_buffer::Step;
 use crate::core::{RobustnessSemantics, SignalIdentifier, StlOperatorTrait, Variables};
+use crate::ring_buffer::Step;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::time::Duration;
@@ -178,8 +178,8 @@ impl<Y> Display for Atomic<Y> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ring_buffer::Step;
     use crate::core::StlOperatorTrait;
+    use crate::ring_buffer::Step;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 

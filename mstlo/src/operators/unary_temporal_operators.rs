@@ -4,11 +4,11 @@
 //! stream, with support for delayed, eager, and (RoSI) execution via
 //! const generics.
 
-use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
 use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
     TimeInterval,
 };
+use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::{Debug, Display};
 use std::time::Duration;
@@ -568,9 +568,9 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Display
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ring_buffer::{RingBuffer, Step};
     use crate::core::{StlOperatorTrait, TimeInterval};
     use crate::operators::atomic_operators::Atomic;
+    use crate::ring_buffer::{RingBuffer, Step};
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 
@@ -745,9 +745,9 @@ mod sparse_timestamp_tests {
     //!   t_eval=5  (finalised at t=10): window [5,7] → min(−1) = −1.0
 
     use super::*;
-    use crate::ring_buffer::{RingBuffer, Step};
     use crate::core::{RobustnessInterval, StlOperatorTrait, TimeInterval};
     use crate::operators::atomic_operators::Atomic;
+    use crate::ring_buffer::{RingBuffer, Step};
     use std::time::Duration;
 
     fn secs(s: u64) -> Duration {
