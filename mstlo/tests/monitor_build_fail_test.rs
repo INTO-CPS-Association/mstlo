@@ -1,7 +1,7 @@
 mod common;
 mod fixtures;
 #[cfg(test)]
-use mstlo::stl::monitor::{Algorithm, EagerQualitative, Rosi, StlMonitor};
+use mstlo::monitor::{Algorithm, EagerQualitative, Rosi, StlMonitor};
 use rstest::rstest;
 
 use fixtures::formulas::formula_1;

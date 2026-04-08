@@ -1,6 +1,6 @@
+use mstlo::formula_definition::FormulaDefinition;
 #[cfg(test)]
 use mstlo::stl;
-use mstlo::stl::formula_definition::FormulaDefinition;
 
 #[test]
 fn test_stl_macro() {

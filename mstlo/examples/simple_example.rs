@@ -1,5 +1,5 @@
+use mstlo::monitor::{Rosi, StlMonitor};
 use mstlo::ring_buffer::Step;
-use mstlo::stl::monitor::{Rosi, StlMonitor};
 use std::time::Duration;
 
 fn main() {

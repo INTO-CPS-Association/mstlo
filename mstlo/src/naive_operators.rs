@@ -13,9 +13,9 @@
 //! - No RoSI (`RobustnessInterval`) mode in the monitor builder.
 //! - No eager short-circuit evaluation mode (only delayed-style evaluation).
 
+use crate::core::{RobustnessSemantics, SignalIdentifier, StlOperatorTrait, TimeInterval};
 use crate::ring_buffer::RingBufferTrait;
 use crate::ring_buffer::Step;
-use crate::stl::core::{RobustnessSemantics, SignalIdentifier, StlOperatorTrait, TimeInterval};
 use std::fmt::Display;
 use std::time::Duration;
 
@@ -597,8 +597,8 @@ mod tests {
 
     use super::*;
     use crate::{
+        naive_operators::StlFormula,
         ring_buffer::{RingBuffer, Step},
-        stl::naive_operators::StlFormula,
     };
     use std::time::Duration;
 

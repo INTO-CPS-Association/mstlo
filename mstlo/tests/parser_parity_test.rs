@@ -4,9 +4,9 @@
 //! This test suite verifies that both parsing methods (macro and runtime parser)
 //! produce structurally identical `FormulaDefinition` instances for the same input.
 
+use mstlo::formula_definition::FormulaDefinition;
+use mstlo::parse_stl;
 use mstlo::stl;
-use mstlo::stl::formula_definition::FormulaDefinition;
-use mstlo::stl::parse_stl;
 
 /// Helper macro to test that the macro and runtime parser produce identical results.
 /// The macro input must be valid for both the `stl!` macro and `parse_stl`.

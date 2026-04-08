@@ -116,7 +116,7 @@ mstlo utilizes the Builder pattern to configure the monitor's formula, semantics
 
 ```rust
 use mstlo::ring_buffer::Step;
-use mstlo::stl::monitor::{Rosi, StlMonitor};
+use mstlo::monitor::{Rosi, StlMonitor};
 use std::time::Duration;
 
 fn main() {

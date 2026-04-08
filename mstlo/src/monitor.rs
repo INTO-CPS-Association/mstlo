@@ -9,17 +9,17 @@
 //! It also defines output containers ([`MonitorOutput`], [`SyncStepResult`]) and
 //! semantic selection markers used for type-driven output inference.
 
-use crate::ring_buffer::{RingBuffer, Step};
-use crate::stl::core::{
+use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
 };
-use crate::stl::formula_definition::FormulaDefinition;
-use crate::stl::naive_operators::{StlFormula, StlOperator};
-use crate::stl::operators::atomic_operators::Atomic;
-use crate::stl::operators::binary_operators::{And, Or};
-use crate::stl::operators::not_operator::Not;
-use crate::stl::operators::unary_temporal_operators::{Eventually, Globally};
-use crate::stl::operators::until_operator::Until;
+use crate::formula_definition::FormulaDefinition;
+use crate::naive_operators::{StlFormula, StlOperator};
+use crate::operators::atomic_operators::Atomic;
+use crate::operators::binary_operators::{And, Or};
+use crate::operators::not_operator::Not;
+use crate::operators::unary_temporal_operators::{Eventually, Globally};
+use crate::operators::until_operator::Until;
+use crate::ring_buffer::{RingBuffer, Step};
 use crate::synchronizer::{Interpolatable, SynchronizationStrategy, Synchronizer};
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -54,7 +54,7 @@ pub enum Semantics {
 /// Marker traits and structs for Type-Driven Semantics
 pub mod semantic_markers {
     use super::Semantics;
-    use crate::stl::core::RobustnessInterval;
+    use crate::core::RobustnessInterval;
 
     /// Marker trait mapping a type-level semantic marker to runtime [`Semantics`]
     /// and a concrete output type.
@@ -572,7 +572,7 @@ impl<T: Clone + Interpolatable, Y> Display for StlMonitor<T, Y> {
     }
 }
 
-use crate::stl::core::Variables;
+use crate::core::Variables;
 
 /// The Builder pattern struct for StlMonitor.
 pub struct StlMonitorBuilder<T, Y> {
@@ -853,9 +853,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::TimeInterval;
+    use crate::monitor::{Algorithm, StlMonitor};
     use crate::stl;
-    use crate::stl::core::TimeInterval;
-    use crate::stl::monitor::{Algorithm, StlMonitor};
     use std::time::Duration;
 
     #[test]
@@ -924,7 +924,7 @@ mod tests {
 
     #[test]
     fn test_monitor_with_variables() {
-        use crate::stl::parse_stl;
+        use crate::parse_stl;
 
         // Parse a formula with a variable threshold
         let formula = parse_stl("x > $threshold").unwrap();
@@ -962,7 +962,7 @@ mod tests {
 
     #[test]
     fn test_monitor_with_variables_robustness() {
-        use crate::stl::parse_stl;
+        use crate::parse_stl;
 
         // Parse a formula with a variable threshold
         let formula = parse_stl("x > $threshold").unwrap();
@@ -1000,7 +1000,7 @@ mod tests {
 
     #[test]
     fn test_monitor_get_variables() {
-        use crate::stl::parse_stl;
+        use crate::parse_stl;
 
         let formula = parse_stl("x > $A && y < $B").unwrap();
         let variables = Variables::new();
@@ -1024,7 +1024,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Variable predicates are not supported in the naive algorithm")]
     fn test_variables_not_supported_in_naive() {
-        use crate::stl::parse_stl;
+        use crate::parse_stl;
 
         let formula = parse_stl("x > $threshold").unwrap();
         let variables = Variables::new();
@@ -1096,7 +1096,7 @@ mod tests {
 
     #[test]
     fn test_monitor_display_and_getters() {
-        use crate::stl::parse_stl;
+        use crate::parse_stl;
 
         // Create a formula with variables
         let formula = parse_stl("G[0,5] (x > $threshold) && F[1,3] (y < 20.0)").unwrap();
