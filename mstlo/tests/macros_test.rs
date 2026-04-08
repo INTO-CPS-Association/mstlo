@@ -1,6 +1,9 @@
-use mstlo::formula_definition::FormulaDefinition;
 #[cfg(test)]
-use mstlo::stl;
+use mstlo::formula_definition::FormulaDefinition;
+use mstlo::ring_buffer::Step;
+use mstlo::{step, stl};
+
+use std::time::Duration;
 
 #[test]
 fn test_stl_macro() {
@@ -301,4 +304,20 @@ fn test_stl_macro_variable_equal() {
         }
         _ => panic!("Expected And formula for == sugar"),
     }
+}
+
+#[test]
+fn test_step_macro_with_ms_suffix() {
+    let step: Step<f64> = step!("x", 5.5, 10ms);
+    assert_eq!(step.signal, "x");
+    assert_eq!(step.value, 5.5);
+    assert_eq!(step.timestamp, Duration::from_millis(10));
+}
+
+#[test]
+fn test_step_macro_with_duration_expr() {
+    let step: Step<i32> = step!("y", 42, Duration::from_secs(2));
+    assert_eq!(step.signal, "y");
+    assert_eq!(step.value, 42);
+    assert_eq!(step.timestamp, Duration::from_secs(2));
 }

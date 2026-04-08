@@ -50,4 +50,4 @@ pub mod synchronizer;
 pub use parser::{ParseError, parse_stl};
 
 // Re-export the stl macro at crate root for convenience
-pub use mstlo_macros::stl;
+pub use mstlo_macros::{stl, step};

@@ -6,7 +6,91 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{Expr, Ident, LitBool, Result, Token, bracketed, parenthesized};
+use syn::{Expr, Ident, LitBool, LitInt, Result, Token, bracketed, parenthesized};
+
+/// Convenience macro to construct a [`::mstlo::ring_buffer::Step`].
+///
+/// # Syntax
+///
+/// ```
+/// step!("x", 5.5, 10ms)
+/// step!("x", 5.5, 1s)
+/// step!("x", 5.5, std::time::Duration::from_millis(10))
+/// ```
+///
+/// Supported integer duration suffixes are: `ns`, `us`, `ms`, and `s`.
+#[proc_macro]
+pub fn step(input: TokenStream) -> TokenStream {
+    let parsed = syn::parse_macro_input!(input as StepMacroInput);
+
+    let signal = parsed.signal;
+    let value = parsed.value;
+
+    let ts_tokens = match parsed.timestamp {
+        StepTimestamp::Suffixed(lit) => match duration_expr_from_lit(&lit) {
+            Ok(tokens) => tokens,
+            Err(err) => return err.to_compile_error().into(),
+        },
+        StepTimestamp::Expr(expr) => quote! { #expr },
+    };
+
+    quote! {
+        ::mstlo::ring_buffer::Step::new(#signal, #value, #ts_tokens)
+    }
+    .into()
+}
+
+struct StepMacroInput {
+    signal: Expr,
+    value: Expr,
+    timestamp: StepTimestamp,
+}
+
+enum StepTimestamp {
+    Suffixed(LitInt),
+    Expr(Expr),
+}
+
+impl Parse for StepMacroInput {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let signal = input.parse::<Expr>()?;
+        input.parse::<Token![,]>()?;
+        let value = input.parse::<Expr>()?;
+        input.parse::<Token![,]>()?;
+
+        let timestamp = if input.peek(LitInt) {
+            StepTimestamp::Suffixed(input.parse::<LitInt>()?)
+        } else {
+            StepTimestamp::Expr(input.parse::<Expr>()?)
+        };
+
+        if !input.is_empty() {
+            return Err(input.error("unexpected tokens after timestamp argument"));
+        }
+
+        Ok(Self {
+            signal,
+            value,
+            timestamp,
+        })
+    }
+}
+
+fn duration_expr_from_lit(lit: &LitInt) -> Result<TokenStream2> {
+    let value = lit.base10_parse::<u64>()?;
+    let suffix = lit.suffix();
+
+    match suffix {
+        "ns" => Ok(quote! { ::std::time::Duration::from_nanos(#value) }),
+        "us" => Ok(quote! { ::std::time::Duration::from_micros(#value) }),
+        "ms" => Ok(quote! { ::std::time::Duration::from_millis(#value) }),
+        "s" => Ok(quote! { ::std::time::Duration::from_secs(#value) }),
+        _ => Err(syn::Error::new(
+            lit.span(),
+            "unsupported duration suffix; use one of: ns, us, ms, s",
+        )),
+    }
+}
 
 /// The main entry point for the `stl!` procedural macro.
 ///
