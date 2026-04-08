@@ -596,11 +596,8 @@ mod tests {
     }
 
     use super::*;
-    use crate::{
-        naive_operators::StlFormula,
-        ring_buffer::RingBuffer,
-    };
     use crate::step;
+    use crate::{naive_operators::StlFormula, ring_buffer::RingBuffer};
     use std::time::Duration;
 
     // Helper to create a signal from a vector of values and timestamps
@@ -682,11 +679,7 @@ mod tests {
         let robustness = formula.robustness_naive::<f64, _, f64>(&signal, Duration::from_secs(5));
         assert_eq!(
             robustness,
-            Some(step!(
-                "output",
-                f64::NEG_INFINITY,
-                Duration::from_secs(5)
-            ))
+            Some(step!("output", f64::NEG_INFINITY, Duration::from_secs(5)))
         );
     }
 

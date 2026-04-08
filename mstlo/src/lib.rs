@@ -14,7 +14,7 @@
 //! ```
 //!    use mstlo::monitor::*;
 //!    use mstlo::{step, stl};
-//! 
+//!
 //!    // Build a monitor from the macro DSL.
 //!    let formula = stl!(G[0, 1](x > 5.0));
 //!    let mut monitor = StlMonitor::builder()
@@ -53,4 +53,4 @@ pub mod synchronizer;
 pub use parser::{ParseError, parse_stl};
 
 // Re-export the stl macro at crate root for convenience
-pub use mstlo_macros::{stl, step};
+pub use mstlo_macros::{step, stl};

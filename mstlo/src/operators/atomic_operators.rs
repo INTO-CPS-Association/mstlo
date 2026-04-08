@@ -270,11 +270,7 @@ mod tests {
         let robustness = atomic.update(&step);
         assert_eq!(
             robustness,
-            vec![step!(
-                "output",
-                f64::NEG_INFINITY,
-                Duration::from_secs(5)
-            )]
+            vec![step!("output", f64::NEG_INFINITY, Duration::from_secs(5))]
         );
     }
 

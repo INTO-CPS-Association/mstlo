@@ -1,7 +1,7 @@
 use mstlo::core::Variables;
 use mstlo::monitor::{Algorithm, StlMonitor, semantic_markers};
-use mstlo::stl;
 use mstlo::step;
+use mstlo::stl;
 use mstlo::synchronizer::SynchronizationStrategy;
 use std::time::Duration;
 
