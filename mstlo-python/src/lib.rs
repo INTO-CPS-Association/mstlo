@@ -769,7 +769,7 @@ where
 
 #[pymodule]
 fn mstlo_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add("__version__", "0.1.0")?;
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__doc__", "Online Signal Temporal Logic (STL) monitoring library.\n\n\
         This library provides efficient online monitoring of STL formulas with multiple semantics:\n\
         - DelayedQualitative/EagerQualitative: true/false evaluation\n\

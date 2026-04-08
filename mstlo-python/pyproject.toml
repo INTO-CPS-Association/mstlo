@@ -5,14 +5,23 @@ build-backend = "maturin"
 [project]
 name = "mstlo-python"
 description = "Python bindings for the mstlo online Signal Temporal Logic (STL) monitoring library."
-readme = "README.md"
-authors = [{ name = "INTO-CPS Association" }]
-license = { text = "INTO-CPS Association Public License v1.0 OR GPL-3.0" }
+readme = { file = "README.md", content-type = "text/markdown" }
+authors = [{ name = "Andreas Kaag Thomsen", email = "akt@ece.au.dk" },
+           { name = "Niels Viggo Stark Madsen", email = "nielsviggostark@gmail.com" }]
+license = { text = "INTO-CPS Association Public License v1.0" }
+license-files = ["LICENSE", "ICA-USAGE-MODE.txt"]
 requires-python = ">=3.8"
+keywords = ["signal temporal logic", "stl", "monitoring", "runtime verification", "online monitoring", "temporal logic"]
 classifiers = [
     "Programming Language :: Rust",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
 ]
 dynamic = ["version"]
