@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use mstlo::ring_buffer::Step;
+use mstlo::step;
 use rstest::fixture;
 use std::f64::consts::PI;
 use std::time::Duration;
@@ -75,7 +76,7 @@ pub fn monotonic_increasing() -> Vec<Step<f64>> {
             let timestamp = Duration::from_secs(i as u64);
             let t = i as f64 / (N as f64 - 1.0);
             let value = -10.0 + 20.0 * t; // from -10 to 10
-            Step::new("x", value, timestamp)
+            step!("x", value, timestamp)
         })
         .collect()
 }
@@ -88,7 +89,7 @@ pub fn monotonic_decreasing() -> Vec<Step<f64>> {
             let timestamp = Duration::from_secs(i as u64);
             let t = i as f64 / (N as f64 - 1.0);
             let value = 10.0 - 20.0 * t; // from 10 to -10
-            Step::new("x", value, timestamp)
+            step!("x", value, timestamp)
         })
         .collect()
 }
@@ -101,7 +102,7 @@ pub fn sinusoid() -> Vec<Step<f64>> {
             let timestamp = Duration::from_secs(i as u64);
             let t = i as f64 / (N as f64 - 1.0);
             let value = 10.0 * (2.0 * PI * t).sin();
-            Step::new("x", value, timestamp)
+            step!("x", value, timestamp)
         })
         .collect()
 }

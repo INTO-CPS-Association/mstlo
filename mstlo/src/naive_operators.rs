@@ -598,15 +598,16 @@ mod tests {
     use super::*;
     use crate::{
         naive_operators::StlFormula,
-        ring_buffer::{RingBuffer, Step},
+        ring_buffer::RingBuffer,
     };
+    use crate::step;
     use std::time::Duration;
 
     // Helper to create a signal from a vector of values and timestamps
     fn create_signal(values: Vec<f64>, timestamps: Vec<u64>) -> RingBuffer<f64> {
         let mut signal = RingBuffer::new();
         for (val, ts) in values.into_iter().zip(timestamps.into_iter()) {
-            signal.add_step(Step::new("x", val, Duration::from_secs(ts)));
+            signal.add_step(step!("x", val, Duration::from_secs(ts)));
         }
         signal
     }
@@ -622,14 +623,14 @@ mod tests {
         let robustness = formula.robustness_naive::<f64, _, f64>(&signal, Duration::from_secs(5));
         assert_eq!(
             robustness,
-            Some(Step::new("output", 5.0, Duration::from_secs(5)))
+            Some(step!("output", 5.0, Duration::from_secs(5)))
         );
 
         let signal2 = create_signal(vec![8.0], vec![5]);
         let robustness2 = formula.robustness_naive::<f64, _, f64>(&signal2, Duration::from_secs(5));
         assert_eq!(
             robustness2,
-            Some(Step::new("output", -2.0, Duration::from_secs(5)))
+            Some(step!("output", -2.0, Duration::from_secs(5)))
         );
     }
 
@@ -644,14 +645,14 @@ mod tests {
         let robustness = formula.robustness_naive::<f64, _, f64>(&signal, Duration::from_secs(5));
         assert_eq!(
             robustness,
-            Some(Step::new("output", 5.0, Duration::from_secs(5)))
+            Some(step!("output", 5.0, Duration::from_secs(5)))
         );
 
         let signal2 = create_signal(vec![12.0], vec![5]);
         let robustness2 = formula.robustness_naive::<f64, _, f64>(&signal2, Duration::from_secs(5));
         assert_eq!(
             robustness2,
-            Some(Step::new("output", -2.0, Duration::from_secs(5)))
+            Some(step!("output", -2.0, Duration::from_secs(5)))
         );
     }
 
@@ -666,7 +667,7 @@ mod tests {
         let robustness = formula.robustness_naive::<f64, _, f64>(&signal, Duration::from_secs(5));
         assert_eq!(
             robustness,
-            Some(Step::new("output", f64::INFINITY, Duration::from_secs(5)))
+            Some(step!("output", f64::INFINITY, Duration::from_secs(5)))
         );
     }
 
@@ -681,7 +682,7 @@ mod tests {
         let robustness = formula.robustness_naive::<f64, _, f64>(&signal, Duration::from_secs(5));
         assert_eq!(
             robustness,
-            Some(Step::new(
+            Some(step!(
                 "output",
                 f64::NEG_INFINITY,
                 Duration::from_secs(5)
@@ -700,7 +701,7 @@ mod tests {
         let robustness = formula.robustness_naive::<f64, _, f64>(&signal, Duration::from_secs(5));
         assert_eq!(
             robustness,
-            Some(Step::new("output", -5.0, Duration::from_secs(5)))
+            Some(step!("output", -5.0, Duration::from_secs(5)))
         );
     }
 
@@ -718,7 +719,7 @@ mod tests {
         let robustness = formula.robustness_naive::<f64, _, f64>(&signal, Duration::from_secs(5));
         assert_eq!(
             robustness,
-            Some(Step::new("output", 5.0, Duration::from_secs(5)))
+            Some(step!("output", 5.0, Duration::from_secs(5)))
         );
     }
 
@@ -735,7 +736,7 @@ mod tests {
         let robustness = formula.robustness_naive::<f64, _, f64>(&signal, Duration::from_secs(5));
         assert_eq!(
             robustness,
-            Some(Step::new("output", 5.0, Duration::from_secs(5)))
+            Some(step!("output", 5.0, Duration::from_secs(5)))
         );
     }
 
@@ -753,7 +754,7 @@ mod tests {
         let robustness = formula.robustness_naive::<f64, _, f64>(&signal, Duration::from_secs(5));
         assert_eq!(
             robustness,
-            Some(Step::new("output", 5.0, Duration::from_secs(5)))
+            Some(step!("output", 5.0, Duration::from_secs(5)))
         );
     }
 
@@ -780,7 +781,7 @@ mod tests {
         let robustness2 = formula.robustness_naive::<f64, _, f64>(&signal2, Duration::from_secs(0));
         assert_eq!(
             robustness2,
-            Some(Step::new("output", 5.0, Duration::from_secs(0)))
+            Some(step!("output", 5.0, Duration::from_secs(0)))
         );
 
         // Case 3: More data, eval at t=2
@@ -789,7 +790,7 @@ mod tests {
         let robustness3 = formula.robustness_naive::<f64, _, f64>(&signal3, Duration::from_secs(2));
         assert_eq!(
             robustness3,
-            Some(Step::new("output", 2.0, Duration::from_secs(2)))
+            Some(step!("output", 2.0, Duration::from_secs(2)))
         );
 
         // Case 4: Full signal, eval at t=4
@@ -798,7 +799,7 @@ mod tests {
         let robustness4 = formula.robustness_naive::<f64, _, f64>(&signal4, Duration::from_secs(4));
         assert_eq!(
             robustness4,
-            Some(Step::new("output", 2.0, Duration::from_secs(4)))
+            Some(step!("output", 2.0, Duration::from_secs(4)))
         );
     }
 
@@ -826,7 +827,7 @@ mod tests {
         let robustness2 = formula.robustness_naive::<f64, _, f64>(&signal2, Duration::from_secs(0));
         assert_eq!(
             robustness2,
-            Some(Step::new("output", -2.0, Duration::from_secs(0)))
+            Some(step!("output", -2.0, Duration::from_secs(0)))
         );
 
         // Case 3: More data, eval at t=2
@@ -835,7 +836,7 @@ mod tests {
         let robustness3 = formula.robustness_naive::<f64, _, f64>(&signal3, Duration::from_secs(2));
         assert_eq!(
             robustness3,
-            Some(Step::new("output", -5.0, Duration::from_secs(2)))
+            Some(step!("output", -5.0, Duration::from_secs(2)))
         );
 
         // Case 4: Full signal, eval at t=4
@@ -844,7 +845,7 @@ mod tests {
         let robustness4 = formula.robustness_naive::<f64, _, f64>(&signal4, Duration::from_secs(4));
         assert_eq!(
             robustness4,
-            Some(Step::new("output", -5.0, Duration::from_secs(4)))
+            Some(step!("output", -5.0, Duration::from_secs(4)))
         );
     }
 
@@ -999,16 +1000,16 @@ mod tests {
         );
 
         // Not enough data yet (timestamp 0 < max_lookahead 2)
-        let step1 = Step::new("x", 15.0, Duration::from_secs(0));
+        let step1 = step!("x", 15.0, Duration::from_secs(0));
         let result1 = formula.update(&step1);
         assert!(result1.is_empty());
 
-        let step2 = Step::new("x", 12.0, Duration::from_secs(1));
+        let step2 = step!("x", 12.0, Duration::from_secs(1));
         let result2 = formula.update(&step2);
         assert!(result2.is_empty());
 
         // Now t=2, t_eval = 2-2 = 0
-        let step3 = Step::new("x", 8.0, Duration::from_secs(2));
+        let step3 = step!("x", 8.0, Duration::from_secs(2));
         let result3 = formula.update(&step3);
         assert_eq!(result3.len(), 1);
         assert_eq!(result3[0].timestamp, Duration::from_secs(0));
@@ -1083,7 +1084,7 @@ mod tests {
         let robustness = formula.robustness_naive::<f64, _, f64>(&signal, Duration::from_secs(5));
         assert_eq!(
             robustness,
-            Some(Step::new("output", 3.0, Duration::from_secs(5)))
+            Some(step!("output", 3.0, Duration::from_secs(5)))
         );
     }
 

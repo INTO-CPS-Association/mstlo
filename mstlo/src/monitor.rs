@@ -855,7 +855,7 @@ mod tests {
     use super::*;
     use crate::core::TimeInterval;
     use crate::monitor::{Algorithm, StlMonitor};
-    use crate::stl;
+    use crate::{step, stl};
     use std::time::Duration;
 
     #[test]
@@ -873,7 +873,7 @@ mod tests {
             .unwrap();
 
         // The compiler knows this is f64 input, bool output
-        let step = Step::new("x", 10.0, Duration::from_secs(1));
+        let step = step!("x", 10.0, Duration::from_secs(1));
         let output = monitor.update(&step);
 
         // We can assert types in the test
@@ -943,7 +943,7 @@ mod tests {
             .unwrap();
 
         // Test with value above threshold
-        let step = Step::new("x", 10.0, Duration::from_secs(1));
+        let step = step!("x", 10.0, Duration::from_secs(1));
         let output = monitor.update(&step);
         let verdicts = output.verdicts();
         assert_eq!(verdicts.len(), 1);
@@ -953,7 +953,7 @@ mod tests {
         variables.set("threshold", 15.0);
 
         // Now the same value should be below threshold
-        let step2 = Step::new("x", 10.0, Duration::from_secs(2));
+        let step2 = step!("x", 10.0, Duration::from_secs(2));
         let output2 = monitor.update(&step2);
         let verdicts2 = output2.verdicts();
         assert_eq!(verdicts2.len(), 1);
@@ -981,7 +981,7 @@ mod tests {
             .unwrap();
 
         // Test with value 10, threshold 5: robustness = 10 - 5 = 5
-        let step = Step::new("x", 10.0, Duration::from_secs(1));
+        let step = step!("x", 10.0, Duration::from_secs(1));
         let output = monitor.update(&step);
         let verdicts = output.verdicts();
         assert_eq!(verdicts.len(), 1);
@@ -991,7 +991,7 @@ mod tests {
         variables.set("threshold", 15.0);
 
         // Now robustness = 10 - 15 = -5
-        let step2 = Step::new("x", 10.0, Duration::from_secs(2));
+        let step2 = step!("x", 10.0, Duration::from_secs(2));
         let output2 = monitor.update(&step2);
         let verdicts2 = output2.verdicts();
         assert_eq!(verdicts2.len(), 1);
@@ -1056,17 +1056,17 @@ mod tests {
         steps.insert(
             "x",
             vec![
-                Step::new("x", 5.0, Duration::from_secs(0)),
-                Step::new("x", 15.0, Duration::from_secs(2)),
-                Step::new("x", 8.0, Duration::from_secs(4)),
+                step!("x", 5.0, Duration::from_secs(0)),
+                step!("x", 15.0, Duration::from_secs(2)),
+                step!("x", 8.0, Duration::from_secs(4)),
             ],
         );
         steps.insert(
             "y",
             vec![
-                Step::new("y", 25.0, Duration::from_secs(0)),
-                Step::new("y", 15.0, Duration::from_secs(3)),
-                Step::new("y", 30.0, Duration::from_secs(5)),
+                step!("y", 25.0, Duration::from_secs(0)),
+                step!("y", 15.0, Duration::from_secs(3)),
+                step!("y", 30.0, Duration::from_secs(5)),
             ],
         );
 
@@ -1172,9 +1172,9 @@ mod tests {
 
         #[test]
         fn test_monitor_output_display() {
-            let sync_step = Step::new("x", 10.0, Duration::from_secs(1));
-            let output_step1 = Step::new("output", true, Duration::from_secs(1));
-            let output_step2 = Step::new("output", false, Duration::from_secs(2));
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step1 = step!("output", true, Duration::from_secs(1));
+            let output_step2 = step!("output", false, Duration::from_secs(2));
 
             let sync_result =
                 SyncStepResult::new(sync_step.clone(), vec![output_step1, output_step2]);
@@ -1201,8 +1201,8 @@ mod tests {
 
         #[test]
         fn test_monitor_has_outputs() {
-            let sync_step = Step::new("x", 10.0, Duration::from_secs(1));
-            let output_step = Step::new("output", true, Duration::from_secs(1));
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step = step!("output", true, Duration::from_secs(1));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step]);
             let monitor_output = MonitorOutput {
                 input_signal: "x",
@@ -1216,9 +1216,9 @@ mod tests {
 
         #[test]
         fn test_monitor_total_outputs() {
-            let sync_step = Step::new("x", 10.0, Duration::from_secs(1));
-            let output_step1 = Step::new("output", true, Duration::from_secs(1));
-            let output_step2 = Step::new("output", false, Duration::from_secs(2));
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step1 = step!("output", true, Duration::from_secs(1));
+            let output_step2 = step!("output", false, Duration::from_secs(2));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
                 input_signal: "x",
@@ -1232,7 +1232,7 @@ mod tests {
 
         #[test]
         fn test_monitor_is_empty() {
-            let sync_step = Step::new("x", 10.0, Duration::from_secs(1));
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
             let sync_result: SyncStepResult<f64, bool> = SyncStepResult::new(sync_step, vec![]);
             let monitor_output = MonitorOutput {
                 input_signal: "x",
@@ -1250,10 +1250,10 @@ mod tests {
 
         #[test]
         fn test_monitor_latest_verdict_at() {
-            let sync_step = Step::new("x", 10.0, Duration::from_secs(1));
-            let output_step1 = Step::new("output", true, Duration::from_secs(1));
-            let output_step2 = Step::new("output", false, Duration::from_secs(2));
-            let output_step2_ = Step::new("output", true, Duration::from_secs(2));
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step1 = step!("output", true, Duration::from_secs(1));
+            let output_step2 = step!("output", false, Duration::from_secs(2));
+            let output_step2_ = step!("output", true, Duration::from_secs(2));
             let sync_result =
                 SyncStepResult::new(sync_step, vec![output_step1, output_step2, output_step2_]);
             let monitor_output = MonitorOutput {
@@ -1277,9 +1277,9 @@ mod tests {
 
         #[test]
         fn test_into_verdicts() {
-            let sync_step = Step::new("x", 10.0, Duration::from_secs(1));
-            let output_step1 = Step::new("output", true, Duration::from_secs(1));
-            let output_step2 = Step::new("output", false, Duration::from_secs(2));
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step1 = step!("output", true, Duration::from_secs(1));
+            let output_step2 = step!("output", false, Duration::from_secs(2));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
                 input_signal: "x",
@@ -1296,9 +1296,9 @@ mod tests {
 
         #[test]
         fn test_latest_verdict() {
-            let sync_step = Step::new("x", 10.0, Duration::from_secs(1));
-            let output_step1 = Step::new("output", true, Duration::from_secs(1));
-            let output_step2 = Step::new("output", false, Duration::from_secs(2));
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step1 = step!("output", true, Duration::from_secs(1));
+            let output_step2 = step!("output", false, Duration::from_secs(2));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
                 input_signal: "x",
@@ -1325,8 +1325,8 @@ mod tests {
 
         #[test]
         fn test_sync_evaluations() {
-            let sync_step = Step::new("x", 10.0, Duration::from_secs(1));
-            let output_step = Step::new("output", true, Duration::from_secs(1));
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step = step!("output", true, Duration::from_secs(1));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step]);
             let monitor_output = MonitorOutput {
                 input_signal: "x",
@@ -1342,9 +1342,9 @@ mod tests {
 
         #[test]
         fn test_into_iterator_ref() {
-            let sync_step = Step::new("x", 10.0, Duration::from_secs(1));
-            let output_step1 = Step::new("output", true, Duration::from_secs(1));
-            let output_step2 = Step::new("output", false, Duration::from_secs(2));
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step1 = step!("output", true, Duration::from_secs(1));
+            let output_step2 = step!("output", false, Duration::from_secs(2));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
                 input_signal: "x",
@@ -1361,9 +1361,9 @@ mod tests {
 
         #[test]
         fn test_into_iterator_owned() {
-            let sync_step = Step::new("x", 10.0, Duration::from_secs(1));
-            let output_step1 = Step::new("output", true, Duration::from_secs(1));
-            let output_step2 = Step::new("output", false, Duration::from_secs(2));
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step1 = step!("output", true, Duration::from_secs(1));
+            let output_step2 = step!("output", false, Duration::from_secs(2));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
                 input_signal: "x",
@@ -1391,9 +1391,9 @@ mod tests {
 
         #[test]
         fn test_for_loop_iteration() {
-            let sync_step = Step::new("x", 10.0, Duration::from_secs(1));
-            let output_step1 = Step::new("output", 5.0_f64, Duration::from_secs(1));
-            let output_step2 = Step::new("output", -3.0_f64, Duration::from_secs(2));
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step1 = step!("output", 5.0_f64, Duration::from_secs(1));
+            let output_step2 = step!("output", -3.0_f64, Duration::from_secs(2));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
                 input_signal: "x",
@@ -1416,8 +1416,8 @@ mod tests {
 
         #[test]
         fn test_sync_step_has_outputs() {
-            let sync_step = Step::new("x", 10.0, Duration::from_secs(1));
-            let output_step = Step::new("output", true, Duration::from_secs(1));
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step = step!("output", true, Duration::from_secs(1));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step]);
 
             assert!(sync_result.has_outputs());

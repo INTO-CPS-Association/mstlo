@@ -4,6 +4,7 @@ mod fixtures;
 
 use mstlo::monitor::{Algorithm, Rosi, StlMonitor};
 use mstlo::ring_buffer::Step;
+use mstlo::step;
 use mstlo::stl;
 use mstlo::synchronizer::SynchronizationStrategy;
 use rstest::rstest;
@@ -22,13 +23,13 @@ fn test_signal_interleaving(
 ) {
     // test that outputs are correctly produced when signals are interleaved over multiple timesteps
     let steps = [
-        Step::new("x", 1.0, Duration::from_secs(0)),
-        Step::new("y", 1.0, Duration::from_secs(0)),
-        Step::new("x", 1.0, Duration::from_secs(2)),
-        Step::new("x", 1.0, Duration::from_secs(4)),
-        Step::new("x", 1.0, Duration::from_secs(6)),
-        Step::new("x", 1.0, Duration::from_secs(8)),
-        Step::new("y", 1.0, Duration::from_secs(10)),
+        step!("x", 1.0, Duration::from_secs(0)),
+        step!("y", 1.0, Duration::from_secs(0)),
+        step!("x", 1.0, Duration::from_secs(2)),
+        step!("x", 1.0, Duration::from_secs(4)),
+        step!("x", 1.0, Duration::from_secs(6)),
+        step!("x", 1.0, Duration::from_secs(8)),
+        step!("y", 1.0, Duration::from_secs(10)),
     ];
 
     let mut monitor = StlMonitor::builder()
@@ -73,12 +74,12 @@ fn test_synchronization(
     // x_steps are even timestamps from 0 to 100
     let x_steps: Vec<Step<f64>> = (0..101)
         .step_by(2)
-        .map(|i| Step::new("x", i as f64, Duration::from_secs(i)))
+        .map(|i| step!("x", i as f64, Duration::from_secs(i)))
         .collect();
     // y_steps are odd timestamps from 1 to 99
     let y_steps: Vec<Step<f64>> = (1..101)
         .step_by(2)
-        .map(|i| Step::new("y", i as f64, Duration::from_secs(i)))
+        .map(|i| step!("y", i as f64, Duration::from_secs(i)))
         .collect();
 
     let mut monitor = StlMonitor::builder()

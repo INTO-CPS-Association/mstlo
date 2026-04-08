@@ -6,6 +6,7 @@ use mstlo::monitor::{
     Algorithm, DelayedQualitative, DelayedQuantitative, EagerQualitative, Rosi, StlMonitor,
 };
 use mstlo::ring_buffer::Step;
+use mstlo::step;
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::path::Path;
@@ -32,7 +33,7 @@ where
                 && let Ok(val) = columns[1].trim().parse::<f64>()
             {
                 let t = Duration::from_secs_f64(i as f64);
-                signal.push(Step::new("x", val, t));
+                signal.push(step!("x", val, t));
             }
         }
     }

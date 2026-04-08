@@ -6,6 +6,7 @@ use mstlo::parse_stl;
 #[cfg(feature = "track-cache-size")]
 use mstlo::ring_buffer::GLOBAL_CACHE_SIZE;
 use mstlo::ring_buffer::Step;
+use mstlo::step;
 use std::collections::HashSet;
 use std::fs::{File, create_dir_all};
 #[cfg(feature = "track-cache-size")]
@@ -137,7 +138,7 @@ where
             )
         {
             let t = Duration::from_secs_f64(ts);
-            signal.push(Step::new("x", val, t));
+            signal.push(step!("x", val, t));
         }
     }
 

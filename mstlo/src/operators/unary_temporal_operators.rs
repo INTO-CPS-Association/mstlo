@@ -570,7 +570,8 @@ mod tests {
     use super::*;
     use crate::core::{StlOperatorTrait, TimeInterval};
     use crate::operators::atomic_operators::Atomic;
-    use crate::ring_buffer::{RingBuffer, Step};
+    use crate::ring_buffer::RingBuffer;
+    use crate::step;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 
@@ -594,7 +595,7 @@ mod tests {
         let signal: Vec<_> = signal_values
             .into_iter()
             .zip(signal_timestamps)
-            .map(|(val, ts)| Step::new("x", val, Duration::from_secs(ts)))
+            .map(|(val, ts)| step!("x", val, Duration::from_secs(ts)))
             .collect();
 
         let mut all_outputs = Vec::new();
@@ -603,9 +604,9 @@ mod tests {
         }
 
         let expected_outputs = [
-            Step::new("output", 5.0, Duration::from_secs(0)),
-            Step::new("output", 2.0, Duration::from_secs(2)),
-            Step::new("output", 2.0, Duration::from_secs(4)),
+            step!("output", 5.0, Duration::from_secs(0)),
+            step!("output", 2.0, Duration::from_secs(2)),
+            step!("output", 2.0, Duration::from_secs(4)),
         ];
 
         assert_eq!(all_outputs.len(), expected_outputs.len());
@@ -640,7 +641,7 @@ mod tests {
         let signal: Vec<_> = signal_values
             .into_iter()
             .zip(signal_timestamps)
-            .map(|(val, ts)| Step::new("x", val, Duration::from_secs(ts)))
+            .map(|(val, ts)| step!("x", val, Duration::from_secs(ts)))
             .collect();
 
         let mut all_outputs = Vec::new();
@@ -649,9 +650,9 @@ mod tests {
         }
 
         let expected_outputs = [
-            Step::new("output", -2.0, Duration::from_secs(0)),
-            Step::new("output", -5.0, Duration::from_secs(2)),
-            Step::new("output", -5.0, Duration::from_secs(4)),
+            step!("output", -2.0, Duration::from_secs(0)),
+            step!("output", -5.0, Duration::from_secs(2)),
+            step!("output", -5.0, Duration::from_secs(4)),
         ];
 
         assert_eq!(all_outputs.len(), expected_outputs.len());
@@ -748,6 +749,7 @@ mod sparse_timestamp_tests {
     use crate::core::{RobustnessInterval, StlOperatorTrait, TimeInterval};
     use crate::operators::atomic_operators::Atomic;
     use crate::ring_buffer::{RingBuffer, Step};
+    use crate::step;
     use std::time::Duration;
 
     fn secs(s: u64) -> Duration {
@@ -782,11 +784,11 @@ mod sparse_timestamp_tests {
 
     fn sparse_steps() -> Vec<Step<f64>> {
         vec![
-            Step::new("x", 100.0, secs(0)),
-            Step::new("x", 15.0, secs(1)),
-            Step::new("x", 16.0, secs(2)),
-            Step::new("x", 2.0, secs(5)),
-            Step::new("x", 2.0, secs(10)),
+            step!("x", 100.0, secs(0)),
+            step!("x", 15.0, secs(1)),
+            step!("x", 16.0, secs(2)),
+            step!("x", 2.0, secs(5)),
+            step!("x", 2.0, secs(10)),
         ]
     }
 

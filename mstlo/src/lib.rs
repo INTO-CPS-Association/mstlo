@@ -11,26 +11,29 @@
 //!
 //! ## Simple usage
 //!
-//! ```no_run
-//! use mstlo::ring_buffer::Step;
-//! use mstlo::monitor::{Algorithm, DelayedQuantitative, StlMonitor};
-//! use std::time::Duration;
+//! ```
+//!    use mstlo::monitor::*;
+//!    use mstlo::{step, stl};
+//! 
+//!    // Build a monitor from the macro DSL.
+//!    let formula = stl!(G[0, 1](x > 5.0));
+//!    let mut monitor = StlMonitor::builder()
+//!        .formula(formula)
+//!        .algorithm(Algorithm::Incremental)
+//!        .semantics(DelayedQuantitative)
+//!        .build()
+//!        .unwrap();
 //!
-//! // Build a monitor from the macro DSL.
-//! let formula = mstlo::stl!(G[0, 2](x > 5.0));
-//! let mut monitor = StlMonitor::builder()
-//!     .formula(formula)
-//!     .algorithm(Algorithm::Incremental)
-//!     .semantics(DelayedQuantitative)
-//!     .build()
-//!     .unwrap();
+//!    // Stream updates
+//!    let out1 = monitor.update(&step!("x", 7.0, 0s));
+//!    let out2 = monitor.update(&step!("x", 6.0, 1s));
+//!    let out3 = monitor.update(&step!("x", 4.0, 2s));
+//!    let out4 = monitor.update(&step!("x", 7.0, 3s));
 //!
-//! // Stream updates
-//! let out1 = monitor.update(&Step::new("x", 7.0, Duration::from_secs(0)));
-//! let out2 = monitor.update(&Step::new("x", 6.0, Duration::from_secs(1)));
-//! let out3 = monitor.update(&Step::new("x", 4.0, Duration::from_secs(2)));
-//!
-//!
+//!    assert_eq!(out1.verdicts(), vec![]);
+//!    assert_eq!(out2.verdicts(), vec![step!("x", 1.0, 0s)]);
+//!    assert_eq!(out3.verdicts(), vec![step!("x", -1.0, 1s)]);
+//!    assert_eq!(out4.verdicts(), vec![step!("x", -1.0, 2s)]);
 //! ```
 //!
 

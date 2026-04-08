@@ -12,10 +12,10 @@ use syn::{Expr, Ident, LitBool, LitInt, Result, Token, bracketed, parenthesized}
 ///
 /// # Syntax
 ///
-/// ```
-/// step!("x", 5.5, 10ms)
-/// step!("x", 5.5, 1s)
-/// step!("x", 5.5, std::time::Duration::from_millis(10))
+/// ```ignore
+/// step!("x", 5.5, 10ms);
+/// step!("x", 5.5, 1s);
+/// step!("x", 5.5, std::time::Duration::from_millis(10));
 /// ```
 ///
 /// Supported integer duration suffixes are: `ns`, `us`, `ms`, and `s`.

@@ -1,7 +1,7 @@
 use mstlo::core::Variables;
 use mstlo::monitor::{Algorithm, StlMonitor, semantic_markers};
-use mstlo::ring_buffer::Step;
 use mstlo::stl;
+use mstlo::step;
 use mstlo::synchronizer::SynchronizationStrategy;
 use std::time::Duration;
 
@@ -26,8 +26,8 @@ fn main() {
 
     println!("{}", monitor);
 
-    monitor.update(&Step::new("temp", 125.5, Duration::from_secs(0)));
-    monitor.update(&Step::new("pressure", 15.0, Duration::from_secs(0)));
-    let res = monitor.update(&Step::new("valve_open", 1.0, Duration::from_secs(0)));
+    monitor.update(&step!("temp", 125.5, Duration::from_secs(0)));
+    monitor.update(&step!("pressure", 15.0, Duration::from_secs(0)));
+    let res = monitor.update(&step!("valve_open", 1.0, Duration::from_secs(0)));
     println!("Verdicts after updates: {}", res);
 }
