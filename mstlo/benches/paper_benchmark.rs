@@ -626,7 +626,10 @@ fn main() -> io::Result<()> {
     if std::env::var("FORMULA_IDS").is_ok() {
         println!("Using formula filter from FORMULA_IDS");
     }
-    println!("Averaging over M = {} runs (+ {} warmup)", m_runs, warmup_runs);
+    println!(
+        "Averaging over M = {} runs (+ {} warmup)",
+        m_runs, warmup_runs
+    );
 
     ensure_parent_dir(&output_path)?;
     let file = File::create(&output_path)?;
