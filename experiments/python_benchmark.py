@@ -1,4 +1,4 @@
-import mstlo_python.mstlo_python as mstlo
+import mstlo_python as mstlo
 import csv
 import time
 import os
@@ -46,7 +46,7 @@ FORMULAS.append((2, "G[0,1000] (x > 0.5 -> F[0,100] (x < 0.0))"))
 # phi3
 FORMULAS.append((3, "(G[0,100] (x < 0.5)) or (G[100,150] (x > 0.0))"))
 
-# until formulas
+# # until formulas
 for bnd in b:
     FORMULAS.append((4, f"(x < 0.0) U[0,{bnd:.1f}] (x > 0.0)"))
 
@@ -81,7 +81,7 @@ def bench_formula(
     """Run *m* passes of the formula and return per-sample timing stats.
 
     Each run creates a fresh monitor, then feeds the signal one sample at
-    a time via monitor.update_discard() — true online monitoring.
+    a time via monitor.update() — true online monitoring.
     *warmup_runs* untimed passes are performed first to prime allocator and
     OS page caches.
     """

@@ -18,7 +18,7 @@ import rtamt
 DEFAULT_M = 50  # Number of runs to average over
 DEFAULT_SIGNAL_CSV = os.path.join(
     os.path.dirname(__file__),
-    "BENCH_RESULTS",
+    "paper_results",
     "signal_generation",
     "signals",
     "signal_20000_chirp.csv",
@@ -72,7 +72,41 @@ def make_discrete_online_monitor_python(
     return monitor
 
 
-def bench_discrete_online_monitor(
+def make_dense_online_monitor_python(
+    spec: str,
+) -> rtamt.StlDenseTimeOnlineSpecification:
+    """Create a fresh rtamt dense-time online monitor for online monitoring."""
+    monitor = rtamt.StlDenseTimeOnlineSpecification()
+    monitor.declare_var("x", "float")
+    monitor.spec = spec
+    monitor.parse()
+    monitor.pastify()
+    return monitor
+
+
+def make_discrete_offline_monitor_python(
+    spec: str,
+) -> rtamt.StlDiscreteTimeOfflineSpecification:
+    """Create a fresh rtamt discrete-time offline monitor for offline monitoring."""
+    monitor = rtamt.StlDiscreteTimeOfflineSpecification()
+    monitor.declare_var("x", "float")
+    monitor.spec = spec
+    monitor.parse()
+    return monitor
+
+
+def make_dense_offline_monitor_python(
+    spec: str,
+) -> rtamt.StlDenseTimeOfflineSpecification:
+    """Create a fresh rtamt dense-time offline monitor for offline monitoring."""
+    monitor = rtamt.StlDenseTimeOfflineSpecification()
+    monitor.declare_var("x", "float")
+    monitor.spec = spec
+    monitor.parse()
+    return monitor
+
+
+def bench_online_monitor(
     fid: int,
     spec: str,
     signal: list[tuple[float, float]],
@@ -100,7 +134,7 @@ def bench_discrete_online_monitor(
         return {
             "formula_id": fid,
             "spec": spec,
-            "monitor_type": "discrete-time",
+            "monitor_type": monitor_func.__name__,
             "mode": "online",
             "n_samples": n_samples,
             "m_runs": m,
@@ -109,7 +143,135 @@ def bench_discrete_online_monitor(
             "avg_per_sample_us": avg_per_sample * 1e6,
         }
     except Exception as e:
-        print(f"ERROR: Formula {fid} (discrete-time online) failed: {str(e)[:100]}")
+        print(f"ERROR: Formula {fid} failed: {str(e)[:100]}")
+        return None
+
+
+def bench_dense_online_monitor(
+    fid: int,
+    spec: str,
+    signal: list[tuple[float, float]],
+    m: int,
+    monitor_func: callable,
+    warmup_runs: int = 1,
+) -> dict:
+    """Benchmark dense-time online monitoring (full signal per update call)."""
+    try:
+        n_samples = len(signal)
+        total_time = 0.0
+
+        for i in range(-warmup_runs, m):
+            monitor = monitor_func(spec)
+            t0 = time.perf_counter()
+            monitor.update(["x", signal])
+            t1 = time.perf_counter()
+            if i >= 0:
+                total_time += t1 - t0
+
+        avg_total = total_time / m
+        avg_per_sample = avg_total / n_samples
+
+        return {
+            "formula_id": fid,
+            "spec": spec,
+            "monitor_type": monitor_func.__name__,
+            "mode": "online",
+            "n_samples": n_samples,
+            "m_runs": m,
+            "avg_total_s": avg_total,
+            "avg_per_sample_s": avg_per_sample,
+            "avg_per_sample_us": avg_per_sample * 1e6,
+        }
+    except Exception as e:
+        print(f"ERROR: Formula {fid} failed: {str(e)[:100]}")
+        return None
+
+
+def bench_offline_monitor(
+    fid: int,
+    spec: str,
+    signal: list[list[float, float]],
+    m: int,
+    monitor_func: callable,
+    warmup_runs: int = 1,
+) -> dict:
+    """Benchmark dense-time offline monitoring."""
+    try:
+        n_samples = len(signal)
+        total_time = 0.0
+
+        for i in range(-warmup_runs, m):
+            monitor = monitor_func(spec)
+            t0 = time.perf_counter()
+            monitor.evaluate(["x", signal])
+            t1 = time.perf_counter()
+            if i >= 0:
+                total_time += t1 - t0
+
+        avg_total = total_time / m
+        avg_per_sample = avg_total / n_samples
+
+        return {
+            "formula_id": fid,
+            "spec": spec,
+            "monitor_type": monitor_func.__name__,
+            "mode": "offline",
+            "n_samples": n_samples,
+            "m_runs": m,
+            "avg_total_s": avg_total,
+            "avg_per_sample_s": avg_per_sample,
+            "avg_per_sample_us": avg_per_sample * 1e6,
+        }
+    except Exception as e:
+        print(
+            f"ERROR: Formula {fid} failed for {monitor_func.__name__}: {str(e)[:100]}"
+        )
+        return None
+
+
+def bench_discrete_offline_monitor(
+    fid: int,
+    spec: str,
+    signal: list[tuple[float, float]],
+    m: int,
+    monitor_func: callable,
+    warmup_runs: int = 1,
+) -> dict:
+    """Benchmark discrete-time offline monitoring."""
+    try:
+        n_samples = len(signal)
+        total_time = 0.0
+
+        times = [ts for ts, _ in signal]
+        values = [v for _, v in signal]
+        dataset = {"time": times, "x": values}
+
+        for i in range(-warmup_runs, m):
+            monitor = monitor_func(spec)
+            t0 = time.perf_counter()
+            monitor.evaluate(dataset)
+            t1 = time.perf_counter()
+            if i >= 0:
+                total_time += t1 - t0
+
+        avg_total = total_time / m
+        avg_per_sample = avg_total / n_samples
+
+        return {
+            "formula_id": fid,
+            "spec": spec,
+            "monitor_type": monitor_func.__name__,
+            "mode": "offline",
+            "n_samples": n_samples,
+            "m_runs": m,
+            "avg_total_s": avg_total,
+            "avg_per_sample_s": avg_per_sample,
+            "avg_per_sample_us": avg_per_sample * 1e6,
+        }
+    except Exception as e:
+        print(
+            f"ERROR: Formula {fid} failed for {monitor_func.__name__}: {str(e)[:100]}"
+        )
         return None
 
 
@@ -174,7 +336,7 @@ def main() -> None:
     pbar = tqdm(FORMULAS.items(), desc="Discrete-Time Online C++")
     for fid, spec in pbar:
         pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
-        res = bench_discrete_online_monitor(
+        res = bench_online_monitor(
             fid,
             spec,
             signal,
@@ -192,12 +354,63 @@ def main() -> None:
     pbar = tqdm(FORMULAS.items(), desc="Discrete-Time Online")
     for fid, spec in pbar:
         pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
-        res = bench_discrete_online_monitor(
+        res = bench_online_monitor(
             fid,
             spec,
             signal,
             args.m_runs,
             make_discrete_online_monitor_python,
+            warmup_runs=args.warmup_runs,
+        )
+        if res is not None:
+            writer.writerow(res)
+            csv_file.flush()
+
+    # --- Dense-Time Online ---
+    print("\nDense-Time — Online")
+    pbar = tqdm(FORMULAS.items(), desc="Dense-Time Online")
+    for fid, spec in pbar:
+        pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
+        res = bench_dense_online_monitor(
+            fid,
+            spec,
+            signal,
+            args.m_runs,
+            make_dense_online_monitor_python,
+            warmup_runs=args.warmup_runs,
+        )
+        if res is not None:
+            writer.writerow(res)
+            csv_file.flush()
+
+    # --- Dense-Time Offline ---
+    print("\nDense-Time — Offline")
+    pbar = tqdm(FORMULAS.items(), desc="Dense-Time Offline")
+    for fid, spec in pbar:
+        pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
+        res = bench_offline_monitor(
+            fid,
+            spec,
+            signal,
+            args.m_runs,
+            make_dense_offline_monitor_python,
+            warmup_runs=args.warmup_runs,
+        )
+        if res is not None:
+            writer.writerow(res)
+            csv_file.flush()
+
+    # --- Discrete-Time Offline ---
+    print("\nDiscrete-Time — Offline")
+    pbar = tqdm(FORMULAS.items(), desc="Discrete-Time Offline")
+    for fid, spec in pbar:
+        pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
+        res = bench_discrete_offline_monitor(
+            fid,
+            spec,
+            signal,
+            args.m_runs,
+            make_discrete_offline_monitor_python,
             warmup_runs=args.warmup_runs,
         )
         if res is not None:
