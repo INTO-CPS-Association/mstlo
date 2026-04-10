@@ -4,6 +4,9 @@ Comprehensive test suite for mstlo_python.
 Tests all formula types, monitor types, and error handling.
 """
 
+import subprocess
+import sys
+
 import pytest
 import mstlo_python.mstlo_python as mstlo
 
@@ -1160,23 +1163,32 @@ class TestMonitorWithVariables:
         assert output.has_verdicts()
 
     def test_variables_not_supported_in_naive(self):
-        """Test that variables are not supported in naive algorithm."""
-        vars = mstlo.Variables()
-        vars.set("threshold", 5.0)
+        """Test that variables are not supported in naive algorithm.
+        the Rust panic aborts the Python process, so a normal pytest.raises cannot catch it. """
+        script = """
+import mstlo_python.mstlo_python as mstlo
 
-        formula = mstlo.parse_formula("x > $threshold")
+vars = mstlo.Variables()
+vars.set('threshold', 5.0)
+formula = mstlo.parse_formula('x > $threshold')
+mstlo.Monitor(
+    formula,
+    semantics='DelayedQualitative',
+    algorithm='Naive',
+    variables=vars,
+)
+"""
 
-        # PanicException is raised when variables are used with the naive algorithm
-        with pytest.raises(BaseException) as exc_info:
-            monitor = mstlo.Monitor(
-                formula,
-                semantics="DelayedQualitative",
-                algorithm="Naive",
-                variables=vars,
-            )
-        # Check that the error message mentions naive or variable
-        assert "naive" in str(exc_info.value).lower() or "Variable" in str(
-            exc_info.value
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode != 0
+        assert (
+            "Variable predicates are not supported in the naive algorithm"
+            in result.stderr
         )
 
 

@@ -8,7 +8,6 @@ use mstlo::parse_stl;
 use mstlo::{Step, step};
 use std::collections::HashSet;
 use std::fs::{File, create_dir_all};
-#[cfg(feature = "track-cache-size")]
 use std::hint::black_box;
 use std::io::{self, BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -20,6 +19,7 @@ use std::time::{Duration, Instant};
 // Configuration (env-overridable)
 // ---------------------------------------------------------------------------
 const DEFAULT_M_RUNS: usize = 50;
+const DEFAULT_WARMUP_RUNS: usize = 1;
 const DEFAULT_SIGNAL_PATH: &str = "benches/signal_generation/signals/signal_20000.csv";
 const DEFAULT_OUTPUT_CSV: &str = "benches/results/paper_native_benchmark_results_N=20000.csv";
 
@@ -148,6 +148,7 @@ fn bench_item(
     item: &BenchItem,
     signal: Vec<Step<f64>>,
     m_runs: usize,
+    warmup_runs: usize,
     semantics: SemanticsKind,
 ) -> Option<BenchResult> {
     if semantics == SemanticsKind::Rosi && item.interval_len > 1000 {
@@ -164,7 +165,7 @@ fn bench_item(
 
     match semantics {
         SemanticsKind::DelayedQuantitative => {
-            for _ in 0..m_runs {
+            for run in 0..(warmup_runs + m_runs) {
                 #[cfg(feature = "track-cache-size")]
                 GLOBAL_CACHE_SIZE.store(0, Ordering::Relaxed);
                 let mut monitor: StlMonitor<f64, f64> = StlMonitor::builder()
@@ -178,9 +179,11 @@ fn bench_item(
                 {
                     let t0 = Instant::now();
                     for step in &signal {
-                        monitor.update(step);
+                        black_box(monitor.update(step));
                     }
-                    total_time += t0.elapsed().as_secs_f64();
+                    if run >= warmup_runs {
+                        total_time += t0.elapsed().as_secs_f64();
+                    }
                 }
 
                 #[cfg(feature = "track-cache-size")]
@@ -195,10 +198,12 @@ fn bench_item(
                         max_cache_size = max_cache_size.max(current_size);
                     }
 
-                    total_time += t0.elapsed().as_secs_f64();
+                    if run >= warmup_runs {
+                        total_time += t0.elapsed().as_secs_f64();
+                        total_cache_size_all_runs += total_cache_size as u128;
+                    }
 
                     let avg_size = total_cache_size as f64 / signal.len() as f64;
-                    total_cache_size_all_runs += total_cache_size as u128;
                     max_cache_size_all_runs = max_cache_size_all_runs.max(max_cache_size);
                     println!(
                         "  Formula ID {}: Avg Size: {:.2}, Max Size: {}",
@@ -221,7 +226,7 @@ fn bench_item(
             }
         }
         SemanticsKind::DelayedQualitative => {
-            for _ in 0..m_runs {
+            for run in 0..(warmup_runs + m_runs) {
                 #[cfg(feature = "track-cache-size")]
                 GLOBAL_CACHE_SIZE.store(0, Ordering::Relaxed);
                 let mut monitor: StlMonitor<f64, bool> = StlMonitor::builder()
@@ -235,9 +240,11 @@ fn bench_item(
                 {
                     let t0 = Instant::now();
                     for step in &signal {
-                        monitor.update(step);
+                        black_box(monitor.update(step));
                     }
-                    total_time += t0.elapsed().as_secs_f64();
+                    if run >= warmup_runs {
+                        total_time += t0.elapsed().as_secs_f64();
+                    }
                 }
 
                 #[cfg(feature = "track-cache-size")]
@@ -246,16 +253,18 @@ fn bench_item(
                     let mut max_cache_size = 0usize;
                     let t0 = Instant::now();
                     for step in &signal {
-                        monitor.update(step);
+                        black_box(monitor.update(step));
                         let current_size = GLOBAL_CACHE_SIZE.load(Ordering::Relaxed);
                         total_cache_size += current_size;
                         max_cache_size = max_cache_size.max(current_size);
                     }
 
-                    total_time += t0.elapsed().as_secs_f64();
+                    if run >= warmup_runs {
+                        total_time += t0.elapsed().as_secs_f64();
+                        total_cache_size_all_runs += total_cache_size as u128;
+                    }
 
                     let avg_size = total_cache_size as f64 / signal.len() as f64;
-                    total_cache_size_all_runs += total_cache_size as u128;
                     max_cache_size_all_runs = max_cache_size_all_runs.max(max_cache_size);
                     println!(
                         "  Formula ID {}: Avg Size: {:.2}, Max Size: {}",
@@ -278,7 +287,7 @@ fn bench_item(
             }
         }
         SemanticsKind::EagerQualitative => {
-            for _ in 0..m_runs {
+            for run in 0..(warmup_runs + m_runs) {
                 #[cfg(feature = "track-cache-size")]
                 GLOBAL_CACHE_SIZE.store(0, Ordering::Relaxed);
                 let mut monitor: StlMonitor<f64, bool> = StlMonitor::builder()
@@ -291,9 +300,11 @@ fn bench_item(
                 {
                     let t0 = Instant::now();
                     for step in &signal {
-                        monitor.update(step);
+                        black_box(monitor.update(step));
                     }
-                    total_time += t0.elapsed().as_secs_f64();
+                    if run >= warmup_runs {
+                        total_time += t0.elapsed().as_secs_f64();
+                    }
                 }
 
                 #[cfg(feature = "track-cache-size")]
@@ -302,15 +313,17 @@ fn bench_item(
                     let mut max_cache_size = 0usize;
                     let t0 = Instant::now();
                     for step in &signal {
-                        monitor.update(step);
+                        black_box(monitor.update(step));
                         let current_size = GLOBAL_CACHE_SIZE.load(Ordering::Relaxed);
                         total_cache_size += current_size;
                         max_cache_size = max_cache_size.max(current_size);
                     }
-                    total_time += t0.elapsed().as_secs_f64();
+                    if run >= warmup_runs {
+                        total_time += t0.elapsed().as_secs_f64();
+                        total_cache_size_all_runs += total_cache_size as u128;
+                    }
 
                     let avg_size = total_cache_size as f64 / signal.len() as f64;
-                    total_cache_size_all_runs += total_cache_size as u128;
                     max_cache_size_all_runs = max_cache_size_all_runs.max(max_cache_size);
                     println!(
                         "  Formula ID {}: Avg Size: {:.2}, Max Size: {}",
@@ -333,7 +346,7 @@ fn bench_item(
             }
         }
         SemanticsKind::Rosi => {
-            for _ in 0..m_runs {
+            for run in 0..(warmup_runs + m_runs) {
                 #[cfg(feature = "track-cache-size")]
                 GLOBAL_CACHE_SIZE.store(0, Ordering::Relaxed);
                 let mut monitor = StlMonitor::builder()
@@ -346,9 +359,11 @@ fn bench_item(
                 {
                     let t0 = Instant::now();
                     for step in &signal {
-                        monitor.update(step);
+                        black_box(monitor.update(step));
                     }
-                    total_time += t0.elapsed().as_secs_f64();
+                    if run >= warmup_runs {
+                        total_time += t0.elapsed().as_secs_f64();
+                    }
                 }
                 #[cfg(feature = "track-cache-size")]
                 {
@@ -356,15 +371,17 @@ fn bench_item(
                     let mut max_cache_size = 0usize;
                     let t0 = Instant::now();
                     for step in &signal {
-                        monitor.update(step);
+                        black_box(monitor.update(step));
                         let current_size = GLOBAL_CACHE_SIZE.load(Ordering::Relaxed);
                         total_cache_size += current_size;
                         max_cache_size = max_cache_size.max(current_size);
                     }
-                    total_time += t0.elapsed().as_secs_f64();
+                    if run >= warmup_runs {
+                        total_time += t0.elapsed().as_secs_f64();
+                        total_cache_size_all_runs += total_cache_size as u128;
+                    }
 
                     let avg_size = total_cache_size as f64 / signal.len() as f64;
-                    total_cache_size_all_runs += total_cache_size as u128;
                     max_cache_size_all_runs = max_cache_size_all_runs.max(max_cache_size);
                     println!(
                         "  Formula ID {}: Avg Size: {:.2}, Max Size: {}",
@@ -575,6 +592,7 @@ fn ensure_parent_dir(path: &Path) -> io::Result<()> {
 
 fn main() -> io::Result<()> {
     let m_runs = env_usize_or_default("M_RUNS", DEFAULT_M_RUNS);
+    let warmup_runs = env_usize_or_default("WARMUP_RUNS", DEFAULT_WARMUP_RUNS);
     let signal_path = env_string_or_default("SIGNAL_PATH", DEFAULT_SIGNAL_PATH);
     let output_path = PathBuf::from(env_string_or_default("OUTPUT_CSV", DEFAULT_OUTPUT_CSV));
     let selected_formula_ids = parse_formula_ids_from_env()?;
@@ -607,7 +625,10 @@ fn main() -> io::Result<()> {
     if std::env::var("FORMULA_IDS").is_ok() {
         println!("Using formula filter from FORMULA_IDS");
     }
-    println!("Averaging over M = {} runs", m_runs);
+    println!(
+        "Averaging over M = {} runs (+ {} warmup)",
+        m_runs, warmup_runs
+    );
 
     ensure_parent_dir(&output_path)?;
     let file = File::create(&output_path)?;
@@ -625,7 +646,7 @@ fn main() -> io::Result<()> {
         println!("\n--- Semantics: {} ---", sem.name());
         for item in &items {
             println!("formula_id={} spec={}", item.formula_id, item.spec);
-            let result = bench_item(item, signal.clone(), m_runs, sem);
+            let result = bench_item(item, signal.clone(), m_runs, warmup_runs, sem);
             if let Some(result) = result {
                 write_result_row(&mut writer, &result)?;
             }

@@ -3,10 +3,14 @@
 [![Rust CI](https://github.com/INTO-CPS-Association/mstlo/workflows/Rust%20CI/badge.svg)](https://github.com/INTO-CPS-Association/mstlo/actions/workflows/rust.yml)
 [![Python Tests](https://github.com/INTO-CPS-Association/mstlo/workflows/Python%20Tests/badge.svg)](https://github.com/INTO-CPS-Association/mstlo/actions/workflows/python-tests.yml)
 [![codecov](https://codecov.io/gh/INTO-CPS-Association/mstlo/branch/main/graph/badge.svg)](https://codecov.io/gh/INTO-CPS-Association/mstlo)
-[![crates.io](https://img.shields.io/crates/v/mstlo.svg)](https://crates.io/crates/mstlo)
-[![PyPI](https://img.shields.io/pypi/v/mstlo-python.svg)](https://pypi.org/project/mstlo-python/)
 [![docs.rs](https://img.shields.io/docsrs/mstlo)](https://docs.rs/mstlo)
 [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://INTO-CPS-Association.github.io/mstlo/)
+[![crates.io](https://img.shields.io/crates/v/mstlo.svg)](https://crates.io/crates/mstlo)
+[![PyPI](https://img.shields.io/pypi/v/mstlo-python.svg)](https://pypi.org/project/mstlo-python/)
+[![Python versions](https://img.shields.io/pypi/pyversions/mstlo-python.svg)](https://pypi.org/project/mstlo-python/)
+<!-- [![Crates.io Downloads](https://img.shields.io/crates/d/mstlo)](https://crates.io/crates/mstlo)
+[![Docs Status](https://img.shields.io/badge/docs-latest-brightgreen)](https://INTO-CPS-Association.github.io/mstlo/)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/mstlo-python.svg?label=PyPI%20downloads)](https://pypi.org/project/mstlo-python/) -->
 
 mstlo is a Rust library for online monitoring of Signal Temporal Logic (STL) specifications. It is designed for high performance and low memory usage, making it suitable for real-time applications. The Python bindings are published as `mstlo-python`.
 

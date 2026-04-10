@@ -469,6 +469,9 @@ struct Monitor {
     algorithm: String,
     synchronization: String,
     variables: PyVariables,
+    /// Cache mapping signal name → leaked `&'static str`, so we leak at most
+    /// once per unique signal name per monitor rather than on every update call.
+    signal_name_cache: HashMap<String, &'static str>,
 }
 
 #[pymethods]
@@ -524,6 +527,7 @@ impl Monitor {
                     algorithm: algorithm.to_string(),
                     synchronization: synchronization.to_string(),
                     variables: vars,
+                    signal_name_cache: HashMap::new(),
                 })
             }
             "EagerQualitative" => {
@@ -541,6 +545,7 @@ impl Monitor {
                     algorithm: algorithm.to_string(),
                     synchronization: synchronization.to_string(),
                     variables: vars,
+                    signal_name_cache: HashMap::new(),
                 })
             }
             "DelayedQuantitative" => {
@@ -558,6 +563,7 @@ impl Monitor {
                     algorithm: algorithm.to_string(),
                     synchronization: synchronization.to_string(),
                     variables: vars,
+                    signal_name_cache: HashMap::new(),
                 })
             }
             "Rosi" => {
@@ -575,6 +581,7 @@ impl Monitor {
                     algorithm: algorithm.to_string(),
                     synchronization: synchronization.to_string(),
                     variables: vars,
+                    signal_name_cache: HashMap::new(),
                 })
             }
             _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -584,7 +591,7 @@ impl Monitor {
     }
 
     fn update(&mut self, signal: String, value: f64, timestamp: f64) -> PyMonitorOutput {
-        let sig_ref = Box::leak(signal.into_boxed_str());
+        let sig_ref = self.intern_signal_name(signal);
         let step = Step::new(sig_ref, value, Duration::from_secs_f64(timestamp));
 
         match &mut self.inner {
@@ -724,6 +731,19 @@ impl Monitor {
         }
     }
 }
+
+impl Monitor {
+    /// Return a `&'static str` for `signal`, leaking exactly once per unique name.
+    fn intern_signal_name(&mut self, signal: String) -> &'static str {
+        if let Some(&cached) = self.signal_name_cache.get(&signal) {
+            return cached;
+        }
+        let leaked: &'static str = Box::leak(signal.clone().into_boxed_str());
+        self.signal_name_cache.insert(signal, leaked);
+        leaked
+    }
+}
+
 fn convert_output_to_dict<Y: Clone, F>(
     py: Python,
     output: MonitorOutput<f64, Y>,
