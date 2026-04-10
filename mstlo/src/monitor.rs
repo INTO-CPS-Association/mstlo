@@ -691,7 +691,7 @@ where
                 self.build_naive_operator(formula_def.clone(), self.semantics)
             }
             (Algorithm::Naive, Semantics::EagerQualitative | Semantics::RobustnessInterval) => {
-                return Err("Naive algorithm does not support RoSI/Eaver evaluation");
+                return Err("Naive algorithm does not support RoSI/Eager evaluation");
             }
         };
 
