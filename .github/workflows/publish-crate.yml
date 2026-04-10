@@ -1,35 +1,16 @@
-name: Publish Rust Crates
+name: Publish mstlo
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  publish-macros:
-    name: Publish mstlo-macros
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo publish --manifest-path mstlo/mstlo-macros/Cargo.toml --locked --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
-
   publish-mstlo:
     name: Publish mstlo
     runs-on: ubuntu-latest
-    needs: [publish-macros]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Wait for mstlo-macros index propagation
-        run: |
-          version=$(awk -F '"' '/^version = / { print $2; exit }' mstlo/mstlo-macros/Cargo.toml)
-          for i in $(seq 1 30); do
-            cargo search mstlo-macros --limit 1 | grep -q "^mstlo-macros = \"${version}\"" && exit 0
-            sleep 15
-          done
-          exit 1
       - run: cargo publish --manifest-path mstlo/Cargo.toml --locked --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"

@@ -8,7 +8,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Expr, Ident, LitBool, LitInt, Result, Token, bracketed, parenthesized};
 
-/// Convenience macro to construct a `::mstlo::ring_buffer::Step`.
+/// Convenience macro to construct a `::mstlo::Step`.
 ///
 /// # Syntax
 ///
@@ -35,7 +35,7 @@ pub fn step(input: TokenStream) -> TokenStream {
     };
 
     quote! {
-        ::mstlo::ring_buffer::Step::new(#signal, #value, #ts_tokens)
+        ::mstlo::Step::new(#signal, #value, #ts_tokens)
     }
     .into()
 }
@@ -195,41 +195,41 @@ impl StlFormula {
     fn to_token_stream(&self) -> TokenStream2 {
         match self {
             StlFormula::True => quote! {
-                ::mstlo::formula_definition::FormulaDefinition::True
+                ::mstlo::FormulaDefinition::True
             },
             StlFormula::False => quote! {
-                ::mstlo::formula_definition::FormulaDefinition::False
+                ::mstlo::FormulaDefinition::False
             },
             StlFormula::GreaterThan(signal, val) => {
                 let signal_str = signal.to_string();
                 quote! {
-                    ::mstlo::formula_definition::FormulaDefinition::GreaterThan(#signal_str, #val as f64)
+                    ::mstlo::FormulaDefinition::GreaterThan(#signal_str, #val as f64)
                 }
             }
             StlFormula::LessThan(signal, val) => {
                 let signal_str = signal.to_string();
                 quote! {
-                    ::mstlo::formula_definition::FormulaDefinition::LessThan(#signal_str, #val as f64)
+                    ::mstlo::FormulaDefinition::LessThan(#signal_str, #val as f64)
                 }
             }
             StlFormula::GreaterThanVar(signal, var) => {
                 let signal_str = signal.to_string();
                 let var_str = var.to_string();
                 quote! {
-                    ::mstlo::formula_definition::FormulaDefinition::GreaterThanVar(#signal_str, #var_str)
+                    ::mstlo::FormulaDefinition::GreaterThanVar(#signal_str, #var_str)
                 }
             }
             StlFormula::LessThanVar(signal, var) => {
                 let signal_str = signal.to_string();
                 let var_str = var.to_string();
                 quote! {
-                    ::mstlo::formula_definition::FormulaDefinition::LessThanVar(#signal_str, #var_str)
+                    ::mstlo::FormulaDefinition::LessThanVar(#signal_str, #var_str)
                 }
             }
             StlFormula::Not(sub) => {
                 let sub_tokens = sub.to_token_stream();
                 quote! {
-                    ::mstlo::formula_definition::FormulaDefinition::Not(
+                    ::mstlo::FormulaDefinition::Not(
                         Box::new(#sub_tokens)
                     )
                 }
@@ -238,7 +238,7 @@ impl StlFormula {
                 let left_tokens = left.to_token_stream();
                 let right_tokens = right.to_token_stream();
                 quote! {
-                    ::mstlo::formula_definition::FormulaDefinition::And(
+                    ::mstlo::FormulaDefinition::And(
                         Box::new(#left_tokens),
                         Box::new(#right_tokens)
                     )
@@ -248,7 +248,7 @@ impl StlFormula {
                 let left_tokens = left.to_token_stream();
                 let right_tokens = right.to_token_stream();
                 quote! {
-                    ::mstlo::formula_definition::FormulaDefinition::Or(
+                    ::mstlo::FormulaDefinition::Or(
                         Box::new(#left_tokens),
                         Box::new(#right_tokens)
                     )
@@ -258,7 +258,7 @@ impl StlFormula {
                 let left_tokens = left.to_token_stream();
                 let right_tokens = right.to_token_stream();
                 quote! {
-                    ::mstlo::formula_definition::FormulaDefinition::Implies(
+                    ::mstlo::FormulaDefinition::Implies(
                         Box::new(#left_tokens),
                         Box::new(#right_tokens)
                     )
@@ -267,8 +267,8 @@ impl StlFormula {
             StlFormula::Globally(start, end, sub) => {
                 let sub_tokens = sub.to_token_stream();
                 quote! {
-                    ::mstlo::formula_definition::FormulaDefinition::Globally(
-                        ::mstlo::core::TimeInterval {
+                    ::mstlo::FormulaDefinition::Globally(
+                        ::mstlo::TimeInterval {
                             start: ::std::time::Duration::from_secs(#start as u64),
                             end: ::std::time::Duration::from_secs(#end as u64),
                         },
@@ -279,8 +279,8 @@ impl StlFormula {
             StlFormula::Eventually(start, end, sub) => {
                 let sub_tokens = sub.to_token_stream();
                 quote! {
-                    ::mstlo::formula_definition::FormulaDefinition::Eventually(
-                        ::mstlo::core::TimeInterval {
+                    ::mstlo::FormulaDefinition::Eventually(
+                        ::mstlo::TimeInterval {
                             start: ::std::time::Duration::from_secs(#start as u64),
                             end: ::std::time::Duration::from_secs(#end as u64),
                         },
@@ -292,8 +292,8 @@ impl StlFormula {
                 let left_tokens = left.to_token_stream();
                 let right_tokens = right.to_token_stream();
                 quote! {
-                    ::mstlo::formula_definition::FormulaDefinition::Until(
-                        ::mstlo::core::TimeInterval {
+                    ::mstlo::FormulaDefinition::Until(
+                        ::mstlo::TimeInterval {
                             start: ::std::time::Duration::from_secs(#start as u64),
                             end: ::std::time::Duration::from_secs(#end as u64),
                         },

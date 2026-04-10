@@ -1,12 +1,10 @@
-use mstlo::core::{RobustnessInterval, TimeInterval, Variables};
-use mstlo::formula_definition::FormulaDefinition;
 use mstlo::monitor::{
     Algorithm, DelayedQualitative, DelayedQuantitative, EagerQualitative, MonitorOutput, Rosi,
     StlMonitor,
 };
 use mstlo::parse_stl;
-use mstlo::ring_buffer::Step;
-use mstlo::synchronizer::SynchronizationStrategy;
+use mstlo::{FormulaDefinition, RobustnessInterval, TimeInterval, Variables};
+use mstlo::{Step, SynchronizationStrategy};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyList, PyTuple};
 use std::collections::{HashMap, HashSet};

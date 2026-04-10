@@ -149,12 +149,6 @@ pub trait Max {
     fn max(self, other: Self) -> Self;
 }
 
-/// Set-like intersection operation for interval-like domains.
-pub trait Intersection {
-    /// Returns the intersection of `self` and `other`.
-    fn intersection(self, other: Self) -> Self;
-}
-
 impl Min for RobustnessInterval {
     fn min(self, other: Self) -> Self {
         RobustnessInterval(self.0.min(other.0), self.1.min(other.1))
@@ -163,24 +157,6 @@ impl Min for RobustnessInterval {
 impl Max for RobustnessInterval {
     fn max(self, other: Self) -> Self {
         RobustnessInterval(self.0.max(other.0), self.1.max(other.1))
-    }
-}
-
-impl Intersection for RobustnessInterval {
-    /// Calculates the intersection of two intervals.
-    ///
-    /// If there is no overlap, this implementation returns
-    /// `(-∞, +∞)` as an "unknown" sentinel used in the current design.
-    fn intersection(self, other: Self) -> Self {
-        let new_start = self.0.max(other.0);
-        let new_end = self.1.min(other.1);
-        if new_end < new_start {
-            // The intervals do not overlap.
-            RobustnessInterval(f64::NEG_INFINITY, f64::INFINITY)
-        } else {
-            // The intervals overlap. Return the new intersected interval.
-            RobustnessInterval(new_start, new_end)
-        }
     }
 }
 
@@ -418,25 +394,6 @@ mod tests {
     }
 
     #[test]
-    fn ri_min_max_intersection() {
-        let a = RobustnessInterval(1.0, 4.0);
-        let b = RobustnessInterval(2.0, 3.0);
-
-        assert_eq!(a.min(b), RobustnessInterval(1.0, 3.0));
-        assert_eq!(a.max(b), RobustnessInterval(2.0, 4.0));
-
-        let inter = a.intersection(b);
-        assert_eq!(inter, RobustnessInterval(2.0, 3.0));
-
-        // non-overlapping intervals -> returns (NEG_INFINITY, INFINITY) per implementation
-        let c = RobustnessInterval(1.0, 2.0);
-        let d = RobustnessInterval(3.0, 4.0);
-        let non = c.intersection(d);
-        assert!(non.0.is_infinite() && non.0.is_sign_negative());
-        assert!(non.1.is_infinite() && non.1.is_sign_positive());
-    }
-
-    #[test]
     fn f64_semantics_basic() {
         let a = 1.5f64;
         let b = 2.0f64;
@@ -569,7 +526,7 @@ use std::rc::Rc;
 /// # Example
 ///
 /// ```
-/// use mstlo::core::Variables;
+/// use mstlo::Variables;
 ///
 /// let vars = Variables::new();
 /// vars.set("threshold", 5.0);

@@ -40,17 +40,31 @@
 // Enable use of ::mstlo:: paths within this crate for the proc-macro
 extern crate self as mstlo;
 
-pub mod core;
-pub mod formula_definition;
-pub mod formulas;
+mod core;
+mod formula_definition;
+mod formulas;
 pub mod monitor;
-pub mod naive_operators;
-pub mod operators;
-pub mod parser;
-pub mod ring_buffer;
-pub mod synchronizer;
+mod naive_operators;
+mod operators;
+mod parser;
+mod ring_buffer;
+mod synchronizer;
 
+pub use core::{
+    RobustnessInterval, RobustnessSemantics, SignalIdentifier, TimeInterval, Variables,
+};
+pub use formula_definition::FormulaDefinition;
+pub use formulas::get_formulas;
+pub use monitor::semantic_markers::{
+    DelayedQualitative, DelayedQuantitative, EagerQualitative, Rosi, SemanticType,
+};
+pub use monitor::{
+    Algorithm, MonitorOutput, Semantics, StlMonitor, StlMonitorBuilder, SyncStepResult,
+};
 pub use parser::{ParseError, parse_stl};
+#[cfg(feature = "track-cache-size")]
+pub use ring_buffer::GLOBAL_CACHE_SIZE;
+pub use ring_buffer::{RingBuffer, RingBufferTrait, Step};
+pub use synchronizer::{Interpolatable, SynchronizationStrategy, Synchronizer};
 
-// Re-export the stl macro at crate root for convenience
 pub use mstlo_macros::{step, stl};

@@ -1,7 +1,5 @@
 #[cfg(test)]
-use mstlo::formula_definition::FormulaDefinition;
-use mstlo::ring_buffer::Step;
-use mstlo::{step, stl};
+use mstlo::{FormulaDefinition, Step, step, stl};
 
 use std::time::Duration;
 
