@@ -25,6 +25,10 @@ mstlo is a Rust library for online monitoring of Signal Temporal Logic (STL) spe
   - [Usage](#usage)
     - [Rust Usage](#rust-usage)
     - [Python Usage](#python-usage)
+  - [Building from Source](#building-from-source)
+    - [Prerequisites](#prerequisites)
+    - [Rust Crate](#rust-crate)
+    - [Python Bindings](#python-bindings)
   - [References](#references)
   - [License](#license)
 
@@ -167,6 +171,50 @@ print(f"Verdicts: {output.verdicts()}")
 output = monitor.update("x", 3.0, 1.2)
 print(f"Verdicts: {output.verdicts()}")
 # Verdicts: [(0.5, (-inf, -2.0)), (1.2, (-inf, -2.0))] # early indication of violation
+```
+
+## Building from Source
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (stable toolchain)
+- [Python 3.9+](https://www.python.org/) and [maturin](https://github.com/PyO3/maturin) (for Python bindings only)
+
+### Rust Crate
+
+```bash
+git clone https://github.com/INTO-CPS-Association/mstlo.git
+cd mstlo/mstlo
+cargo build
+```
+
+Run the test suite:
+
+```bash
+cargo test
+```
+
+Run the included examples:
+
+```bash
+cargo run --example intro_example
+cargo run --example simple_example
+cargo run --example variables_example
+```
+
+### Python Bindings
+
+```bash
+cd mstlo-python
+pip install maturin
+maturin develop
+```
+
+Run the Python tests:
+
+```bash
+pip install pytest
+pytest
 ```
 
 ## References
