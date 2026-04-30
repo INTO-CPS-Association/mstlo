@@ -551,7 +551,7 @@ mod tests {
     // Helper to create a signal from a vector of values and timestamps
     fn create_signal(values: Vec<f64>, timestamps: Vec<u64>) -> RingBuffer<f64> {
         let mut signal = RingBuffer::new();
-        for (val, ts) in values.into_iter().zip(timestamps.into_iter()) {
+        for (val, ts) in values.into_iter().zip(timestamps) {
             signal.add_step(step!("x", val, Duration::from_secs(ts)));
         }
         signal
