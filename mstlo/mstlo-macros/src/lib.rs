@@ -6,6 +6,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
+use syn::spanned::Spanned;
 use syn::{Expr, Ident, LitBool, LitInt, Result, Token, bracketed, parenthesized};
 
 /// Convenience macro to construct a `::mstlo::Step`.
@@ -624,6 +625,20 @@ fn parse_not_keyword(input: ParseStream) -> Result<StlFormula> {
     }
 }
 
+fn try_eval_as_f64(expr: &Expr) -> Option<f64> {
+    match expr {
+        Expr::Lit(expr_lit) => match &expr_lit.lit {
+            syn::Lit::Int(lit) => lit.base10_parse::<f64>().ok(),
+            syn::Lit::Float(lit) => lit.base10_parse::<f64>().ok(),
+            _ => None,
+        },
+        Expr::Unary(expr_unary) if matches!(expr_unary.op, syn::UnOp::Neg(_)) => {
+            try_eval_as_f64(&expr_unary.expr).map(|v| -v)
+        }
+        _ => None,
+    }
+}
+
 /// Parse time interval: [start, end]
 fn parse_time_interval(input: ParseStream) -> Result<(Expr, Expr)> {
     let content;
@@ -673,6 +688,29 @@ fn parse_time_interval(input: ParseStream) -> Result<(Expr, Expr)> {
             "too many values in time interval\n  \
             help: time intervals take exactly two values [start, end], e.g., [0, 10]",
         ));
+    }
+
+    if let (Some(s), Some(e)) = (try_eval_as_f64(&start), try_eval_as_f64(&end)) {
+        if s < 0.0 {
+            return Err(syn::Error::new(
+                start.span(),
+                format!(
+                    "invalid time interval: lower bound ({}) must be >= 0\n  \
+                    help: time intervals require [start, end] where start >= 0, e.g., [0, 10]",
+                    s
+                ),
+            ));
+        }
+        if e < s {
+            return Err(syn::Error::new(
+                end.span(),
+                format!(
+                    "invalid time interval: upper bound ({}) must be >= lower bound ({})\n  \
+                    help: time intervals require [start, end] where end >= start, e.g., [0, 10]",
+                    e, s
+                ),
+            ));
+        }
     }
 
     Ok((start, end))
