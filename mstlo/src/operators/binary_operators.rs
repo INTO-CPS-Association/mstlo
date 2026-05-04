@@ -188,6 +188,16 @@ where
         self.max_lookahead
     }
 
+    fn reset(&mut self) {
+        self.left_cache.clear();
+        self.right_cache.clear();
+        self.last_eval_time = None;
+        self.left_last_known = Step::new("", Y::unknown(), Duration::ZERO);
+        self.right_last_known = Step::new("", Y::unknown(), Duration::ZERO);
+        self.left.reset();
+        self.right.reset();
+    }
+
     /// Updates both operands with the incoming sample and emits conjunction outputs.
     ///
     /// Output emission depends on execution mode:
@@ -363,6 +373,16 @@ where
 
     fn get_max_lookahead(&self) -> Duration {
         self.max_lookahead
+    }
+
+    fn reset(&mut self) {
+        self.left_cache.clear();
+        self.right_cache.clear();
+        self.last_eval_time = None;
+        self.left_last_known = Step::new("", Y::unknown(), Duration::ZERO);
+        self.right_last_known = Step::new("", Y::unknown(), Duration::ZERO);
+        self.left.reset();
+        self.right.reset();
     }
 
     /// Updates both operands with the incoming sample and emits disjunction outputs.

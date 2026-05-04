@@ -182,6 +182,12 @@ where
         self.max_lookahead
     }
 
+    fn reset(&mut self) {
+        self.cache.clear();
+        self.eval_buffer.clear();
+        self.operand.reset();
+    }
+
     /// Updates temporal state with one input sample and emits available outputs.
     ///
     /// Behavior depends on mode:
@@ -391,6 +397,12 @@ where
 
     fn get_max_lookahead(&self) -> Duration {
         self.max_lookahead
+    }
+
+    fn reset(&mut self) {
+        self.cache.clear();
+        self.eval_buffer.clear();
+        self.operand.reset();
     }
 
     /// Updates temporal state with one input sample and emits available outputs.

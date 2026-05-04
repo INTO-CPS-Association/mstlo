@@ -123,6 +123,16 @@ where
     fn get_max_lookahead(&self) -> Duration {
         self.max_lookahead
     }
+
+    fn reset(&mut self) {
+        self.left_cache.clear();
+        self.right_cache.clear();
+        self.eval_buffer.clear();
+        self.t_max = (Duration::ZERO, Duration::ZERO);
+        self.left.reset();
+        self.right.reset();
+    }
+
     /// Updates the operator with one input sample and emits newly available outputs.
     ///
     /// High-level flow:
