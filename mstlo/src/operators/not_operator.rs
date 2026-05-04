@@ -46,6 +46,10 @@ where
         self.max_lookahead
     }
 
+    fn reset(&mut self) {
+        self.operand.reset();
+    }
+
     /// Updates the child operator and negates each produced value.
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let operand_updates = self.operand.update(step);

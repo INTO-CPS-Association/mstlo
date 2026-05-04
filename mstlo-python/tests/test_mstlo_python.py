@@ -1348,5 +1348,125 @@ class TestMonitorDisplay:
         assert "Monitor" in output
 
 
+class TestMonitorReset:
+    """Tests for the monitor.reset() method."""
+
+    def _make_monitor(self, semantics="DelayedQuantitative"):
+        formula = mstlo.parse_formula("G[0, 2](x > 10)")
+        return mstlo.Monitor(formula, semantics=semantics)
+
+    def _feed_trace(self, monitor):
+        steps = [(15.0, 0.0), (12.0, 1.0), (8.0, 2.0), (11.0, 3.0), (14.0, 4.0)]
+        verdicts = []
+        for value, ts in steps:
+            verdicts.extend(monitor.update("x", value, ts).verdicts())
+        return verdicts
+
+    def test_reset_clears_verdicts(self):
+        """After reset, feeding the same trace yields identical verdicts."""
+        monitor = self._make_monitor()
+        run1 = self._feed_trace(monitor)
+        monitor.reset()
+        run2 = self._feed_trace(monitor)
+        assert run1 == run2, f"Expected {run1} == {run2}"
+
+    def test_reset_preserves_formula_config(self):
+        """Monitor configuration is unchanged after reset."""
+        formula = mstlo.parse_formula("G[0, 5](x > 5)")
+        monitor = mstlo.Monitor(
+            formula,
+            semantics="DelayedQuantitative",
+            algorithm="Incremental",
+            synchronization="Linear",
+        )
+        spec_before = monitor.get_specification()
+        depth_before = monitor.get_temporal_depth()
+        algo_before = monitor.get_algorithm()
+        sem_before = monitor.get_semantics()
+        sync_before = monitor.get_synchronization_strategy()
+
+        monitor.reset()
+
+        assert monitor.get_specification() == spec_before
+        assert monitor.get_temporal_depth() == depth_before
+        assert monitor.get_algorithm() == algo_before
+        assert monitor.get_semantics() == sem_before
+        assert monitor.get_synchronization_strategy() == sync_before
+
+    def test_reset_preserves_variables(self):
+        """Variable values survive reset."""
+        formula = mstlo.parse_formula("x > $threshold")
+        variables = mstlo.Variables()
+        variables.set("threshold", 5.0)
+        monitor = mstlo.Monitor(formula, semantics="DelayedQualitative", variables=variables)
+
+        monitor.update("x", 10.0, 1.0)
+        monitor.reset()
+
+        assert monitor.get_variables().get("threshold") == 5.0
+
+        # Monitor should still evaluate using the preserved threshold.
+        output = monitor.update("x", 10.0, 1.0)
+        verdicts = output.verdicts()
+        assert len(verdicts) == 1
+        assert verdicts[0][1] is True
+
+    def test_reset_delayed_qualitative(self):
+        """Reset works correctly with DelayedQualitative semantics."""
+        monitor = self._make_monitor(semantics="DelayedQualitative")
+        run1 = self._feed_trace(monitor)
+        monitor.reset()
+        run2 = self._feed_trace(monitor)
+        assert run1 == run2
+
+    def test_reset_eager_qualitative(self):
+        """Reset works correctly with EagerQualitative semantics."""
+        monitor = self._make_monitor(semantics="EagerQualitative")
+        run1 = self._feed_trace(monitor)
+        monitor.reset()
+        run2 = self._feed_trace(monitor)
+        assert run1 == run2
+
+    def test_reset_delayed_quantitative(self):
+        """Reset works correctly with DelayedQuantitative semantics."""
+        monitor = self._make_monitor(semantics="DelayedQuantitative")
+        run1 = self._feed_trace(monitor)
+        monitor.reset()
+        run2 = self._feed_trace(monitor)
+        assert run1 == run2
+
+    def test_reset_rosi(self):
+        """Reset works correctly with Rosi semantics."""
+        monitor = self._make_monitor(semantics="Rosi")
+        run1 = self._feed_trace(monitor)
+        monitor.reset()
+        run2 = self._feed_trace(monitor)
+        assert run1 == run2
+
+    def test_reset_after_batch_update(self):
+        """Reset works correctly after update_batch."""
+        formula = mstlo.parse_formula("G[0, 2](x > 10)")
+        monitor = mstlo.Monitor(formula)
+
+        steps = {"x": [(15.0, 0.0), (12.0, 1.0), (8.0, 2.0)]}
+        run1 = monitor.update_batch(steps).verdicts()
+
+        monitor.reset()
+
+        run2 = monitor.update_batch(steps).verdicts()
+        assert run1 == run2
+
+    def test_reset_idempotent(self):
+        """Calling reset() twice has the same effect as calling it once."""
+        monitor = self._make_monitor()
+        self._feed_trace(monitor)
+
+        monitor.reset()
+        monitor.reset()
+
+        run = self._feed_trace(monitor)
+        assert len(run) > 0  # Should produce verdicts without error
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

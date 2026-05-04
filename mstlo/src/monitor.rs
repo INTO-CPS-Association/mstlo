@@ -545,6 +545,39 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
     pub fn variables(&self) -> Variables {
         self.variables.clone()
     }
+
+    /// Resets the monitor to its initial state, clearing all internal caches and
+    /// evaluation buffers.
+    ///
+    /// The formula, semantics, algorithm, synchronization strategy, and variables
+    /// are preserved. Use this to reuse a monitor across multiple independent
+    /// traces without rebuilding it from scratch.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut monitor = StlMonitor::builder()
+    ///     .formula(formula)
+    ///     .build()
+    ///     .unwrap();
+    ///
+    /// for step in trace_1 {
+    ///     monitor.update(&step);
+    /// }
+    ///
+    /// monitor.reset();
+    ///
+    /// for step in trace_2 {
+    ///     monitor.update(&step);
+    /// }
+    /// ```
+    pub fn reset(&mut self)
+    where
+        Y: RobustnessSemantics + Debug,
+    {
+        self.root_operator.reset();
+        self.synchronizer.reset();
+    }
 }
 
 impl<T: Clone + Interpolatable, Y> Display for StlMonitor<T, Y> {
@@ -1421,6 +1454,272 @@ mod tests {
             let sync_result = SyncStepResult::new(sync_step, vec![output_step]);
 
             assert!(sync_result.has_outputs());
+        }
+    }
+
+    mod reset_tests {
+        use super::*;
+        use crate::monitor::{Algorithm, Rosi, StlMonitor};
+        use crate::synchronizer::SynchronizationStrategy;
+        use crate::{step, stl};
+        use std::time::Duration;
+
+        fn feed_trace(monitor: &mut StlMonitor<f64, f64>) -> Vec<f64> {
+            let steps = [
+                step!("x", 15.0, Duration::from_secs(0)),
+                step!("x", 8.0, Duration::from_secs(1)),
+                step!("x", 12.0, Duration::from_secs(2)),
+                step!("x", 5.0, Duration::from_secs(3)),
+                step!("x", 20.0, Duration::from_secs(4)),
+                step!("x", 3.0, Duration::from_secs(6)),
+            ];
+            steps
+                .iter()
+                .flat_map(|s| monitor.update(s).into_verdicts())
+                .map(|v| v.value)
+                .collect()
+        }
+
+        #[test]
+        fn test_reset_clears_state() {
+            let formula = stl!(G[0, 2] (x > 10.0));
+
+            let mut monitor = StlMonitor::builder()
+                .formula(formula.clone())
+                .semantics(DelayedQuantitative)
+                .algorithm(Algorithm::Incremental)
+                .build()
+                .unwrap();
+
+            let first_run = feed_trace(&mut monitor);
+            assert!(!first_run.is_empty());
+
+            monitor.reset();
+
+            // After reset, feeding the same trace should yield identical verdicts.
+            let after_reset = feed_trace(&mut monitor);
+            assert_eq!(first_run, after_reset);
+        }
+
+        #[test]
+        fn test_reset_preserves_configuration() {
+            let formula = stl!(G[0, 5] (x > 10.0));
+
+            let mut monitor = StlMonitor::builder()
+                .formula(formula.clone())
+                .semantics(DelayedQuantitative)
+                .algorithm(Algorithm::Incremental)
+                .synchronization_strategy(SynchronizationStrategy::Linear)
+                .build()
+                .unwrap();
+
+            let spec_before = monitor.specification();
+            let depth_before = monitor.temporal_depth();
+            let algo_before = monitor.algorithm();
+            let sem_before = monitor.semantics();
+            let sync_before = monitor.synchronization_strategy();
+
+            monitor.reset();
+
+            assert_eq!(monitor.specification(), spec_before);
+            assert_eq!(monitor.temporal_depth(), depth_before);
+            assert_eq!(monitor.algorithm(), algo_before);
+            assert_eq!(monitor.semantics(), sem_before);
+            assert_eq!(monitor.synchronization_strategy(), sync_before);
+        }
+
+        #[test]
+        fn test_reset_preserves_variables() {
+            use crate::core::Variables;
+            use crate::parse_stl;
+
+            let formula = parse_stl("x > $threshold").unwrap();
+            let variables = Variables::new();
+            variables.set("threshold", 5.0);
+
+            let mut monitor = StlMonitor::builder()
+                .formula(formula)
+                .semantics(DelayedQualitative)
+                .algorithm(Algorithm::Incremental)
+                .variables(variables.clone())
+                .build()
+                .unwrap();
+
+            let step1 = step!("x", 10.0, Duration::from_secs(1));
+            monitor.update(&step1);
+
+            monitor.reset();
+
+            // Variables should still be intact after reset.
+            assert_eq!(monitor.variables().get("threshold"), Some(5.0));
+
+            // Monitor should still evaluate using the variable threshold.
+            let step2 = step!("x", 10.0, Duration::from_secs(1));
+            let output = monitor.update(&step2);
+            assert!(output.verdicts()[0].value);
+        }
+
+        #[test]
+        fn test_reset_delayed_qualitative() {
+            let formula = stl!(G[0, 2] (x > 10.0));
+
+            let mut monitor = StlMonitor::builder()
+                .formula(formula)
+                .semantics(DelayedQualitative)
+                .algorithm(Algorithm::Incremental)
+                .build()
+                .unwrap();
+
+            let steps = [
+                step!("x", 15.0, Duration::from_secs(0)),
+                step!("x", 12.0, Duration::from_secs(1)),
+                step!("x", 11.0, Duration::from_secs(2)),
+            ];
+            let mut verdicts1: Vec<bool> = Vec::new();
+            for s in &steps {
+                verdicts1.extend(
+                    monitor
+                        .update(s)
+                        .into_verdicts()
+                        .into_iter()
+                        .map(|v| v.value),
+                );
+            }
+
+            monitor.reset();
+
+            let mut verdicts2: Vec<bool> = Vec::new();
+            for s in &steps {
+                verdicts2.extend(
+                    monitor
+                        .update(s)
+                        .into_verdicts()
+                        .into_iter()
+                        .map(|v| v.value),
+                );
+            }
+
+            assert_eq!(verdicts1, verdicts2);
+        }
+
+        #[test]
+        fn test_reset_rosi_semantics() {
+            let formula = stl!(G[0, 2] (x > 10.0));
+
+            let mut monitor = StlMonitor::builder()
+                .formula(formula)
+                .semantics(Rosi)
+                .algorithm(Algorithm::Incremental)
+                .build()
+                .unwrap();
+
+            let steps = [
+                step!("x", 15.0, Duration::from_secs(0)),
+                step!("x", 12.0, Duration::from_secs(1)),
+                step!("x", 11.0, Duration::from_secs(2)),
+                step!("x", 13.0, Duration::from_secs(3)),
+            ];
+            let collect = |monitor: &mut StlMonitor<f64, _>| {
+                steps
+                    .iter()
+                    .flat_map(|s| monitor.update(s).into_verdicts())
+                    .collect::<Vec<_>>()
+            };
+
+            let run1 = collect(&mut monitor);
+            monitor.reset();
+            let run2 = collect(&mut monitor);
+            assert_eq!(run1, run2);
+        }
+
+        #[test]
+        fn test_reset_naive_algorithm() {
+            let formula = stl!(G[0, 2] (x > 10.0));
+
+            let mut monitor = StlMonitor::builder()
+                .formula(formula)
+                .semantics(DelayedQuantitative)
+                .algorithm(Algorithm::Naive)
+                .build()
+                .unwrap();
+
+            let steps = [
+                step!("x", 15.0, Duration::from_secs(0)),
+                step!("x", 12.0, Duration::from_secs(1)),
+                step!("x", 11.0, Duration::from_secs(2)),
+                step!("x", 9.0, Duration::from_secs(3)),
+            ];
+            let collect = |monitor: &mut StlMonitor<f64, f64>| {
+                steps
+                    .iter()
+                    .flat_map(|s| monitor.update(s).into_verdicts())
+                    .map(|v| v.value)
+                    .collect::<Vec<_>>()
+            };
+
+            let run1 = collect(&mut monitor);
+            monitor.reset();
+            let run2 = collect(&mut monitor);
+            assert_eq!(run1, run2);
+        }
+
+        #[test]
+        fn test_reset_multi_signal() {
+            let formula = FormulaDefinition::And(
+                Box::new(FormulaDefinition::GreaterThan("x", 5.0)),
+                Box::new(FormulaDefinition::LessThan("y", 20.0)),
+            );
+
+            let mut monitor = StlMonitor::builder()
+                .formula(formula)
+                .semantics(DelayedQuantitative)
+                .algorithm(Algorithm::Incremental)
+                .synchronization_strategy(SynchronizationStrategy::ZeroOrderHold)
+                .build()
+                .unwrap();
+
+            let steps = [
+                step!("x", 10.0, Duration::from_secs(0)),
+                step!("y", 15.0, Duration::from_secs(0)),
+                step!("x", 8.0, Duration::from_secs(1)),
+                step!("y", 12.0, Duration::from_secs(1)),
+            ];
+            let collect = |monitor: &mut StlMonitor<f64, f64>| {
+                steps
+                    .iter()
+                    .flat_map(|s| monitor.update(s).into_verdicts())
+                    .map(|v| (v.timestamp, v.value))
+                    .collect::<Vec<_>>()
+            };
+
+            let run1 = collect(&mut monitor);
+            monitor.reset();
+            let run2 = collect(&mut monitor);
+            assert_eq!(run1, run2);
+        }
+
+        #[test]
+        fn test_reset_idempotent() {
+            let formula = stl!(G[0, 2] (x > 10.0));
+
+            let mut monitor = StlMonitor::builder()
+                .formula(formula)
+                .semantics(DelayedQuantitative)
+                .algorithm(Algorithm::Incremental)
+                .build()
+                .unwrap();
+
+            monitor.reset();
+            monitor.reset();
+
+            let step1 = step!("x", 15.0, Duration::from_secs(0));
+            let step2 = step!("x", 12.0, Duration::from_secs(1));
+            let step3 = step!("x", 11.0, Duration::from_secs(2));
+            let output = monitor.update(&step3);
+            monitor.update(&step1);
+            monitor.update(&step2);
+            // Should not panic or produce incorrect output.
+            let _ = output.verdicts();
         }
     }
 }

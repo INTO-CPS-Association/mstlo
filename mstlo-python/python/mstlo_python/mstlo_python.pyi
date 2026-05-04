@@ -944,6 +944,27 @@ class Monitor:
         """
         ...
 
+    def reset(self) -> None:
+        """
+        Reset the monitor to its initial state.
+
+        Clears all internal caches and evaluation buffers. The formula,
+        semantics, algorithm, synchronization strategy, and variables are
+        preserved.
+
+        Use this to reuse a monitor across multiple independent traces without
+        rebuilding it from scratch.
+
+        Examples:
+            >>> monitor = Monitor(formula)
+            >>> for signal, value, ts in trace_1:
+            ...     monitor.update(signal, value, ts)
+            >>> monitor.reset()
+            >>> for signal, value, ts in trace_2:
+            ...     monitor.update(signal, value, ts)
+        """
+        ...
+
     def update_batch(
         self, steps: dict[str, List[Tuple[float, float]]]
     ) -> MonitorOutput:

@@ -95,6 +95,11 @@ where
         self.formula.get_max_lookahead()
     }
 
+    fn reset(&mut self) {
+        self.signal.clear();
+        self.last_eval_time = None;
+    }
+
     /// Ingests one sample and evaluates at the oldest newly-finalizable timestamp.
     ///
     /// The naive engine performs recursive evaluation over buffered samples and

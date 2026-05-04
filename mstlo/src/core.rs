@@ -48,6 +48,12 @@ pub trait StlOperatorTrait<T: Clone>: DynClone + Display + SignalIdentifier {
     /// For temporal operators this is typically the interval end plus operand
     /// lookahead; for atomic operators this is zero.
     fn get_max_lookahead(&self) -> Duration;
+
+    /// Resets all internal caches and evaluation state to their initial (empty) values.
+    ///
+    /// Configuration (interval bounds, signal identifiers, max lookahead) is preserved.
+    /// The default implementation is a no-op, suitable for stateless operators like `Atomic`.
+    fn reset(&mut self) {}
 }
 
 clone_trait_object!(<T: Clone, Y> StlOperatorTrait<T, Output = Y>);

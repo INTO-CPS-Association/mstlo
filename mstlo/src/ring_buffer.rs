@@ -89,6 +89,9 @@ pub trait RingBufferTrait {
     /// Prune steps older than `max_age` from the buffer.
     fn prune(&mut self, max_age: Duration);
 
+    /// Removes all steps from the buffer.
+    fn clear(&mut self);
+
     /// Returns an iterator over all steps from oldest to newest.
     fn iter<'a>(&'a self) -> Self::Iter<'a>;
 
@@ -149,6 +152,15 @@ where
                 self.steps[index] = step;
             })
             .is_ok()
+    }
+
+    /// Removes all steps from the buffer, updating the global cache counter if tracked.
+    pub fn clear(&mut self) {
+        #[cfg(feature = "track-cache-size")]
+        if self.is_tracked {
+            GLOBAL_CACHE_SIZE.fetch_sub(self.steps.len(), Ordering::Relaxed);
+        }
+        self.steps.clear();
     }
 
     /// Returns an iterator over all stored steps from oldest to newest.
@@ -243,6 +255,10 @@ where
                 }
             }
         }
+    }
+
+    fn clear(&mut self) {
+        self.clear()
     }
 
     fn iter<'a>(&'a self) -> Self::Iter<'a> {

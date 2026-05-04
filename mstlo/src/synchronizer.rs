@@ -67,6 +67,15 @@ where
         self.strategy
     }
 
+    /// Resets all runtime state (last seen steps, timeline, pending queue).
+    ///
+    /// The synchronization strategy is preserved.
+    pub fn reset(&mut self) {
+        self.last_steps.clear();
+        self.timeline.clear();
+        self.pending.clear();
+    }
+
     /// Processes a new real step and generates interpolated steps if necessary.
     /// All resulting steps (interpolated + real) are added to `self.pending`.
     ///
