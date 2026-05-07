@@ -157,6 +157,38 @@ def parse_args() -> argparse.Namespace:
         default=FIG_SIZE[1],
         help="Figure height in inches",
     )
+    parser.add_argument(
+        "--plot-std",
+        action="store_true",
+        default=False,
+        help="Overlay ±1 std deviation band around each series",
+    )
+    parser.add_argument(
+        "--plot-operators",
+        nargs="+",
+        choices=["U", "F", "G", "F/G"],
+        default=None,
+        metavar="OP",
+        help="Operators to plot (default: all determined by --fg-mode). Choices: U F G F/G",
+    )
+    parser.add_argument(
+        "--plot-semantics",
+        nargs="+",
+        choices=["delqual", "delquant", "eagerqual", "rosi"],
+        default=None,
+        metavar="SEM",
+        help=(
+            "Semantics to plot (default: all). "
+            "Choices: delqual (DelayedQualitative), delquant (DelayedQuantitative), "
+            "eagerqual (EagerQualitative), rosi (Rosi)"
+        ),
+    )
+    parser.add_argument(
+        "--log-scale",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use log scale on y-axis (default: true)",
+    )
     return parser.parse_args()
 
 
@@ -164,37 +196,47 @@ def eval_fit(p, x):
     return p["intercept"] + p["coef_b"] * x + p["coef_b2"] * x**2
 
 
-def adjust_log_label_positions(y_values, y_min, y_max, min_delta=0.06):
-    """Spread label y positions on a log-scale axis to reduce overlaps."""
+def adjust_label_positions(y_values, y_min, y_max, min_frac=0.10, log_scale=True):
+    """Spread label y positions on the axis to reduce overlaps.
+
+    min_frac: minimum separation between adjacent labels as a fraction of the
+              total axis span (measured in log-decades or linear units depending
+              on log_scale).
+    """
     if len(y_values) == 0:
         return np.array([])
 
-    y_logs = np.log10(np.asarray(y_values, dtype=float))
-    order = np.argsort(y_logs)
-    pos = y_logs[order].copy()
+    arr = np.asarray(y_values, dtype=float)
+    if log_scale:
+        arr = np.log10(arr)
+        lo, hi = np.log10(float(y_min)), np.log10(float(y_max))
+    else:
+        lo, hi = float(y_min), float(y_max)
 
-    lo = np.log10(y_min)
-    hi = np.log10(y_max)
-    margin = (hi - lo) * 0.02
-    lo += margin
-    hi -= margin
+    span = hi - lo
+    min_delta = min_frac * span
+    margin = span * 0.02
+
+    order = np.argsort(arr)
+    pos = arr[order].copy()
+    lo_m, hi_m = lo + margin, hi - margin
 
     for i in range(1, len(pos)):
         pos[i] = max(pos[i], pos[i - 1] + min_delta)
 
-    if len(pos) > 0 and pos[-1] > hi:
-        pos[-1] = hi
+    if len(pos) > 0 and pos[-1] > hi_m:
+        pos[-1] = hi_m
         for i in range(len(pos) - 2, -1, -1):
             pos[i] = min(pos[i], pos[i + 1] - min_delta)
 
-    if len(pos) > 0 and pos[0] < lo:
-        pos[0] = lo
+    if len(pos) > 0 and pos[0] < lo_m:
+        pos[0] = lo_m
         for i in range(1, len(pos)):
             pos[i] = max(pos[i], pos[i - 1] + min_delta)
 
-    adjusted = np.empty_like(y_logs)
-    adjusted[order] = 10**pos
-    return adjusted
+    adjusted = np.empty_like(arr)
+    adjusted[order] = pos
+    return 10**adjusted if log_scale else adjusted
 
 
 def main() -> None:
@@ -207,7 +249,23 @@ def main() -> None:
     fits_orig = pd.read_csv(args.regression_csv)
     fits_orig = fits_orig[fits_orig["source"] == "native"]
 
+    SEMANTICS_ALIASES = {
+        "delqual": "DelayedQualitative",
+        "delquant": "DelayedQuantitative",
+        "eagerqual": "EagerQualitative",
+        "rosi": "Rosi",
+    }
+
     df_plot, operators_to_plot = _build_plot_dataframe(df, args.fg_mode)
+
+    if args.plot_operators is not None:
+        df_plot = df_plot[df_plot["operator"].isin(args.plot_operators)]
+        operators_to_plot = [op for op in operators_to_plot if op in args.plot_operators]
+
+    if args.plot_semantics is not None:
+        requested = {SEMANTICS_ALIASES[s] for s in args.plot_semantics}
+        df_plot = df_plot[df_plot["semantics"].isin(requested)]
+
     fit_params = _build_fit_params(fits_orig, df_plot, operators_to_plot, args.fg_mode)
 
     semantics_colors = {
@@ -228,11 +286,23 @@ def main() -> None:
     fig, ax = plt.subplots(figsize=(args.fig_width, args.fig_height))
     direct_labels = []
 
+    has_std = "std_per_sample_us" in df_plot.columns
+
     for (semantics, operator), group in df_plot.groupby(["semantics", "operator"]):
         g = group.sort_values("interval_len")
         color = semantics_colors[semantics]
         marker = operator_markers[operator]
         fit = fit_params.get((semantics, operator))
+
+        if args.plot_std and has_std:
+            ax.fill_between(
+                g["interval_len"],
+                g["avg_per_sample_us"] - g["std_per_sample_us"],
+                g["avg_per_sample_us"] + g["std_per_sample_us"],
+                color=color,
+                alpha=0.15,
+                zorder=1,
+            )
 
         ax.scatter(
             g["interval_len"],
@@ -287,12 +357,16 @@ def main() -> None:
             }
         )
 
-    ax.set_yscale("log")
-    ax.set_xlabel("Temporal depth ($b$)", labelpad=5)
-    ax.set_ylabel("Average time per sample (\u00b5s, log scale)", labelpad=5)
+    if args.log_scale:
+        ax.set_yscale("log")
+
+    ax.set_xlabel("Temporal upper bound ($b$)", labelpad=5)
+    y_label = "Average time per sample (\u00b5s, log scale)" if args.log_scale else "Average time per sample (\u00b5s)"
+    ax.set_ylabel(y_label, labelpad=5)
     # ax.set_title("Performance scaling of temporal operators", pad=5)
     ax.grid(True, which="major", linestyle="--", linewidth=0.8, alpha=0.55)
-    ax.grid(True, which="minor", linestyle=":", linewidth=0.6, alpha=0.4)
+    if args.log_scale:
+        ax.grid(True, which="minor", linestyle=":", linewidth=0.6, alpha=0.4)
     ax.tick_params(which="both", top=True, right=True, width=1.1)
 
     x_data_max = df_plot["interval_len"].max()
@@ -300,10 +374,11 @@ def main() -> None:
     x_right = x_data_max * 1.35
     ax.set_xlim(right=x_right)
 
+    # Force matplotlib to finalise autoscaling so get_ylim() returns the real limits.
+    fig.canvas.draw()
     y_min, y_max = ax.get_ylim()
 
-    # Spread non-RoSI labels per operator to avoid near-overlapping stacks,
-    # especially for G labels which often cluster tightly.
+    # Spread non-RoSI labels per operator to avoid near-overlapping stacks.
     y_targets = {i: info["y"] for i, info in enumerate(direct_labels)}
     non_rosi_indices = [
         i for i, info in enumerate(direct_labels) if info["semantics"] != "RoSI"
@@ -314,8 +389,10 @@ def main() -> None:
         if not idx:
             continue
         y_vals = [direct_labels[i]["y"] for i in idx]
-        min_delta = 0.4 if op == "G" else 0.3
-        adjusted = adjust_log_label_positions(y_vals, y_min, y_max, min_delta=min_delta)
+        min_frac = 0.13 if op == "G" else 0.10
+        adjusted = adjust_label_positions(
+            y_vals, y_min, y_max, min_frac=min_frac, log_scale=args.log_scale
+        )
         for i, y_adj in zip(idx, adjusted):
             y_targets[i] = y_adj
 

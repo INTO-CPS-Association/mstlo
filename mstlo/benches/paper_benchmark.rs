@@ -22,6 +22,7 @@ const DEFAULT_M_RUNS: usize = 50;
 const DEFAULT_WARMUP_RUNS: usize = 1;
 const DEFAULT_SIGNAL_PATH: &str = "benches/signal_generation/signals/signal_20000.csv";
 const DEFAULT_OUTPUT_CSV: &str = "benches/results/paper_native_benchmark_results_N=20000.csv";
+const DEFAULT_OUTPUT_RAW_CSV: &str = "benches/results/paper_native_benchmark_results_N=20000_raw.csv";
 
 #[derive(Copy, Clone, PartialEq)]
 enum SemanticsKind {
@@ -60,8 +61,11 @@ struct BenchResult {
     n_samples: usize,
     m_runs: usize,
     avg_total_s: f64,
+    std_total_s: f64,
     avg_per_sample_s: f64,
+    std_per_sample_s: f64,
     avg_per_sample_us: f64,
+    std_per_sample_us: f64,
     #[cfg(feature = "track-cache-size")]
     avg_cache_size: f64,
     #[cfg(feature = "track-cache-size")]
@@ -150,13 +154,14 @@ fn bench_item(
     m_runs: usize,
     warmup_runs: usize,
     semantics: SemanticsKind,
-) -> Option<BenchResult> {
+) -> Option<(BenchResult, Vec<f64>)> {
     if semantics == SemanticsKind::Rosi && item.interval_len > 1000 {
         // Skip very long intervals for Rosi semantics to avoid excessive runtime
         return None;
     }
     let n_samples = signal.len();
     let mut total_time = 0.0;
+    let mut run_times: Vec<f64> = Vec::with_capacity(m_runs);
 
     #[cfg(feature = "track-cache-size")]
     let mut total_cache_size_all_runs: u128 = 0;
@@ -181,8 +186,10 @@ fn bench_item(
                     for step in &signal {
                         black_box(monitor.update(step));
                     }
+                    let elapsed = t0.elapsed().as_secs_f64();
                     if run >= warmup_runs {
-                        total_time += t0.elapsed().as_secs_f64();
+                        run_times.push(elapsed);
+                        total_time += elapsed;
                     }
                 }
 
@@ -198,8 +205,10 @@ fn bench_item(
                         max_cache_size = max_cache_size.max(current_size);
                     }
 
+                    let elapsed = t0.elapsed().as_secs_f64();
                     if run >= warmup_runs {
-                        total_time += t0.elapsed().as_secs_f64();
+                        run_times.push(elapsed);
+                        total_time += elapsed;
                         total_cache_size_all_runs += total_cache_size as u128;
                     }
 
@@ -242,8 +251,10 @@ fn bench_item(
                     for step in &signal {
                         black_box(monitor.update(step));
                     }
+                    let elapsed = t0.elapsed().as_secs_f64();
                     if run >= warmup_runs {
-                        total_time += t0.elapsed().as_secs_f64();
+                        run_times.push(elapsed);
+                        total_time += elapsed;
                     }
                 }
 
@@ -259,8 +270,10 @@ fn bench_item(
                         max_cache_size = max_cache_size.max(current_size);
                     }
 
+                    let elapsed = t0.elapsed().as_secs_f64();
                     if run >= warmup_runs {
-                        total_time += t0.elapsed().as_secs_f64();
+                        run_times.push(elapsed);
+                        total_time += elapsed;
                         total_cache_size_all_runs += total_cache_size as u128;
                     }
 
@@ -302,8 +315,10 @@ fn bench_item(
                     for step in &signal {
                         black_box(monitor.update(step));
                     }
+                    let elapsed = t0.elapsed().as_secs_f64();
                     if run >= warmup_runs {
-                        total_time += t0.elapsed().as_secs_f64();
+                        run_times.push(elapsed);
+                        total_time += elapsed;
                     }
                 }
 
@@ -318,8 +333,10 @@ fn bench_item(
                         total_cache_size += current_size;
                         max_cache_size = max_cache_size.max(current_size);
                     }
+                    let elapsed = t0.elapsed().as_secs_f64();
                     if run >= warmup_runs {
-                        total_time += t0.elapsed().as_secs_f64();
+                        run_times.push(elapsed);
+                        total_time += elapsed;
                         total_cache_size_all_runs += total_cache_size as u128;
                     }
 
@@ -361,8 +378,10 @@ fn bench_item(
                     for step in &signal {
                         black_box(monitor.update(step));
                     }
+                    let elapsed = t0.elapsed().as_secs_f64();
                     if run >= warmup_runs {
-                        total_time += t0.elapsed().as_secs_f64();
+                        run_times.push(elapsed);
+                        total_time += elapsed;
                     }
                 }
                 #[cfg(feature = "track-cache-size")]
@@ -376,8 +395,10 @@ fn bench_item(
                         total_cache_size += current_size;
                         max_cache_size = max_cache_size.max(current_size);
                     }
+                    let elapsed = t0.elapsed().as_secs_f64();
                     if run >= warmup_runs {
-                        total_time += t0.elapsed().as_secs_f64();
+                        run_times.push(elapsed);
+                        total_time += elapsed;
                         total_cache_size_all_runs += total_cache_size as u128;
                     }
 
@@ -407,10 +428,18 @@ fn bench_item(
 
     let avg_total = total_time / m_runs as f64;
     let avg_per_sample = avg_total / n_samples as f64;
+    let std_total = if m_runs > 1 {
+        let var = run_times.iter().map(|&t| (t - avg_total).powi(2)).sum::<f64>()
+            / (m_runs - 1) as f64;
+        var.sqrt()
+    } else {
+        0.0
+    };
+    let std_per_sample = std_total / n_samples as f64;
     #[cfg(feature = "track-cache-size")]
     let avg_cache_size = total_cache_size_all_runs as f64 / (n_samples as f64 * m_runs as f64);
 
-    Some(BenchResult {
+    Some((BenchResult {
         formula_id: item.formula_id,
         spec: item.spec.clone(),
         semantics: semantics.name(),
@@ -419,15 +448,18 @@ fn bench_item(
         n_samples,
         m_runs,
         avg_total_s: avg_total,
+        std_total_s: std_total,
         avg_per_sample_s: avg_per_sample,
+        std_per_sample_s: std_per_sample,
         avg_per_sample_us: avg_per_sample * 1e6,
+        std_per_sample_us: std_per_sample * 1e6,
         #[cfg(feature = "track-cache-size")]
         avg_cache_size,
         #[cfg(feature = "track-cache-size")]
         max_cache_size: max_cache_size_all_runs,
         benchmark_kind: item.benchmark_kind,
         interval_len: item.interval_len,
-    })
+    }, run_times))
 }
 
 /// Builds a map of all formulas to test (formula_id -> spec string)
@@ -526,14 +558,14 @@ fn write_csv_header(w: &mut BufWriter<File>) -> io::Result<()> {
     {
         writeln!(
             w,
-            "formula_id,spec,semantics,algorithm,mode,n_samples,m_runs,avg_total_s,avg_per_sample_s,avg_per_sample_us,avg_cache_size,max_cache_size,benchmark_kind,interval_len"
+            "formula_id,spec,semantics,algorithm,mode,n_samples,m_runs,avg_total_s,std_total_s,avg_per_sample_s,std_per_sample_s,avg_per_sample_us,std_per_sample_us,avg_cache_size,max_cache_size,benchmark_kind,interval_len"
         )
     }
     #[cfg(not(feature = "track-cache-size"))]
     {
         writeln!(
             w,
-            "formula_id,spec,semantics,algorithm,mode,n_samples,m_runs,avg_total_s,avg_per_sample_s,avg_per_sample_us,benchmark_kind,interval_len"
+            "formula_id,spec,semantics,algorithm,mode,n_samples,m_runs,avg_total_s,std_total_s,avg_per_sample_s,std_per_sample_s,avg_per_sample_us,std_per_sample_us,benchmark_kind,interval_len"
         )
     }
 }
@@ -543,7 +575,7 @@ fn write_result_row(w: &mut BufWriter<File>, r: &BenchResult) -> io::Result<()> 
     {
         writeln!(
             w,
-            "{},{},{},{},{},{},{},{:.12},{:.12},{:.6},{:.6},{},{},{}",
+            "{},{},{},{},{},{},{},{:.12},{:.12},{:.12},{:.12},{:.6},{:.6},{:.6},{},{},{}",
             r.formula_id,
             csv_escape(&r.spec),
             r.semantics,
@@ -552,8 +584,11 @@ fn write_result_row(w: &mut BufWriter<File>, r: &BenchResult) -> io::Result<()> 
             r.n_samples,
             r.m_runs,
             r.avg_total_s,
+            r.std_total_s,
             r.avg_per_sample_s,
+            r.std_per_sample_s,
             r.avg_per_sample_us,
+            r.std_per_sample_us,
             r.avg_cache_size,
             r.max_cache_size,
             r.benchmark_kind,
@@ -564,7 +599,7 @@ fn write_result_row(w: &mut BufWriter<File>, r: &BenchResult) -> io::Result<()> 
     {
         writeln!(
             w,
-            "{},{},{},{},{},{},{},{:.12},{:.12},{:.6},{},{}",
+            "{},{},{},{},{},{},{},{:.12},{:.12},{:.12},{:.12},{:.6},{:.6},{},{}",
             r.formula_id,
             csv_escape(&r.spec),
             r.semantics,
@@ -573,12 +608,47 @@ fn write_result_row(w: &mut BufWriter<File>, r: &BenchResult) -> io::Result<()> 
             r.n_samples,
             r.m_runs,
             r.avg_total_s,
+            r.std_total_s,
             r.avg_per_sample_s,
+            r.std_per_sample_s,
             r.avg_per_sample_us,
+            r.std_per_sample_us,
             r.benchmark_kind,
             r.interval_len
         )
     }
+}
+
+fn write_raw_csv_header(w: &mut BufWriter<File>) -> io::Result<()> {
+    writeln!(
+        w,
+        "formula_id,spec,semantics,algorithm,mode,n_samples,benchmark_kind,interval_len,run_id,total_s,per_sample_s,per_sample_us"
+    )
+}
+
+fn write_raw_result_row(
+    w: &mut BufWriter<File>,
+    r: &BenchResult,
+    run_id: usize,
+    total_s: f64,
+) -> io::Result<()> {
+    let per_sample_s = total_s / r.n_samples as f64;
+    writeln!(
+        w,
+        "{},{},{},{},{},{},{},{},{},{:.12},{:.12},{:.6}",
+        r.formula_id,
+        csv_escape(&r.spec),
+        r.semantics,
+        r.algorithm,
+        r.mode,
+        r.n_samples,
+        r.benchmark_kind,
+        r.interval_len,
+        run_id,
+        total_s,
+        per_sample_s,
+        per_sample_s * 1e6
+    )
 }
 
 fn ensure_parent_dir(path: &Path) -> io::Result<()> {
@@ -595,6 +665,8 @@ fn main() -> io::Result<()> {
     let warmup_runs = env_usize_or_default("WARMUP_RUNS", DEFAULT_WARMUP_RUNS);
     let signal_path = env_string_or_default("SIGNAL_PATH", DEFAULT_SIGNAL_PATH);
     let output_path = PathBuf::from(env_string_or_default("OUTPUT_CSV", DEFAULT_OUTPUT_CSV));
+    let raw_output_path =
+        PathBuf::from(env_string_or_default("OUTPUT_RAW_CSV", DEFAULT_OUTPUT_RAW_CSV));
     let selected_formula_ids = parse_formula_ids_from_env()?;
 
     let formulas = build_formulas_map();
@@ -635,6 +707,11 @@ fn main() -> io::Result<()> {
     let mut writer = BufWriter::new(file);
     write_csv_header(&mut writer)?;
 
+    ensure_parent_dir(&raw_output_path)?;
+    let raw_file = File::create(&raw_output_path)?;
+    let mut raw_writer = BufWriter::new(raw_file);
+    write_raw_csv_header(&mut raw_writer)?;
+
     let semantics = [
         SemanticsKind::DelayedQuantitative,
         SemanticsKind::DelayedQualitative,
@@ -647,13 +724,18 @@ fn main() -> io::Result<()> {
         for item in &items {
             println!("formula_id={} spec={}", item.formula_id, item.spec);
             let result = bench_item(item, signal.clone(), m_runs, warmup_runs, sem);
-            if let Some(result) = result {
+            if let Some((result, run_times)) = result {
                 write_result_row(&mut writer, &result)?;
+                for (run_id, &t) in run_times.iter().enumerate() {
+                    write_raw_result_row(&mut raw_writer, &result, run_id, t)?;
+                }
             }
             writer.flush()?;
+            raw_writer.flush()?;
         }
     }
 
     println!("\nResults saved to {}", output_path.display());
+    println!("Raw results saved to {}", raw_output_path.display());
     Ok(())
 }

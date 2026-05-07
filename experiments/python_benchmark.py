@@ -1,5 +1,6 @@
 import mstlo_python as mstlo
 import csv
+import math
 import time
 import os
 import argparse
@@ -21,6 +22,11 @@ DEFAULT_OUTPUT_CSV = os.path.join(
     os.path.dirname(__file__),
     "results",
     "python_benchmark_results.csv",
+)
+DEFAULT_OUTPUT_RAW_CSV = os.path.join(
+    os.path.dirname(__file__),
+    "results",
+    "python_benchmark_results_raw.csv",
 )
 
 # Formulas matching the uploaded Rust benchmark CSV labeling.
@@ -87,6 +93,7 @@ def bench_formula(
     """
     n_samples = len(signal)
     total_time = 0.0
+    run_times: list[float] = []
     parsed_formula = mstlo.parse_formula(spec)
     temporal_depth = 0
 
@@ -107,11 +114,15 @@ def bench_formula(
             monitor.update("x", val, ts)
         t1 = time.perf_counter()
         if not is_warmup:
-            total_time += t1 - t0
+            elapsed = t1 - t0
+            run_times.append(elapsed)
+            total_time += elapsed
         temporal_depth = monitor.get_temporal_depth()
 
     avg_total = total_time / m
     avg_per_sample = avg_total / n_samples
+    std_total = math.sqrt(sum((t - avg_total) ** 2 for t in run_times) / (m - 1)) if m > 1 else 0.0
+    std_per_sample = std_total / n_samples
 
     return {
         "formula_id": formula_id,
@@ -122,9 +133,13 @@ def bench_formula(
         "n_samples": n_samples,
         "m_runs": m,
         "avg_total_s": avg_total,
+        "std_total_s": std_total,
         "avg_per_sample_s": avg_per_sample,
+        "std_per_sample_s": std_per_sample,
         "avg_per_sample_us": avg_per_sample * 1e6,
+        "std_per_sample_us": std_per_sample * 1e6,
         "temporal_depth": temporal_depth,
+        "run_times": run_times,
     }
 
 
@@ -158,6 +173,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output", default=DEFAULT_OUTPUT_CSV, help="Output CSV path")
     parser.add_argument(
+        "--output-raw", default=DEFAULT_OUTPUT_RAW_CSV, help="Output raw per-run CSV path"
+    )
+    parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite output CSV if it exists"
     )
     parser.add_argument(
@@ -189,6 +207,7 @@ def main() -> None:
 
     # Initialize CSV file with headers
     out_path = args.output
+    raw_out_path = args.output_raw
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     if os.path.exists(out_path) and not args.overwrite:
         raise SystemExit(
@@ -205,12 +224,32 @@ def main() -> None:
         "n_samples",
         "m_runs",
         "avg_total_s",
+        "std_total_s",
         "avg_per_sample_s",
+        "std_per_sample_s",
         "avg_per_sample_us",
+        "std_per_sample_us",
         "temporal_depth",
     ]
     writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
     writer.writeheader()
+
+    raw_csv_file = open(raw_out_path, "w", newline="")
+    raw_fieldnames = [
+        "formula_id",
+        "spec",
+        "semantics",
+        "algorithm",
+        "mode",
+        "n_samples",
+        "temporal_depth",
+        "run_id",
+        "total_s",
+        "per_sample_s",
+        "per_sample_us",
+    ]
+    raw_writer = csv.DictWriter(raw_csv_file, fieldnames=raw_fieldnames)
+    raw_writer.writeheader()
 
     for sem in semantics:
         print(f"\n--- Semantics: {sem} ---")
@@ -228,12 +267,30 @@ def main() -> None:
                 algorithm=algorithm,
                 warmup_runs=args.warmup_runs,
             )
-            # Write result to CSV file
+            run_times = res.pop("run_times")
             writer.writerow(res)
             csv_file.flush()
+            for run_id, t in enumerate(run_times):
+                per_sample_s = t / res["n_samples"]
+                raw_writer.writerow({
+                    "formula_id": res["formula_id"],
+                    "spec": res["spec"],
+                    "semantics": res["semantics"],
+                    "algorithm": res["algorithm"],
+                    "mode": res["mode"],
+                    "n_samples": res["n_samples"],
+                    "temporal_depth": res["temporal_depth"],
+                    "run_id": run_id,
+                    "total_s": t,
+                    "per_sample_s": per_sample_s,
+                    "per_sample_us": per_sample_s * 1e6,
+                })
+            raw_csv_file.flush()
 
     csv_file.close()
+    raw_csv_file.close()
     print(f"\nResults saved to {out_path}")
+    print(f"Raw results saved to {raw_out_path}")
 
 
 if __name__ == "__main__":

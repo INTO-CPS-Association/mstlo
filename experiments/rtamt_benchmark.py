@@ -6,10 +6,12 @@ matching the structure and approach of ostl_results.py.
 """
 
 import csv
+import math
 import time
 import os
 import argparse
 from tqdm import tqdm
+import numpy as np
 import rtamt
 
 # ---------------------------------------------------------------------------
@@ -28,14 +30,38 @@ DEFAULT_OUTPUT_CSV = os.path.join(
     "results",
     "rtamt_benchmark_results_cpp.csv",
 )
+DEFAULT_OUTPUT_RAW_CSV = os.path.join(
+    os.path.dirname(__file__),
+    "results",
+    "rtamt_benchmark_results_cpp_raw.csv",
+)
 
 # Generate formulas matching the ostl benchmark catalog
 # Uses the same structure: globally, eventually, until with varying bounds
-FORMULAS: dict[int, str] = {}
+FORMULAS: list[tuple[int, str]] = []
+b = np.arange(0, 5001, 100)
+b[0] += 1  # avoid zero bound for the first formula
 
-FORMULAS[1] = "(x < 0.5) and (x > -0.5)"
-FORMULAS[2] = "G[0,1000] (x > 0.5 -> F[0,100] (x < 0.0))"
-FORMULAS[3] = "(G[0,100] (x < 0.5)) or (G[100,150] (x > 0.0))"
+# phi1
+FORMULAS.append((1, "(x < 0.5) and (x > -0.5)"))
+
+# phi2
+FORMULAS.append((2, "G[0,1000] (x > 0.5 -> F[0,100] (x < 0.0))"))
+
+# phi3
+FORMULAS.append((3, "(G[0,100] (x < 0.5)) or (G[100,150] (x > 0.0))"))
+
+# # until formulas
+for bnd in b[:11]:  # limit to 1, 100, ..., 1000 for until
+    FORMULAS.append((4, f"(x < 0.0) U[0,{bnd:.1f}] (x > 0.0)"))
+
+# globally formulas
+for bnd in b:
+    FORMULAS.append((5, f"G[0,{bnd:.1f}] (x > 0.0)"))
+
+# eventually formulas
+for bnd in b:
+    FORMULAS.append((6, f"F[0,{bnd:.1f}] (x > 0.0)"))
 
 
 def load_signal(path: str) -> list[tuple[float, float]]:
@@ -118,6 +144,7 @@ def bench_online_monitor(
     try:
         n_samples = len(signal)
         total_time = 0.0
+        run_times: list[float] = []
 
         for i in range(-warmup_runs, m):
             monitor = monitor_func(spec)
@@ -126,10 +153,18 @@ def bench_online_monitor(
                 monitor.update(ts, [("x", val)])
             t1 = time.perf_counter()
             if i >= 0:
-                total_time += t1 - t0
+                elapsed = t1 - t0
+                run_times.append(elapsed)
+                total_time += elapsed
 
         avg_total = total_time / m
         avg_per_sample = avg_total / n_samples
+        std_total = (
+            math.sqrt(sum((t - avg_total) ** 2 for t in run_times) / (m - 1))
+            if m > 1
+            else 0.0
+        )
+        std_per_sample = std_total / n_samples
 
         return {
             "formula_id": fid,
@@ -139,8 +174,12 @@ def bench_online_monitor(
             "n_samples": n_samples,
             "m_runs": m,
             "avg_total_s": avg_total,
+            "std_total_s": std_total,
             "avg_per_sample_s": avg_per_sample,
+            "std_per_sample_s": std_per_sample,
             "avg_per_sample_us": avg_per_sample * 1e6,
+            "std_per_sample_us": std_per_sample * 1e6,
+            "run_times": run_times,
         }
     except Exception as e:
         print(f"ERROR: Formula {fid} failed: {str(e)[:100]}")
@@ -290,12 +329,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output", default=DEFAULT_OUTPUT_CSV, help="Output CSV path")
     parser.add_argument(
+        "--output-raw",
+        default=DEFAULT_OUTPUT_RAW_CSV,
+        help="Output raw per-run CSV path",
+    )
+    parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite output CSV if it exists"
     )
     parser.add_argument(
         "--warmup-runs",
         type=int,
-        default=1,
+        default=5,
         help="Untimed warmup runs before measurement",
     )
     return parser.parse_args()
@@ -310,6 +354,7 @@ def main() -> None:
 
     # Initialize CSV file with headers
     out_path = args.output
+    raw_out_path = args.output_raw
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     if os.path.exists(out_path) and not args.overwrite:
         raise SystemExit(
@@ -325,15 +370,33 @@ def main() -> None:
         "n_samples",
         "m_runs",
         "avg_total_s",
+        "std_total_s",
         "avg_per_sample_s",
+        "std_per_sample_s",
         "avg_per_sample_us",
+        "std_per_sample_us",
     ]
     writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
     writer.writeheader()
 
+    raw_csv_file = open(raw_out_path, "w", newline="", encoding="utf-8")
+    raw_fieldnames = [
+        "formula_id",
+        "spec",
+        "monitor_type",
+        "mode",
+        "n_samples",
+        "run_id",
+        "total_s",
+        "per_sample_s",
+        "per_sample_us",
+    ]
+    raw_writer = csv.DictWriter(raw_csv_file, fieldnames=raw_fieldnames)
+    raw_writer.writeheader()
+
     # --- Discrete-Time Online (C++ Backend) ---
     print("\nDiscrete-Time — Online (C++ Backend)")
-    pbar = tqdm(FORMULAS.items(), desc="Discrete-Time Online C++")
+    pbar = tqdm(FORMULAS, desc="Discrete-Time Online C++")
     for fid, spec in pbar:
         pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
         res = bench_online_monitor(
@@ -346,79 +409,98 @@ def main() -> None:
         )
         if res is not None:
             res["monitor_type"] = "discrete-time-cpp"
+            run_times = res.pop("run_times")
             writer.writerow(res)
             csv_file.flush()
+            for run_id, t in enumerate(run_times):
+                per_sample_s = t / res["n_samples"]
+                raw_writer.writerow(
+                    {
+                        "formula_id": res["formula_id"],
+                        "spec": res["spec"],
+                        "monitor_type": res["monitor_type"],
+                        "mode": res["mode"],
+                        "n_samples": res["n_samples"],
+                        "run_id": run_id,
+                        "total_s": t,
+                        "per_sample_s": per_sample_s,
+                        "per_sample_us": per_sample_s * 1e6,
+                    }
+                )
+            raw_csv_file.flush()
 
-    # --- Discrete-Time Online ---
-    print("\nDiscrete-Time — Online")
-    pbar = tqdm(FORMULAS.items(), desc="Discrete-Time Online")
-    for fid, spec in pbar:
-        pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
-        res = bench_online_monitor(
-            fid,
-            spec,
-            signal,
-            args.m_runs,
-            make_discrete_online_monitor_python,
-            warmup_runs=args.warmup_runs,
-        )
-        if res is not None:
-            writer.writerow(res)
-            csv_file.flush()
+    # # --- Discrete-Time Online ---
+    # print("\nDiscrete-Time — Online")
+    # pbar = tqdm(FORMULAS, desc="Discrete-Time Online")
+    # for fid, spec in pbar:
+    #     pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
+    #     res = bench_online_monitor(
+    #         fid,
+    #         spec,
+    #         signal,
+    #         args.m_runs,
+    #         make_discrete_online_monitor_python,
+    #         warmup_runs=args.warmup_runs,
+    #     )
+    #     if res is not None:
+    #         writer.writerow(res)
+    #         csv_file.flush()
 
-    # --- Dense-Time Online ---
-    print("\nDense-Time — Online")
-    pbar = tqdm(FORMULAS.items(), desc="Dense-Time Online")
-    for fid, spec in pbar:
-        pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
-        res = bench_dense_online_monitor(
-            fid,
-            spec,
-            signal,
-            args.m_runs,
-            make_dense_online_monitor_python,
-            warmup_runs=args.warmup_runs,
-        )
-        if res is not None:
-            writer.writerow(res)
-            csv_file.flush()
+    # # --- Dense-Time Online ---
+    # print("\nDense-Time — Online")
+    # pbar = tqdm(FORMULAS, desc="Dense-Time Online")
+    # for fid, spec in pbar:
+    #     pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
+    #     res = bench_dense_online_monitor(
+    #         fid,
+    #         spec,
+    #         signal,
+    #         args.m_runs,
+    #         make_dense_online_monitor_python,
+    #         warmup_runs=args.warmup_runs,
+    #     )
+    #     if res is not None:
+    #         writer.writerow(res)
+    #         csv_file.flush()
 
-    # --- Dense-Time Offline ---
-    print("\nDense-Time — Offline")
-    pbar = tqdm(FORMULAS.items(), desc="Dense-Time Offline")
-    for fid, spec in pbar:
-        pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
-        res = bench_offline_monitor(
-            fid,
-            spec,
-            signal,
-            args.m_runs,
-            make_dense_offline_monitor_python,
-            warmup_runs=args.warmup_runs,
-        )
-        if res is not None:
-            writer.writerow(res)
-            csv_file.flush()
+    # # --- Dense-Time Offline ---
+    # print("\nDense-Time — Offline")
+    # pbar = tqdm(FORMULAS, desc="Dense-Time Offline")
+    # for fid, spec in pbar:
+    #     pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
+    #     res = bench_offline_monitor(
+    #         fid,
+    #         spec,
+    #         signal,
+    #         args.m_runs,
+    #         make_dense_offline_monitor_python,
+    #         warmup_runs=args.warmup_runs,
+    #     )
+    #     if res is not None:
+    #         writer.writerow(res)
+    #         csv_file.flush()
 
-    # --- Discrete-Time Offline ---
-    print("\nDiscrete-Time — Offline")
-    pbar = tqdm(FORMULAS.items(), desc="Discrete-Time Offline")
-    for fid, spec in pbar:
-        pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
-        res = bench_discrete_offline_monitor(
-            fid,
-            spec,
-            signal,
-            args.m_runs,
-            make_discrete_offline_monitor_python,
-            warmup_runs=args.warmup_runs,
-        )
-        if res is not None:
-            writer.writerow(res)
-            csv_file.flush()
+    # # --- Discrete-Time Offline ---
+    # print("\nDiscrete-Time — Offline")
+    # pbar = tqdm(FORMULAS, desc="Discrete-Time Offline")
+    # for fid, spec in pbar:
+    #     pbar.set_postfix({"fid": fid, "spec": spec[:40] + "..."})
+    #     res = bench_discrete_offline_monitor(
+    #         fid,
+    #         spec,
+    #         signal,
+    #         args.m_runs,
+    #         make_discrete_offline_monitor_python,
+    #         warmup_runs=args.warmup_runs,
+    #     )
+    #     if res is not None:
+    #         writer.writerow(res)
+    #         csv_file.flush()
 
     csv_file.close()
+    raw_csv_file.close()
     print(f"\nResults saved to {out_path}")
+    print(f"Raw results saved to {raw_out_path}")
 
 
 if __name__ == "__main__":

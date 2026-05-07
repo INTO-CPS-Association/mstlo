@@ -30,11 +30,14 @@ NATIVE_CSV = ROOT / "performance_results_M=50.csv"
 PYTHON_CSV = ROOT / "python_performance_results_M=50.csv"
 DEFAULT_OUTPUT_CSV = "regression_fit_results.csv"
 
-_OPERATOR_FROM_NATIVE_FID = {
+_OPERATOR_FROM_FID = {
     "4": "U",
     "5": "G",
     "6": "F",
 }
+
+# Keep old name as alias so nothing else breaks
+_OPERATOR_FROM_NATIVE_FID = _OPERATOR_FROM_FID
 
 _SIMPLE_SPEC_PATTERN = re.compile(r"^(?P<op>[GF])\[0,\s*[-+]?\d+(?:\.\d+)?\]\s*\(.*\)$")
 _SIMPLE_UNTIL_PATTERN = re.compile(r"^\(.*\)\s*U\[0,\s*[-+]?\d+(?:\.\d+)?\]\s*\(.*\)$")
@@ -102,9 +105,9 @@ def _load_native_points(path: Path) -> list[DataPoint]:
     df = pd.read_csv(path, dtype={"formula_id": "string"})
 
     df["formula_id"] = df["formula_id"].astype("string").str.strip()
-    df = df[df["formula_id"].isin(_OPERATOR_FROM_NATIVE_FID)]
+    df = df[df["formula_id"].isin(_OPERATOR_FROM_FID)]
 
-    df["operator"] = df["formula_id"].map(_OPERATOR_FROM_NATIVE_FID)
+    df["operator"] = df["formula_id"].map(_OPERATOR_FROM_FID)
     df["temporal_depth"] = pd.to_numeric(df.get("interval_len"), errors="coerce")
     df["time_us"] = pd.to_numeric(df.get("avg_per_sample_us"), errors="coerce")
     df["semantics"] = df["semantics"].astype(str).str.strip()
@@ -146,13 +149,33 @@ def _load_python_points(path: Path) -> list[DataPoint]:
     return _dataframe_to_points(df, source="python")
 
 
+def _load_rtamt_points(path: Path) -> list[DataPoint]:
+    """Load RTAMT scalability datapoints (formula IDs 4/5/6)."""
+    df = pd.read_csv(path, dtype={"formula_id": "string"})
+
+    df["formula_id"] = df["formula_id"].astype("string").str.strip()
+    df = df[df["formula_id"].isin(_OPERATOR_FROM_FID)]
+
+    df["operator"] = df["formula_id"].map(_OPERATOR_FROM_FID)
+    df["temporal_depth"] = df["spec"].apply(
+        lambda s: float(m.group(1))
+        if (m := re.search(r"\[0,(\d+(?:\.\d+)?)\]", str(s)))
+        else float("nan")
+    )
+    df["time_us"] = pd.to_numeric(df.get("avg_per_sample_us"), errors="coerce")
+    df["semantics"] = df["monitor_type"].astype(str).str.strip()
+
+    df = df.dropna(subset=["operator", "temporal_depth", "time_us"])
+    return _dataframe_to_points(df, source="rtamt")
+
+
 def _select_model_degree(semantics: str, operator: str) -> int:
     """Select polynomial degree according to the fixed modeling assumptions."""
-    # RoSI: G/F linear, U quadratic
-    if semantics == "Rosi":
+    # RoSI and RTAMT: G/F linear, U quadratic
+    if semantics in {"Rosi"} or semantics.startswith("discrete-time"):
         return 2 if operator == "U" else 1
 
-    # Non-RoSI: G/F constant, U linear
+    # Non-RoSI native/python: G/F constant, U linear
     if operator in {"F", "G"}:
         return 0
 
@@ -201,21 +224,26 @@ def _group_points(
 
 
 def load_scalability_points(
-    native_csv: Path, python_csv: Path | None
+    native_csv: Path,
+    python_csv: Path | None,
+    rtamt_csv: Path | None = None,
 ) -> list[DataPoint]:
-    """Load and combine native + optional Python scalability points used for regression."""
+    """Load and combine native + optional Python/RTAMT scalability points."""
     points = _load_native_points(native_csv)
     if python_csv is not None and python_csv.exists():
         points += _load_python_points(python_csv)
+    if rtamt_csv is not None and rtamt_csv.exists():
+        points += _load_rtamt_points(rtamt_csv)
     return points
 
 
 def run_regression(
     native_csv: Path,
     python_csv: Path | None,
+    rtamt_csv: Path | None = None,
 ) -> list[RegressionResult]:
-    """Run regression analysis for native and Python benchmark datasets."""
-    points = load_scalability_points(native_csv, python_csv)
+    """Run regression analysis for native, Python, and optional RTAMT datasets."""
+    points = load_scalability_points(native_csv, python_csv, rtamt_csv)
     grouped = _group_points(points)
 
     results: list[RegressionResult] = []
@@ -315,6 +343,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Optional path to Python benchmark CSV (omit to run native-only regression)",
     )
     parser.add_argument(
+        "--rtamt-csv",
+        type=Path,
+        default=None,
+        help="Optional path to RTAMT benchmark CSV",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT_CSV,
@@ -330,7 +364,7 @@ def main() -> None:
     if python_csv is None and PYTHON_CSV.exists():
         python_csv = PYTHON_CSV
 
-    results = run_regression(native_csv=args.native_csv, python_csv=python_csv)
+    results = run_regression(native_csv=args.native_csv, python_csv=python_csv, rtamt_csv=args.rtamt_csv)
     save_results_csv(results, args.output)
 
     print(f"Saved {len(results)} regression rows to: {args.output}")
