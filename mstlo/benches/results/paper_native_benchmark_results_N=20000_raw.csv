@@ -1,0 +1,5 @@
+formula_id,spec,semantics,algorithm,mode,n_samples,benchmark_kind,interval_len,run_id,total_s,per_sample_s,per_sample_us
+3,"(x < 0.5) U[0,1000] (x < 0.0)",DelayedQuantitative,Incremental,online,20000,general,1000,0,0.128330875000,0.000006416544,6.416544
+3,"(x < 0.5) U[0,1000] (x < 0.0)",DelayedQualitative,Incremental,online,20000,general,1000,0,0.097229041000,0.000004861452,4.861452
+3,"(x < 0.5) U[0,1000] (x < 0.0)",EagerQualitative,Incremental,online,20000,general,1000,0,0.022718000000,0.000001135900,1.135900
+3,"(x < 0.5) U[0,1000] (x < 0.0)",Rosi,Incremental,online,20000,general,1000,0,59.639999708000,0.002981999985,2981.999985

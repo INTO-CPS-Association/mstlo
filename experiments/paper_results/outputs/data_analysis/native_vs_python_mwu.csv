@@ -1,0 +1,5 @@
+semantics,label_a,label_b,n_a,n_b,median_a,median_b,mean_a,mean_b,U_statistic,p_value,effect_size_r,alternative,significant_0.05
+DelayedQualitative,native,python,7850,7850,0.167241,0.264098,3.56105,3.37957,1.78225e+07,0,0.421557,two-sided,True
+DelayedQuantitative,native,python,7850,7850,0.269448,0.363103,4.86674,4.26369,1.86059e+07,0,0.396132,two-sided,True
+EagerQualitative,native,python,7850,7850,0.129175,0.223493,1.10616,1.22395,1.74305e+07,0,0.434281,two-sided,True
+Rosi,native,python,1850,1850,33.2154,32.8948,428.398,347.317,1.74155e+06,0.351043,-0.0177058,two-sided,False
