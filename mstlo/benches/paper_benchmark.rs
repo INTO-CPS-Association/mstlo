@@ -482,6 +482,13 @@ fn build_formulas_map() -> Vec<(usize, String)> {
     // phi3
     formulas.push((
         formula_id,
+        "(x < 0.5) U[0,1000] (x < 0.0)".to_string(),
+    ));
+    formula_id += 1;
+
+    // phi4
+    formulas.push((
+        formula_id,
         "(G[0,100] (x < 0.5)) or (G[100,150] (x > 0.0))".to_string(),
     ));
     formula_id += 1;
@@ -490,19 +497,19 @@ fn build_formulas_map() -> Vec<(usize, String)> {
     let mut b: Vec<usize> = (0..=50).map(|i| i * 100).collect();
     b[0] = 1; // avoid zero bound for the first formula
 
-    // Until formulas ID 4
+    // Until formulas ID 5
     for bnd in &b {
         formulas.push((formula_id, format!("(x < 0.0) U[0,{bnd}] (x > 0.0)")));
     }
     formula_id += 1;
 
-    // Globally formulas ID 5
+    // Globally formulas ID 6
     for bnd in &b {
         formulas.push((formula_id, format!("G[0,{bnd}] (x > 0.0)")));
     }
     formula_id += 1;
 
-    // Eventually formulas ID 6
+    // Eventually formulas ID 7
     for bnd in &b {
         formulas.push((formula_id, format!("F[0,{bnd}] (x > 0.0)")));
     }

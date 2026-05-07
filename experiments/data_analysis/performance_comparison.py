@@ -32,7 +32,7 @@ plt.rcParams.update(
 # of the horizontal text area without becoming cluttered.
 FIG_SIZE = (6.6, 4.2)
 
-FORMULA_OPERATOR = {4: "U", 5: "G", 6: "F"}
+FORMULA_OPERATOR = {5: "U", 6: "G", 7: "F"}
 
 
 def _build_plot_dataframe(
@@ -309,7 +309,7 @@ def main() -> None:
             g["avg_per_sample_us"],
             color=color,
             marker=marker,
-            s=40,
+            s=25,
             zorder=3,
             linewidths=0.7,
             edgecolors="white",
@@ -406,6 +406,7 @@ def main() -> None:
                 textcoords="offset points",
                 color=label_info["color"],
                 fontsize=11,
+                fontweight="bold",
                 va="center",
                 ha="left",
                 clip_on=False,
@@ -424,6 +425,7 @@ def main() -> None:
                 textcoords="data",
                 color=label_info["color"],
                 fontsize=11,
+                fontweight="bold",
                 va="center",
                 ha="left",
                 clip_on=False,

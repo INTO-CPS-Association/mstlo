@@ -49,19 +49,22 @@ FORMULAS.append((1, "(x < 0.5) and (x > -0.5)"))
 FORMULAS.append((2, "G[0,1000] (x > 0.5 -> F[0,100] (x < 0.0))"))
 
 # phi3
-FORMULAS.append((3, "(G[0,100] (x < 0.5)) or (G[100,150] (x > 0.0))"))
+FORMULAS.append((3, "(x < 0.5) U[0,1000] (x < 0.0)"))
+
+# phi4
+FORMULAS.append((4, "(G[0,100] (x < 0.5)) or (G[100,150] (x > 0.0))"))
 
 # # until formulas
 for bnd in b[:11]:  # limit to 1, 100, ..., 1000 for until
-    FORMULAS.append((4, f"(x < 0.0) U[0,{bnd:.1f}] (x > 0.0)"))
+    FORMULAS.append((5, f"(x < 0.0) U[0,{bnd:.1f}] (x > 0.0)"))
 
 # globally formulas
 for bnd in b:
-    FORMULAS.append((5, f"G[0,{bnd:.1f}] (x > 0.0)"))
+    FORMULAS.append((6, f"G[0,{bnd:.1f}] (x > 0.0)"))
 
 # eventually formulas
 for bnd in b:
-    FORMULAS.append((6, f"F[0,{bnd:.1f}] (x > 0.0)"))
+    FORMULAS.append((7, f"F[0,{bnd:.1f}] (x > 0.0)"))
 
 
 def load_signal(path: str) -> list[tuple[float, float]]:

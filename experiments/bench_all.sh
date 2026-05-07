@@ -4,10 +4,10 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SIGNAL_DIR="$SCRIPT_DIR/BENCH_RESULTS/signal_generation/signals"
-OUTPUT_DIR="$SCRIPT_DIR/BENCH_RESULTS/outputs"
+SIGNAL_DIR="$SCRIPT_DIR/paper_results/signal_generation/signals"
+OUTPUT_DIR="$SCRIPT_DIR/paper_results/outputs"
 
-WARMUP_RUNS=1
+WARMUP_RUNS=10
 M_RUNS=50
 SIGNAL_SIZE=20000
 SIGNAL_FILE="$SIGNAL_DIR/signal_${SIGNAL_SIZE}_chirp.csv"
@@ -53,7 +53,7 @@ python "$SCRIPT_DIR/rtamt_benchmark.py" \
 	cd "$PROJECT_ROOT/mstlo" || exit 1
 	
 	# run first to measure cache sizes
-	WARMUP_RUNS=$WARMUP_RUNS M_RUNS=1 FORMULA_IDS="1,2,3" SIGNAL_PATH="$SIGNAL_FILE" OUTPUT_CSV="$CACHE_SIZE_RESULTS" cargo bench --bench paper_benchmark --features track-cache-size
+	WARMUP_RUNS=$WARMUP_RUNS M_RUNS=1 FORMULA_IDS="1,2,3,4" SIGNAL_PATH="$SIGNAL_FILE" OUTPUT_CSV="$CACHE_SIZE_RESULTS" cargo bench --bench paper_benchmark --features track-cache-size
 
 	# run for performance comparison
 	WARMUP_RUNS=$WARMUP_RUNS M_RUNS=$M_RUNS SIGNAL_PATH="$SIGNAL_FILE" OUTPUT_CSV="$NATIVE_RESULTS" OUTPUT_RAW_CSV="$NATIVE_RESULTS_RAW" cargo bench --bench paper_benchmark
@@ -74,16 +74,16 @@ python "$SCRIPT_DIR/rtamt_benchmark.py" \
         --csv-b "$RTAMT_RESULTS_RAW" \
         --label-a "native" --label-b "rtamt" \
         --group-by "formula_id" \
-        --filter-a "semantics == 'DelayedQuantitative' and formula_id in [1, 2, 3]" \
-        --output "$OUTPUT_DIR/data_analysis/native_vs_rtamt_mwu_1_to_3.csv"
+        --filter-a "semantics == 'DelayedQuantitative' and formula_id in [1, 2, 3, 4]" \
+        --output "$OUTPUT_DIR/data_analysis/native_vs_rtamt_mwu_1_to_4.csv"
 
 	python "$SCRIPT_DIR/data_analysis/mann_whitney.py" \
         --csv-a "$PY_RESULTS_RAW" \
         --csv-b "$RTAMT_RESULTS_RAW" \
         --label-a "mstlo-python" --label-b "rtamt" \
         --group-by "formula_id" \
-        --filter-a "semantics == 'DelayedQuantitative' and formula_id in [1, 2, 3]" \
-        --output "$OUTPUT_DIR/data_analysis/mstlopython_vs_rtamt_mwu_1_to_3.csv"
+        --filter-a "semantics == 'DelayedQuantitative' and formula_id in [1, 2, 3, 4]" \
+        --output "$OUTPUT_DIR/data_analysis/mstlopython_vs_rtamt_mwu_1_to_4.csv"
 
 	python "$SCRIPT_DIR/data_analysis/mann_whitney.py" \
         --csv-a "$NATIVE_RESULTS_RAW" \
@@ -113,6 +113,7 @@ python "$SCRIPT_DIR/rtamt_benchmark.py" \
 		--output "$OUTPUT_DIR/data_analysis/performance_comparison_FG_delquant.pdf" \
 		--plot-operators F G\
 		--plot-semantics "delquant" \
+		--fg-mode "both" \
 		--plot-std \
 		--no-log-scale
 

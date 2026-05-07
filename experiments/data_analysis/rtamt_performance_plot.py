@@ -29,7 +29,7 @@ plt.rcParams.update(
 
 FIG_SIZE = (6.6, 4.2)
 
-FORMULA_OPERATOR = {4: "U", 5: "G", 6: "F"}
+FORMULA_OPERATOR = {5: "U", 6: "G", 7: "F"}
 OPERATOR_COLORS = {"G": "#3976af", "F": "#e07b39", "U": "#9b59b6"}
 OPERATOR_MARKERS = {"G": "s", "F": "o", "U": "^"}
 

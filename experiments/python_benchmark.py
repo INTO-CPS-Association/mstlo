@@ -50,19 +50,22 @@ FORMULAS.append((1, "(x < 0.5) and (x > -0.5)"))
 FORMULAS.append((2, "G[0,1000] (x > 0.5 -> F[0,100] (x < 0.0))"))
 
 # phi3
-FORMULAS.append((3, "(G[0,100] (x < 0.5)) or (G[100,150] (x > 0.0))"))
+FORMULAS.append((3, "(x < 0.5) U[0,1000] (x < 0.0)"))
+
+# phi4
+FORMULAS.append((4, "(G[0,100] (x < 0.5)) or (G[100,150] (x > 0.0))"))
 
 # # until formulas
 for bnd in b:
-    FORMULAS.append((4, f"(x < 0.0) U[0,{bnd:.1f}] (x > 0.0)"))
+    FORMULAS.append((5, f"(x < 0.0) U[0,{bnd:.1f}] (x > 0.0)"))
 
 # globally formulas
 for bnd in b:
-    FORMULAS.append((5, f"G[0,{bnd:.1f}] (x > 0.0)"))
+    FORMULAS.append((6, f"G[0,{bnd:.1f}] (x > 0.0)"))
 
 # eventually formulas
 for bnd in b:
-    FORMULAS.append((6, f"F[0,{bnd:.1f}] (x > 0.0)"))
+    FORMULAS.append((7, f"F[0,{bnd:.1f}] (x > 0.0)"))
 
 
 def load_signal(path: str) -> list[tuple[float, float]]:
@@ -121,7 +124,11 @@ def bench_formula(
 
     avg_total = total_time / m
     avg_per_sample = avg_total / n_samples
-    std_total = math.sqrt(sum((t - avg_total) ** 2 for t in run_times) / (m - 1)) if m > 1 else 0.0
+    std_total = (
+        math.sqrt(sum((t - avg_total) ** 2 for t in run_times) / (m - 1))
+        if m > 1
+        else 0.0
+    )
     std_per_sample = std_total / n_samples
 
     return {
@@ -173,7 +180,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output", default=DEFAULT_OUTPUT_CSV, help="Output CSV path")
     parser.add_argument(
-        "--output-raw", default=DEFAULT_OUTPUT_RAW_CSV, help="Output raw per-run CSV path"
+        "--output-raw",
+        default=DEFAULT_OUTPUT_RAW_CSV,
+        help="Output raw per-run CSV path",
     )
     parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite output CSV if it exists"
@@ -272,19 +281,21 @@ def main() -> None:
             csv_file.flush()
             for run_id, t in enumerate(run_times):
                 per_sample_s = t / res["n_samples"]
-                raw_writer.writerow({
-                    "formula_id": res["formula_id"],
-                    "spec": res["spec"],
-                    "semantics": res["semantics"],
-                    "algorithm": res["algorithm"],
-                    "mode": res["mode"],
-                    "n_samples": res["n_samples"],
-                    "temporal_depth": res["temporal_depth"],
-                    "run_id": run_id,
-                    "total_s": t,
-                    "per_sample_s": per_sample_s,
-                    "per_sample_us": per_sample_s * 1e6,
-                })
+                raw_writer.writerow(
+                    {
+                        "formula_id": res["formula_id"],
+                        "spec": res["spec"],
+                        "semantics": res["semantics"],
+                        "algorithm": res["algorithm"],
+                        "mode": res["mode"],
+                        "n_samples": res["n_samples"],
+                        "temporal_depth": res["temporal_depth"],
+                        "run_id": run_id,
+                        "total_s": t,
+                        "per_sample_s": per_sample_s,
+                        "per_sample_us": per_sample_s * 1e6,
+                    }
+                )
             raw_csv_file.flush()
 
     csv_file.close()

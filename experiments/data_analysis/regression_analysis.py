@@ -31,9 +31,9 @@ PYTHON_CSV = ROOT / "python_performance_results_M=50.csv"
 DEFAULT_OUTPUT_CSV = "regression_fit_results.csv"
 
 _OPERATOR_FROM_FID = {
-    "4": "U",
-    "5": "G",
-    "6": "F",
+    "5": "U",
+    "6": "G",
+    "7": "F",
 }
 
 # Keep old name as alias so nothing else breaks
