@@ -6,7 +6,6 @@
   - [Results](#results)
   - [Results from the paper](#results-from-the-paper)
 
-
 ## Prerequisites
 
 To run the experiments, ensure you have the following installed:
@@ -20,11 +19,10 @@ Make also sure that the python bindings for mstlo are properly installed. You ca
 
 ## Running the Experiments
 
-To reproduce the experiments in the paper, run the `bench_all.sh` script. This will generate the necessary signals, run the benchmarks for both M=1 and M=50, perform regression analysis, and generate the performance comparison plot.
+To reproduce the experiments in the paper, run the `bench_all.sh` script. This will generate the necessary signals, run the benchmarks for mstlo, mstlo-python, and RTAMT and then perform the data analysis and plots.
 
 ```bash
-cd experiments
-./bench_all.sh
+sh experiments/bench_all.sh
 ```
 
 ## Results
@@ -33,4 +31,4 @@ The results of the benchmarks will, by default, be saved in the `experiments/BEN
 
 ## Results from the paper
 
-The results from the paper are available in the `paper_results/` directory. You can find the raw benchmark results in CSV format, as well as the generated performance comparison plot.
+The results from the paper are available in the `paper_results/` directory. You can find the raw benchmark results in CSV format, as well as the generated performance comparison plot. They were run with Python 3.11.15 and rustc 1.95.0 on a MacBook Pro with an Apple M4 Pro chip. The RTAMT version used was 0.4.10.
