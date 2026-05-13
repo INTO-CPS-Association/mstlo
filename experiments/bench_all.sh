@@ -4,8 +4,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SIGNAL_DIR="$SCRIPT_DIR/paper_results/signal_generation/signals"
-OUTPUT_DIR="$SCRIPT_DIR/paper_results/outputs"
+SIGNAL_DIR="$SCRIPT_DIR/BENCH_RESULTS/signal_generation/signals"
+OUTPUT_DIR="$SCRIPT_DIR/BENCH_RESULTS/outputs"
 
 WARMUP_RUNS=10
 M_RUNS=50
@@ -66,71 +66,98 @@ python "$SCRIPT_DIR/rtamt_benchmark.py" \
 		--native-csv "$NATIVE_RESULTS" \
 		--python-csv "$PY_RESULTS" \
 		--rtamt-csv "$RTAMT_RESULTS" \
-		--output "$OUTPUT_DIR/data_analysis/regression_fit_results.csv"
+		--output "$OUTPUT_DIR/data_analysis/regression_fit/regression_fit_results.csv"
 
 	# mann whitney U tests
 	python "$SCRIPT_DIR/data_analysis/mann_whitney.py" \
         --csv-a "$NATIVE_RESULTS_RAW" \
         --csv-b "$RTAMT_RESULTS_RAW" \
-        --label-a "native" --label-b "rtamt" \
+        --label-a "native" --label-b "rtamt-discrete-cpp-online" \
         --group-by "formula_id" \
         --filter-a "semantics == 'DelayedQuantitative' and formula_id in [1, 2, 3, 4]" \
-        --output "$OUTPUT_DIR/data_analysis/native_vs_rtamt_mwu_1_to_4.csv"
+		--filter-b "monitor_type == 'discrete-time-cpp' and mode == 'online' and formula_id in [1, 2, 3, 4]" \
+        --output "$OUTPUT_DIR/data_analysis/mwu/native_vs_rtamt_mwu_1_to_4.csv"
 
 	python "$SCRIPT_DIR/data_analysis/mann_whitney.py" \
         --csv-a "$PY_RESULTS_RAW" \
         --csv-b "$RTAMT_RESULTS_RAW" \
-        --label-a "mstlo-python" --label-b "rtamt" \
+        --label-a "mstlo-python" --label-b "rtamt-discrete-python-online" \
         --group-by "formula_id" \
         --filter-a "semantics == 'DelayedQuantitative' and formula_id in [1, 2, 3, 4]" \
-        --output "$OUTPUT_DIR/data_analysis/mstlopython_vs_rtamt_mwu_1_to_4.csv"
+		--filter-b "monitor_type == 'discrete-time-python' and mode == 'online' and formula_id in [1, 2, 3, 4]" \
+        --output "$OUTPUT_DIR/data_analysis/mwu/mstlopython_vs_rtamt_mwu_1_to_4.csv"
 
 	python "$SCRIPT_DIR/data_analysis/mann_whitney.py" \
         --csv-a "$NATIVE_RESULTS_RAW" \
         --csv-b "$PY_RESULTS_RAW" \
         --label-a "native" --label-b "python" \
         --group-by "semantics" \
-        --output "$OUTPUT_DIR/data_analysis/native_vs_python_mwu.csv"
+        --output "$OUTPUT_DIR/data_analysis/mwu/native_vs_python_mwu.csv"
 
 	# mstlo plots
 	python "$SCRIPT_DIR/data_analysis/performance_comparison.py" \
 		--benchmark-csv "$NATIVE_RESULTS" \
-		--regression-csv "$OUTPUT_DIR/data_analysis/regression_fit_results.csv" \
-		--output "$OUTPUT_DIR/data_analysis/performance_comparison_all.pdf"
+		--regression-csv "$OUTPUT_DIR/data_analysis/regression_fit/regression_fit_results.csv" \
+		--output "$OUTPUT_DIR/data_analysis/mstlo_plots/performance_comparison_all.pdf"
 
 	python "$SCRIPT_DIR/data_analysis/performance_comparison.py" \
 		--benchmark-csv "$NATIVE_RESULTS" \
-		--regression-csv "$OUTPUT_DIR/data_analysis/regression_fit_results.csv" \
-		--output "$OUTPUT_DIR/data_analysis/performance_comparison_U_delquant.pdf" \
-		--plot-operators U \
-		--plot-semantics "delquant" \
+		--regression-csv "$OUTPUT_DIR/data_analysis/regression_fit/regression_fit_results.csv" \
+		--output "$OUTPUT_DIR/data_analysis/mstlo_plots/performance_comparison_FG_nonrosi.pdf" \
+		--plot-operators F G\
+		--plot-semantics delquant delqual eagerqual \
+		--fg-mode "both" \
 		--plot-std \
 		--no-log-scale
 
 	python "$SCRIPT_DIR/data_analysis/performance_comparison.py" \
 		--benchmark-csv "$NATIVE_RESULTS" \
-		--regression-csv "$OUTPUT_DIR/data_analysis/regression_fit_results.csv" \
-		--output "$OUTPUT_DIR/data_analysis/performance_comparison_FG_delquant.pdf" \
-		--plot-operators F G\
-		--plot-semantics "delquant" \
+		--regression-csv "$OUTPUT_DIR/data_analysis/regression_fit/regression_fit_results.csv" \
+		--output "$OUTPUT_DIR/data_analysis/mstlo_plots/performance_comparison_U_nonrosi.pdf" \
+		--plot-operators U \
+		--plot-semantics delquant delqual eagerqual \
+		--fg-mode "both" \
+		--plot-std \
+		--no-log-scale
+
+	python "$SCRIPT_DIR/data_analysis/performance_comparison.py" \
+		--benchmark-csv "$NATIVE_RESULTS" \
+		--regression-csv "$OUTPUT_DIR/data_analysis/regression_fit/regression_fit_results.csv" \
+		--output "$OUTPUT_DIR/data_analysis/mstlo_plots/performance_comparison_FG_rosi.pdf" \
+		--plot-operators F G \
+		--plot-semantics "rosi" \
+		--fg-mode "both" \
+		--plot-std \
+		--no-log-scale
+
+	python "$SCRIPT_DIR/data_analysis/performance_comparison.py" \
+		--benchmark-csv "$NATIVE_RESULTS" \
+		--regression-csv "$OUTPUT_DIR/data_analysis/regression_fit/regression_fit_results.csv" \
+		--output "$OUTPUT_DIR/data_analysis/mstlo_plots/performance_comparison_U_rosi.pdf" \
+		--plot-operators U \
+		--plot-semantics "rosi" \
 		--fg-mode "both" \
 		--plot-std \
 		--no-log-scale
 
 	# RTAMT plots
-	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" \
-		--benchmark-csv "$RTAMT_RESULTS" \
-		--output "$OUTPUT_DIR/data_analysis/rtamt_performance_all.pdf"
+	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" --benchmark-csv "$RTAMT_RESULTS" --semantics dense-time-python-offline --output "$OUTPUT_DIR/data_analysis/rtamt_plots/dense-time-offline_all.pdf"
 
-	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" \
-		--benchmark-csv "$RTAMT_RESULTS" \
-		--output "$OUTPUT_DIR/data_analysis/rtamt_performance_U.pdf" \
-		--plot-std \
-		--plot-operators U
+	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" --benchmark-csv "$RTAMT_RESULTS" --semantics dense-time-python-online --output "$OUTPUT_DIR/data_analysis/rtamt_plots/dense-time-online_all.pdf"
 
-	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" \
-		--benchmark-csv "$RTAMT_RESULTS" \
-		--output "$OUTPUT_DIR/data_analysis/rtamt_performance_FG.pdf" \
-		--plot-std \
-		--plot-operators F G
+	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" --benchmark-csv "$RTAMT_RESULTS" --semantics discrete-time-python-online --output "$OUTPUT_DIR/data_analysis/rtamt_plots/discrete-time-python-online_all.pdf"
+	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" --benchmark-csv "$RTAMT_RESULTS" --semantics discrete-time-python-online --output "$OUTPUT_DIR/data_analysis/rtamt_plots/discrete-time-python-online_FG.pdf" --operators F G
+
+	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" --benchmark-csv "$RTAMT_RESULTS" --semantics discrete-time-python-online --output "$OUTPUT_DIR/data_analysis/rtamt_plots/discrete-time-python-online_U.pdf" --operators U
+
+	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" --benchmark-csv "$RTAMT_RESULTS" --semantics discrete-time-python-offline --output "$OUTPUT_DIR/data_analysis/rtamt_plots/discrete-time-python-offline_all.pdf"
+	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" --benchmark-csv "$RTAMT_RESULTS" --semantics discrete-time-cpp-online --output "$OUTPUT_DIR/data_analysis/rtamt_plots/discrete-time-cpp-online_all.pdf"
+
+	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" --benchmark-csv "$RTAMT_RESULTS" --semantics discrete-time-cpp-online --output "$OUTPUT_DIR/data_analysis/rtamt_plots/discrete-time-cpp-online_FG.pdf" --operators F G
+
+	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" --benchmark-csv "$RTAMT_RESULTS" --semantics discrete-time-cpp-online --output "$OUTPUT_DIR/data_analysis/rtamt_plots/discrete-time-cpp-online_U.pdf" --operators U
+
+	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" --benchmark-csv "$RTAMT_RESULTS" --semantics discrete-time-cpp-online discrete-time-python-online --output "$OUTPUT_DIR/data_analysis/rtamt_plots/discrete-time-cpp-vs-python-online_U.pdf" --operators U
+
+	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" --benchmark-csv "$RTAMT_RESULTS" --semantics discrete-time-cpp-online discrete-time-python-online --output "$OUTPUT_DIR/data_analysis/rtamt_plots/discrete-time-cpp-vs-python-online_FG.pdf" --operators F G
 )

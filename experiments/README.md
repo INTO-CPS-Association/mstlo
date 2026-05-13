@@ -25,6 +25,8 @@ To reproduce the experiments in the paper, run the `bench_all.sh` script. This w
 sh experiments/bench_all.sh
 ```
 
+**NOTE: The discrete-time monitors from RTAMT run very slowly on until-formulas. You might want to skip these tests by outcommenting the relevant lines in `rtamt_benchmark.py`.**
+
 ## Results
 
 The results of the benchmarks will, by default, be saved in the `experiments/BENCH_RESULTS` directory, and the performance comparison plot will be saved as `performance_comparison.pdf`. You can open this PDF to visually compare the performance of our implementation against RTAMT and the Python STL library.

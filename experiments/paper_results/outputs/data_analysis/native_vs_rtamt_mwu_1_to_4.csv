@@ -1,5 +1,0 @@
-formula_id,label_a,label_b,n_a,n_b,median_a,median_b,mean_a,mean_b,U_statistic,p_value,effect_size_r,alternative,significant_0.05
-1,native,rtamt,50,50,0.160041,3.10365,0.16149,3.10446,0,7.06607e-18,1,two-sided,True
-2,native,rtamt,50,50,0.475929,4.69316,0.473919,4.70432,0,7.06607e-18,1,two-sided,True
-3,native,rtamt,50,50,6.39198,219.181,6.41335,219.114,0,7.06607e-18,1,two-sided,True
-4,native,rtamt,50,50,0.443144,4.25341,0.446244,4.24912,0,7.06607e-18,1,two-sided,True

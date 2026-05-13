@@ -3,7 +3,6 @@ import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 
 plt.rcParams.update(
@@ -30,8 +29,17 @@ plt.rcParams.update(
 FIG_SIZE = (6.6, 4.2)
 
 FORMULA_OPERATOR = {5: "U", 6: "G", 7: "F"}
-OPERATOR_COLORS = {"G": "#3976af", "F": "#e07b39", "U": "#9b59b6"}
 OPERATOR_MARKERS = {"G": "s", "F": "o", "U": "^"}
+
+SEMANTICS_COLORS = {
+    "dense-time-python-online": "#3976af",
+    "dense-time-python-offline": "#5ba85a",
+    "discrete-time-cpp-online": "#e07b39",
+    "discrete-time-python-online": "#857c89",
+    "discrete-time-python-offline": "#9b59b6",
+}
+
+DENSE_TIME_SEMANTICS = {"dense-time-python-online", "dense-time-python-offline"}
 
 
 def _extract_interval_len(spec: str) -> float:
@@ -41,41 +49,41 @@ def _extract_interval_len(spec: str) -> float:
 
 def parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parent
+    all_semantics = list(SEMANTICS_COLORS)
     parser = argparse.ArgumentParser(
         description="Plot RTAMT performance scaling with b"
     )
     parser.add_argument(
         "--benchmark-csv",
         type=Path,
-        default=root.parent / "results" / "rtamt_benchmark_results_cpp.csv",
+        default=root.parent / "results" / "rtamt_benchmark_results_dense.csv",
     )
     parser.add_argument("--output", type=Path, default=root / "rtamt_performance.pdf")
+    parser.add_argument("--fig-width", type=float, default=FIG_SIZE[0])
+    parser.add_argument("--fig-height", type=float, default=FIG_SIZE[1])
+    parser.add_argument("--plot-std", action="store_true", default=False)
     parser.add_argument(
-        "--fig-width", type=float, default=FIG_SIZE[0], help="Figure width in inches"
-    )
-    parser.add_argument(
-        "--fig-height", type=float, default=FIG_SIZE[1], help="Figure height in inches"
-    )
-    parser.add_argument(
-        "--plot-std",
-        action="store_true",
-        default=False,
-        help="Overlay ±1 std deviation band around each series",
-    )
-    all_operators = list(FORMULA_OPERATOR.values())
-    parser.add_argument(
-        "--plot-operators",
+        "--semantics",
         nargs="+",
-        choices=all_operators,
-        default=all_operators,
+        choices=all_semantics,
+        default=all_semantics,
+        metavar="SEM",
+        help=f"Semantics to plot (default: all). Choices: {all_semantics}",
+    )
+    parser.add_argument(
+        "--operators",
+        nargs="+",
+        choices=list(OPERATOR_MARKERS.keys()),
+        default=list(OPERATOR_MARKERS.keys()),
         metavar="OP",
-        help=f"Operators to plot (default: all). Choices: {all_operators}",
+        help=(
+            f"Operators to plot (default: all). Choices: {list(OPERATOR_MARKERS.keys())}"
+        ),
     )
     parser.add_argument(
         "--log-scale",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Use log scale on y-axis (default: linear)",
     )
     return parser.parse_args()
 
@@ -86,17 +94,22 @@ def main() -> None:
     df = pd.read_csv(args.benchmark_csv)
     df = df[df["formula_id"].isin(FORMULA_OPERATOR)].copy()
     df["operator"] = df["formula_id"].map(FORMULA_OPERATOR)
+    df["semantics"] = df["monitor_type"] + "-" + df["mode"]
     df["interval_len"] = df["spec"].apply(_extract_interval_len)
-    df = df[df["operator"].isin(args.plot_operators)]
+
+    df = df[df["semantics"].isin(args.semantics)]
+    df = df[df["operator"].isin(args.operators)]
+    # dense-time does not support Until
+    df = df[~((df["semantics"].isin(DENSE_TIME_SEMANTICS)) & (df["operator"] == "U"))]
 
     has_std = "std_per_sample_us" in df.columns
-
     _, ax = plt.subplots(figsize=(args.fig_width, args.fig_height))
 
-    for operator, group in df.groupby("operator"):
+    for (semantics, operator), group in df.groupby(["semantics", "operator"]):
         g = group.sort_values("interval_len")
-        color = OPERATOR_COLORS[operator]
+        color = SEMANTICS_COLORS[semantics]
         marker = OPERATOR_MARKERS[operator]
+        label = f"{semantics} ({operator})"
 
         ax.plot(
             g["interval_len"],
@@ -115,7 +128,7 @@ def main() -> None:
             linewidths=0.7,
             edgecolors="white",
             alpha=0.9,
-            label=operator,
+            label=label,
         )
 
         if args.plot_std and has_std:
@@ -132,15 +145,17 @@ def main() -> None:
         ax.set_yscale("log")
 
     ax.set_xlabel("Temporal upper bound ($b$)", labelpad=5)
-    y_label = (
-        "Average time per sample (µs, log scale)"
-        if args.log_scale
-        else "Average time per sample (µs)"
+    ax.set_ylabel(
+        (
+            "Average time per sample (µs, log scale)"
+            if args.log_scale
+            else "Average time per sample (µs)"
+        ),
+        labelpad=5,
     )
-    ax.set_ylabel(y_label, labelpad=5)
     ax.grid(True, which="major", linestyle="--", linewidth=0.8, alpha=0.55)
     ax.tick_params(which="both", top=True, right=True, width=1.1)
-    ax.legend(title="Operator", framealpha=0.85)
+    ax.legend(title="Semantics (operator)", framealpha=0.85)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()

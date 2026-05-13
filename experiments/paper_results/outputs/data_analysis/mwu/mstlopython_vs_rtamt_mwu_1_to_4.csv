@@ -1,0 +1,5 @@
+formula_id,label_a,label_b,n_a,n_b,median_a,median_b,mean_a,mean_b,U_statistic,p_value,effect_size_r,alternative,significant_0.05
+1,mstlo-python,rtamt-discrete-python-online,50,50,0.232863,4.98484,0.235309,4.99224,0,7.06607e-18,1,two-sided,True
+2,mstlo-python,rtamt-discrete-python-online,50,50,0.570048,73.9912,0.567753,74.0805,0,7.06607e-18,1,two-sided,True
+3,mstlo-python,rtamt-discrete-python-online,50,51,5.58399,30672.8,5.58363,30752.1,0,4.84947e-18,1,two-sided,True
+4,mstlo-python,rtamt-discrete-python-online,50,50,0.516181,15.5119,0.518868,15.5064,0,7.06607e-18,1,two-sided,True
