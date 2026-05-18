@@ -13,103 +13,101 @@ use std::collections::{BTreeSet, HashSet};
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
-/// Returns `true` if it is safe to evict the cache entry at `back_ts` in favour
-/// of a new entry arriving at `new_ts`.
+/// Processes the evaluation buffer, computing windowed aggregations and emitting finalized outputs.
 ///
-/// Lemire back-eviction is only valid when every pending evaluation task whose
-/// window contains `back_ts` also contains `new_ts`.  Evicting prematurely
-/// removes an entry that a pending task still needs, which corrupts the result.
+/// The caller provides `combine` (either `Y::or` or `Y::and`) and `identity`
+/// (either `Y::eventually_identity` or `Y::globally_identity`) to specialize
+/// for `Eventually` or `Globally`. `eager_short_circuit` is `Y::atomic_true()`
+/// for `Eventually` and `Y::atomic_false()` for `Globally`.
 ///
-/// The check uses a sufficient O(1) condition based solely on the *oldest*
-/// pending task (the tightest constraint in the evaluation buffer):
-///
-/// * **Condition A** – `oldest + b ≥ new_ts`: the oldest pending task's window
-///   right-edge still reaches `new_ts`, so `new_ts` is inside every pending
-///   window.  Safe to evict.
-/// * **Condition B** – `oldest > back_ts − a`: even the oldest pending task's
-///   window starts after `back_ts`, meaning no pending window contains
-///   `back_ts` at all.  Safe to evict.
-///
-/// If neither condition holds, eviction is conservatively deferred.  Any entry
-/// retained this way is a true minimum/maximum candidate for some still-open
-/// window and will be cleaned up by `guarded_prune` once no longer needed.
-fn is_lemire_eviction_safe(
-    back_ts: Duration,
-    new_ts: Duration,
+/// Returns `(outputs, timestamps_to_remove)`.
+fn process_eval_buffer<C, Y, const IS_EAGER: bool, const IS_ROSI: bool>(
+    eval_buffer: &mut BTreeSet<Duration>,
+    cache: &mut C,
     interval: &TimeInterval,
-    eval_buffer: &BTreeSet<Duration>,
-) -> bool {
-    let Some(&oldest) = eval_buffer.first() else {
-        return true; // No pending evaluations — unconditionally safe.
-    };
-    // Condition A: oldest + b >= new_ts  <=>  oldest >= new_ts - b
-    if oldest >= new_ts.saturating_sub(interval.end) {
-        return true;
+    max_lookahead: Duration,
+    current_time: Duration,
+    combine: impl Fn(Y, Y) -> Y,
+    identity: impl Fn() -> Y,
+    eager_short_circuit: Y,
+) -> Vec<Step<Y>>
+where
+    C: RingBufferTrait<Value = Y>,
+    Y: RobustnessSemantics + Debug,
+{
+    let mut output_robustness = Vec::new();
+    let mut tasks_to_remove = Vec::new();
+
+    for &t_eval in eval_buffer.iter() {
+        let window_start = t_eval + interval.start;
+        let window_end = t_eval + interval.end;
+
+        let windowed_value = if IS_ROSI {
+            cache
+                .iter()
+                .skip_while(|s| s.timestamp < window_start)
+                .take_while(|s| s.timestamp <= window_end)
+                .map(|s| s.value.clone())
+                .reduce(|a, b| combine(a, b))
+                .unwrap_or_else(&identity)
+        } else {
+            let drop_count = cache.partition_point(|f| f.timestamp < window_start);
+            if drop_count > 0 {
+                cache.drain(0..drop_count);
+            }
+            cache
+                .get_front()
+                .map(|entry| entry.value.clone())
+                .unwrap_or_else(&identity)
+        };
+
+        let t = if IS_ROSI {
+            cache
+                .get_back()
+                .map(|s| s.timestamp)
+                .unwrap_or(Duration::ZERO)
+        } else {
+            current_time
+        };
+
+        if t >= t_eval + max_lookahead || (IS_EAGER && windowed_value == eager_short_circuit) {
+            output_robustness.push(Step::new("output", windowed_value, t_eval));
+            tasks_to_remove.push(t_eval);
+        } else if IS_ROSI {
+            let intermediate_value = combine(windowed_value, Y::unknown());
+            output_robustness.push(Step::new("output", intermediate_value, t_eval));
+        } else {
+            break;
+        }
     }
-    // Condition B: oldest > back_ts - a
-    if oldest > back_ts.saturating_sub(interval.start) {
-        return true;
+    for t in tasks_to_remove {
+        eval_buffer.remove(&t);
     }
-    false
+
+    output_robustness
 }
 
 /// Removes dominated values from the back of a monotone cache (Lemire
-/// sliding min/max), guarded by an O(1) safety check.
+/// sliding min/max).
 ///
 /// `is_max = true` is used for `Eventually`; `is_max = false` for `Globally`.
-///
-/// Each entry is pushed at most once and evicted at most once, so the total
-/// cost across all insertions is O(n) — amortised O(1) per step.
-///
-/// The safety gate ensures that an entry is only evicted once every pending
-/// evaluation task whose window covers that entry also covers the new entry.
-/// For dense (gap = 1) timestamps the gate always passes, so Lemire behaves
-/// exactly as before.  For sparse timestamps where a gap exceeds the window
-/// width the gate blocks the eviction; the entry stays and is later cleaned
-/// up by `guarded_prune`.  The window query uses a bounded scan
-/// (`skip_while`/`take_while`) so it remains correct in both cases: with a
-/// healthy Lemire deque the scan terminates at the monotone-minimum front
-/// entry in O(1); with a sparse-timestamp gap the window contains at most one
-/// entry, also O(1).
-///
-/// ### Eager mode (`is_eager = true`)
-///
-/// In eager qualitative mode the safety gate is **not applied**.  Any task
-/// still pending in `eval_buffer` has already been checked for the
-/// short-circuit condition (`atomic_false` / `atomic_true`) at every prior
-/// step; if it had been triggered the task would have been removed.  The
-/// surviving tasks therefore contain only identity values in their windows so
-/// far (`true` for `Globally`, `false` for `Eventually`).  Evicting an
-/// identity value from the Lemire deque never changes the fold result, so
-/// back-eviction is always semantically safe and must not be blocked.
-///
-/// Concretely: without this exception, on a formula like `G[0,1000](φ)` the
-/// safety gate's Condition A (`oldest ≥ new_ts − b`) fails permanently once
-/// `t > 1000`, causing every eviction to be blocked and the cache to balloon
-/// to ~`max_lookahead` entries — which is O(1100) for the inner-F[\0,100\]
-/// nesting — instead of the O(1) steady-state size that Lemire normally
-/// achieves.
 fn pop_dominated_values<C, Y>(
     cache: &mut C,
     sub_step: &Step<Y>,
     is_max: bool,
-    interval: &TimeInterval,
-    eval_buffer: &BTreeSet<Duration>,
-    is_eager: bool,
+    window_length: Duration,
 ) where
     C: RingBufferTrait<Value = Y>,
     Y: RobustnessSemantics + Debug,
 {
     while let Some(back) = cache.get_back() {
-        if !Y::prune_dominated(back.value.clone(), sub_step.value.clone(), is_max) {
-            break; // Back is not dominated; no earlier entry will be either.
-        }
-        if !is_eager
-            && !is_lemire_eviction_safe(back.timestamp, sub_step.timestamp, interval, eval_buffer)
+        if Y::prune_dominated(back.value.clone(), sub_step.value.clone(), is_max)
+            && back.timestamp + window_length >= sub_step.timestamp
         {
-            break; // Value-dominated but not yet safe to remove.
+            cache.pop_back();
+        } else {
+            break;
         }
-        cache.pop_back();
     }
 }
 
@@ -203,119 +201,58 @@ where
             for sub_step in sub_robustness_vec {
                 self.eval_buffer.insert(sub_step.timestamp);
 
-                // Try to update existing step
                 if !self.cache.update_step(sub_step.clone()) {
-                    // Not found in cache.
-                    // Check if this is a NEW step or an OLD one that was pruned.
                     let is_new_step = match self.cache.get_back() {
                         Some(back) => sub_step.timestamp > back.timestamp,
                         None => true,
                     };
 
                     if is_new_step {
-                        // New step: Safe to prune back and append (Lemire)
+                        // Safe: strict condition (new.lower >= old.upper) ensures evicted
+                        // entries can never exceed new even after full refinement.
                         pop_dominated_values(
                             &mut self.cache,
                             &sub_step,
                             true,
-                            &self.interval,
-                            &self.eval_buffer,
-                            false, // IS_ROSI: always apply safety gate
-                        ); // true for Max (Eventually)
+                            self.interval.window_length(),
+                        );
                         self.cache.add_step(sub_step);
                     }
                 }
             }
         } else {
             // Non-RoSI path (f64/bool)
-            for sub_step in &sub_robustness_vec {
+            for sub_step in sub_robustness_vec {
                 self.eval_buffer.insert(sub_step.timestamp);
                 pop_dominated_values(
                     &mut self.cache,
-                    sub_step,
+                    &sub_step,
                     true,
-                    &self.interval,
-                    &self.eval_buffer,
-                    IS_EAGER, // skip safety gate in eager mode — see fn doc
+                    self.interval.window_length(),
                 ); // true for Max
-                self.cache.add_step(sub_step.clone());
+                self.cache.add_step(sub_step);
             }
         }
 
-        let mut tasks_to_remove = Vec::new();
         let current_time = step.timestamp;
 
         // 2. Process the evaluation buffer
-        for &t_eval in self.eval_buffer.iter() {
-            let window_start = t_eval + self.interval.start;
-            let window_end = t_eval + self.interval.end;
-
-            // Bounded window scan — correct for any timestamp density.
-            //
-            // With dense timestamps the Lemire safety gate always passes, so
-            // the deque is properly maintained: the first entry at or after
-            // `window_start` is the maximum and the scan terminates in O(1).
-            // With sparse timestamps (gap > window width) the gate may block
-            // some evictions, leaving a non-monotone deque; the bounded
-            // `take_while` ensures we never read past `window_end` in that
-            // case, so correctness is preserved regardless.
-            let windowed_max_value = self
-                .cache
-                .iter()
-                .skip_while(|entry| entry.timestamp < window_start)
-                .take_while(|entry| entry.timestamp <= window_end)
-                .map(|entry| entry.value.clone())
-                .fold(Y::eventually_identity(), Y::or);
-
-            let final_value: Option<Y>;
-            let mut remove_task = false;
-
-            let t = if IS_ROSI {
-                self.cache
-                    .get_back()
-                    .map(|s| s.timestamp)
-                    .unwrap_or(Duration::ZERO)
-            } else {
-                current_time
-            };
-
-            // state-based logic
-            if t >= t_eval + self.max_lookahead {
-                // Case 1: Full window has passed. This is a final, "closed" value.
-                final_value = Some(windowed_max_value);
-                remove_task = true;
-            } else if IS_EAGER && windowed_max_value == Y::atomic_true() {
-                // Case 2: Eager short-circuit. Found "true" before window closed.
-                final_value = Some(windowed_max_value);
-                remove_task = true;
-            } else if IS_ROSI {
-                // Case 3: Intermediate ROSI. Window is still open.
-                // We must 'or' with the unknown future.
-                let intermediate_value = Y::or(windowed_max_value, Y::unknown()); // Use unknown() from your code
-                final_value = Some(intermediate_value);
-                // DO NOT remove task, it's not finished
-            } else {
-                // Case 4: Cannot evaluate yet (e.g., bool/f64 and window is still open)
-                // Since the buffer is time-ordered, we stop.
-                break;
-            }
-
-            if let Some(val) = final_value {
-                output_robustness.push(Step::new("output", val, t_eval));
-            }
-
-            if remove_task {
-                tasks_to_remove.push(t_eval);
-            }
-        }
+        let new_outputs = process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
+            &mut self.eval_buffer,
+            &mut self.cache,
+            &self.interval,
+            self.max_lookahead,
+            current_time,
+            Y::or,
+            Y::eventually_identity,
+            Y::atomic_true(),
+        );
+        output_robustness.extend(new_outputs);
 
         // 3. Prune the cache and buffer
         let protected_ts = self.eval_buffer.first().copied().unwrap_or(Duration::ZERO);
         let lookahead = self.get_max_lookahead();
         guarded_prune(&mut self.cache, lookahead, protected_ts);
-        for t in tasks_to_remove {
-            self.eval_buffer.remove(&t);
-        }
 
         output_robustness
     }
@@ -421,118 +358,57 @@ where
                 self.eval_buffer.insert(sub_step.timestamp);
 
                 if !self.cache.update_step(sub_step.clone()) {
-                    // Not found in cache.
-                    // Check if this is a NEW step or an OLD one that was pruned.
                     let is_new_step = match self.cache.get_back() {
                         Some(back) => sub_step.timestamp > back.timestamp,
                         None => true,
                     };
 
                     if is_new_step {
-                        // New step: Safe to prune back and append (Lemire)
+                        // Safe: strict condition (new.upper <= old.lower) ensures evicted
+                        // entries can never be smaller than new even after full refinement.
                         pop_dominated_values(
                             &mut self.cache,
                             &sub_step,
                             false,
-                            &self.interval,
-                            &self.eval_buffer,
-                            false, // IS_ROSI: always apply safety gate
-                        ); // false for Min (Globally)
+                            self.interval.window_length(),
+                        );
                         self.cache.add_step(sub_step);
                     }
                 }
             }
         } else {
             // Non-RoSI path (f64/bool)
-            for sub_step in &sub_robustness_vec {
+            for sub_step in sub_robustness_vec {
+                self.eval_buffer.insert(sub_step.timestamp);
                 pop_dominated_values(
                     &mut self.cache,
-                    sub_step,
+                    &sub_step,
                     false,
-                    &self.interval,
-                    &self.eval_buffer,
-                    IS_EAGER, // skip safety gate in eager mode — see fn doc
-                ); // false for Min
-                self.eval_buffer.insert(sub_step.timestamp);
-                self.cache.add_step(sub_step.clone());
+                    self.interval.window_length(),
+                ); // false for Min (Globally)
+                self.cache.add_step(sub_step);
             }
         }
 
-        let mut tasks_to_remove = Vec::new();
         let current_time = step.timestamp;
 
         // 2. Process the evaluation buffer
-        for &t_eval in self.eval_buffer.iter() {
-            let window_start = t_eval + self.interval.start;
-            let window_end = t_eval + self.interval.end;
-
-            // Bounded window scan — correct for any timestamp density.
-            //
-            // With dense timestamps the Lemire safety gate always passes, so
-            // the deque is properly maintained: the first entry at or after
-            // `window_start` is the minimum and the scan terminates in O(1).
-            // With sparse timestamps (gap > window width) the gate may block
-            // some evictions, leaving a non-monotone deque; the bounded
-            // `take_while` ensures we never read past `window_end` in that
-            // case, so correctness is preserved regardless.
-            let windowed_min_value = self
-                .cache
-                .iter()
-                .skip_while(|entry| entry.timestamp < window_start)
-                .take_while(|entry| entry.timestamp <= window_end)
-                .map(|entry| entry.value.clone())
-                .fold(Y::globally_identity(), Y::and);
-
-            let final_value: Option<Y>;
-            let mut remove_task = false;
-
-            // we can finalize when cache has a ver
-            let t = if IS_ROSI {
-                self.cache
-                    .get_back()
-                    .map(|s| s.timestamp)
-                    .unwrap_or(Duration::ZERO)
-            } else {
-                current_time
-            };
-
-            // state-based logic
-            if t >= t_eval + self.max_lookahead {
-                // Case 1: Full window has passed. This is a final, "closed" value.
-                final_value = Some(windowed_min_value);
-                remove_task = true;
-            } else if IS_EAGER && windowed_min_value == Y::atomic_false() {
-                // Case 2: Eager short-circuit. Found "false" before window closed.
-                final_value = Some(windowed_min_value);
-                remove_task = true;
-            } else if IS_ROSI {
-                // Case 3: Intermediate ROSI. Window is still open.
-                // We must 'and' with the unknown future.
-                let intermediate_value = Y::and(windowed_min_value, Y::unknown());
-                final_value = Some(intermediate_value);
-                // DO NOT remove task, it's not finished
-            } else {
-                // Case 4: Cannot evaluate yet (e.g., bool/f64 and window is still open)
-                // Since the buffer is time-ordered, we stop.
-                break;
-            }
-
-            if let Some(val) = final_value {
-                output_robustness.push(Step::new("output", val, t_eval));
-            }
-
-            if remove_task {
-                tasks_to_remove.push(t_eval);
-            }
-        }
+        let new_outputs = process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
+            &mut self.eval_buffer,
+            &mut self.cache,
+            &self.interval,
+            self.max_lookahead,
+            current_time,
+            Y::and,
+            Y::globally_identity,
+            Y::atomic_false(),
+        );
+        output_robustness.extend(new_outputs);
 
         // 3. Prune the cache and buffer
         let protected_ts = self.eval_buffer.first().copied().unwrap_or(Duration::ZERO);
         let lookahead = self.get_max_lookahead();
         guarded_prune(&mut self.cache, lookahead, protected_ts);
-        for t in tasks_to_remove {
-            self.eval_buffer.remove(&t);
-        }
 
         output_robustness
     }
@@ -943,6 +819,67 @@ mod sparse_timestamp_tests {
                     );
                 }
                 _ => panic!("unexpected output at t={}", step.timestamp.as_secs()),
+            }
+        }
+    }
+
+    #[test]
+    fn overlapping_intervals() {
+        // test formula phi_G = G[0,2] x > 0 and phi_F = F[0,2] x>0
+        // vals = 1,2,3 ts=1,2,3.5
+        // at t=3.5, the output for t_eval=1s must be finalized to 1 (for phi_G) and to 2 for phi_F
+        let interval = TimeInterval {
+            start: secs(0),
+            end: secs(2),
+        };
+        let atomic_G = Atomic::<f64>::new_greater_than("x", 0.0);
+        let atomic_F = Atomic::<f64>::new_greater_than("x", 0.0);
+        let mut globally = Globally::<f64, RingBuffer<f64>, f64, false, false>::new(
+            interval,
+            Box::new(atomic_G),
+            None,
+            None,
+        );
+        let mut eventually = Eventually::<f64, RingBuffer<f64>, f64, false, false>::new(
+            interval,
+            Box::new(atomic_F),
+            None,
+            None,
+        );
+        let signal_values = vec![1.0, 2.0, 3.0];
+        let signal_timestamps = vec![1000, 2000, 3500];
+
+        let signal: Vec<_> = signal_values
+            .into_iter()
+            .zip(signal_timestamps)
+            .map(|(val, ts)| step!("x", val, Duration::from_millis(ts)))
+            .collect();
+
+        for s in &signal {
+            let globally_out = globally.update(s);
+            let eventually_out = eventually.update(s);
+
+            if s.timestamp == Duration::from_millis(3500) {
+                let glob_val = globally_out
+                    .iter()
+                    .find(|o| o.timestamp == Duration::from_millis(1000))
+                    .unwrap_or_else(|| panic!("no output for t_eval=1000"))
+                    .value;
+                let ev_val = eventually_out
+                    .iter()
+                    .find(|o| o.timestamp == Duration::from_millis(1000))
+                    .unwrap_or_else(|| panic!("no output for t_eval=1000"))
+                    .value;
+                assert!(
+                    (glob_val - 1.0).abs() < 1e-9,
+                    "t_eval=1000 expected 1.0, got {}",
+                    glob_val
+                );
+                assert!(
+                    (ev_val - 2.0).abs() < 1e-9,
+                    "t_eval=1000 expected 2.0, got {}",
+                    ev_val
+                );
             }
         }
     }
