@@ -25,10 +25,11 @@ use std::time::Duration;
 /// Callers are responsible for passing the appropriate subset of `eval_buffer`.
 fn process_eval_buffer<C, Y, const IS_EAGER: bool, const IS_ROSI: bool>(
     eval_buffer: &mut BTreeSet<Duration>,
-    cache: &mut C,
+    cache: &C,
     interval: &TimeInterval,
     max_lookahead: Duration,
     current_time: Duration,
+    upper_bound: Option<Duration>,
     combine: impl Fn(Y, Y) -> Y,
     identity: impl Fn() -> Y,
     eager_short_circuit: Y,
@@ -41,15 +42,13 @@ where
     let mut tasks_to_remove = Vec::new();
 
     for &t_eval in eval_buffer.iter() {
-        let t = if IS_ROSI {
-            cache
-                .get_back()
-                .map(|s| s.timestamp)
-                .unwrap_or(Duration::ZERO)
-        } else {
-            current_time
-        };
-        let time_finalized = t >= t_eval + max_lookahead;
+        if let Some(bound) = upper_bound {
+            if t_eval >= bound {
+                break;
+            }
+        }
+
+        let time_finalized = current_time >= t_eval + max_lookahead;
 
         if !time_finalized && !IS_EAGER && !IS_ROSI {
             break;
@@ -67,12 +66,10 @@ where
                 .reduce(|a, b| combine(a, b))
                 .unwrap_or_else(&identity)
         } else {
-            let drop_count = cache.partition_point(|f| f.timestamp < window_start);
-            if drop_count > 0 {
-                cache.drain(0..drop_count);
-            }
             cache
-                .get_front()
+                .iter()
+                .skip_while(|f| f.timestamp < window_start)
+                .next()
                 .map(|entry| entry.value.clone())
                 .unwrap_or_else(&identity)
         };
@@ -204,34 +201,21 @@ where
         let mut output_robustness = Vec::new();
         let current_time = step.timestamp;
 
-        // Phase A (non-RoSI only): finalize windows that close strictly before the
+        // Phase A: finalize windows that close strictly before the
         // first new sub-step, against the current (pre-Phase-B) cache.
-        // RoSI uses a non-destructive cache scan so Phase C alone suffices.
-        if !IS_ROSI {
-            if let Some(first) = sub_robustness_vec.first() {
-                if let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead) {
-                    let rest = self.eval_buffer.split_off(&split_key);
-                    let mut phase_a = std::mem::replace(&mut self.eval_buffer, rest);
-                    if !phase_a.is_empty() {
-                        // println!(
-                        //     "current_time: {:?} - Phase A: finalizing windows up to {:?} with eval_buffer={:?} and cache=",
-                        //     current_time, first.timestamp, &phase_a
-                        // );
-                        // for c in self.cache.iter() {
-                        //     println!("  cache entry: {:?}", c);
-                        // }
-                        output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
-                            &mut phase_a,
-                            &mut self.cache,
-                            &self.interval,
-                            self.max_lookahead,
-                            first.timestamp,
-                            Y::or,
-                            Y::eventually_identity,
-                            Y::atomic_true(),
-                        ));
-                    }
-                }
+        if let Some(first) = sub_robustness_vec.first() {
+            if let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead) {
+                output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
+                    &mut self.eval_buffer,
+                    &self.cache,
+                    &self.interval,
+                    self.max_lookahead,
+                    first.timestamp,
+                    Some(split_key),
+                    Y::or,
+                    Y::eventually_identity,
+                    Y::atomic_true(),
+                ));
             }
         }
 
@@ -266,19 +250,21 @@ where
         }
 
         // Phase C: process remaining eval_buffer entries with the updated cache.
-        // println!(
-        //     "current_time: {:?} - Phase C: processing eval_buffer={:?} with cache=",
-        //     current_time, &self.eval_buffer
-        // );
-        // for c in self.cache.iter() {
-        //     println!("  cache entry: {:?}", c);
-        // }
+        let phase_c_time = if IS_ROSI {
+            self.cache
+                .get_back()
+                .map(|s| s.timestamp)
+                .unwrap_or(Duration::ZERO)
+        } else {
+            current_time
+        };
         output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
             &mut self.eval_buffer,
-            &mut self.cache,
+            &self.cache,
             &self.interval,
             self.max_lookahead,
-            current_time,
+            phase_c_time,
+            None,
             Y::or,
             Y::eventually_identity,
             Y::atomic_true(),
@@ -387,26 +373,21 @@ where
         let mut output_robustness = Vec::new();
         let current_time = step.timestamp;
 
-        // Phase A (non-RoSI only): finalize windows that close strictly before the
-        // first new sub-step, against the current cache.
-        if !IS_ROSI {
-            if let Some(first) = sub_robustness_vec.first() {
-                if let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead) {
-                    let rest = self.eval_buffer.split_off(&split_key);
-                    let mut phase_a = std::mem::replace(&mut self.eval_buffer, rest);
-                    if !phase_a.is_empty() {
-                        output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
-                            &mut phase_a,
-                            &mut self.cache,
-                            &self.interval,
-                            self.max_lookahead,
-                            first.timestamp,
-                            Y::and,
-                            Y::globally_identity,
-                            Y::atomic_false(),
-                        ));
-                    }
-                }
+        // Phase A: finalize windows that close strictly before the
+        // first new sub-step, against the current (pre-Phase-B) cache.
+        if let Some(first) = sub_robustness_vec.first() {
+            if let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead) {
+                output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
+                    &mut self.eval_buffer,
+                    &self.cache,
+                    &self.interval,
+                    self.max_lookahead,
+                    first.timestamp,
+                    Some(split_key),
+                    Y::and,
+                    Y::globally_identity,
+                    Y::atomic_false(),
+                ));
             }
         }
 
@@ -441,12 +422,21 @@ where
         }
 
         // Phase C: process remaining eval_buffer entries with the updated cache.
+        let phase_c_time = if IS_ROSI {
+            self.cache
+                .get_back()
+                .map(|s| s.timestamp)
+                .unwrap_or(Duration::ZERO)
+        } else {
+            current_time
+        };
         output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
             &mut self.eval_buffer,
-            &mut self.cache,
+            &self.cache,
             &self.interval,
             self.max_lookahead,
-            current_time,
+            phase_c_time,
+            None,
             Y::and,
             Y::globally_identity,
             Y::atomic_false(),
@@ -691,6 +681,10 @@ mod sparse_timestamp_tests {
         Duration::from_secs(s)
     }
 
+    fn millis(ms: u64) -> Duration {
+        Duration::from_millis(ms)
+    }
+
     fn g02_globally_f64() -> Globally<f64, RingBuffer<f64>, f64, false, false> {
         let interval = TimeInterval {
             start: secs(0),
@@ -727,13 +721,23 @@ mod sparse_timestamp_tests {
         ]
     }
 
-    fn find_output<Y>(outputs: &[Step<Y>], ts: u64) -> Y
+    fn find_output_secs<Y>(outputs: &[Step<Y>], ts: u64) -> Y
     where
         Y: Copy,
     {
         outputs
             .iter()
             .find(|s| s.timestamp == secs(ts))
+            .unwrap_or_else(|| panic!("no output for t_eval={ts}"))
+            .value
+    }
+    fn find_output_millis<Y>(outputs: &[Step<Y>], ts: u64) -> Y
+    where
+        Y: Copy,
+    {
+        outputs
+            .iter()
+            .find(|s| s.timestamp == millis(ts))
             .unwrap_or_else(|| panic!("no output for t_eval={ts}"))
             .value
     }
@@ -782,37 +786,37 @@ mod sparse_timestamp_tests {
                 // at 2 f64 emits for 0, and rosi agrees in bounds
                 2 => {
                     assert!(
-                        (find_output(&outputs_f64, 0) - 12.0).abs() < 1e-9,
+                        (find_output_secs(&outputs_f64, 0) - 12.0).abs() < 1e-9,
                         "t_eval=0 expected 12.0, got {}",
-                        find_output(&outputs_f64, 0)
+                        find_output_secs(&outputs_f64, 0)
                     );
-                    let rosi_val = find_output(&outputs_rosi, 0);
+                    let rosi_val = find_output_secs(&outputs_rosi, 0);
                     assert!(
                         rosi_val.0 == 12.0 && rosi_val.1 == 12.0,
                         "t_eval=0 expected ROSI bounds to contain 12.0, got {:?}",
                         rosi_val
                     );
                     assert!(
-                        find_output(&outputs_eager_qual, 0),
+                        find_output_secs(&outputs_eager_qual, 0),
                         "t_eval=0 expected eager qual to be true, got {}",
-                        find_output(&outputs_eager_qual, 0)
+                        find_output_secs(&outputs_eager_qual, 0)
                     )
                 }
                 // at 5 f64 emits for 1 and 2, and rosi agrees in bounds
                 5 => {
                     assert!(
-                        (find_output(&outputs_f64, 1) - 12.0).abs() < 1e-9,
+                        (find_output_secs(&outputs_f64, 1) - 12.0).abs() < 1e-9,
                         "t_eval=1 expected 12.0, got {}",
-                        find_output(&outputs_f64, 1)
+                        find_output_secs(&outputs_f64, 1)
                     );
                     assert!(
-                        (find_output(&outputs_f64, 2) - 13.0).abs() < 1e-9,
+                        (find_output_secs(&outputs_f64, 2) - 13.0).abs() < 1e-9,
                         "t_eval=2 expected 13.0, got {}",
-                        find_output(&outputs_f64, 2)
+                        find_output_secs(&outputs_f64, 2)
                     );
-                    let rosi_val_1 = find_output(&outputs_rosi, 1);
-                    let rosi_val_2 = find_output(&outputs_rosi, 2);
-                    let rosi_val_5 = find_output(&outputs_rosi, 5);
+                    let rosi_val_1 = find_output_secs(&outputs_rosi, 1);
+                    let rosi_val_2 = find_output_secs(&outputs_rosi, 2);
+                    let rosi_val_5 = find_output_secs(&outputs_rosi, 5);
                     assert!(
                         rosi_val_1.0 == 12.0 && rosi_val_1.1 == 12.0,
                         "t_eval=1 expected ROSI bounds to contain 12.0, got {:?}",
@@ -824,20 +828,20 @@ mod sparse_timestamp_tests {
                         rosi_val_2
                     );
                     assert!(
-                        find_output(&outputs_eager_qual, 1),
+                        find_output_secs(&outputs_eager_qual, 1),
                         "t_eval=1 expected eager qual to be true, got {}",
-                        find_output(&outputs_eager_qual, 1)
+                        find_output_secs(&outputs_eager_qual, 1)
                     );
                     assert!(
-                        find_output(&outputs_eager_qual, 2),
+                        find_output_secs(&outputs_eager_qual, 2),
                         "t_eval=2 expected eager qual to be true, got {}",
-                        find_output(&outputs_eager_qual, 2)
+                        find_output_secs(&outputs_eager_qual, 2)
                     );
                     // it sees the -1.0 at t=5 and finalizes to false immediately, without waiting for t=10
                     assert!(
-                        !find_output(&outputs_eager_qual, 5),
+                        !find_output_secs(&outputs_eager_qual, 5),
                         "t_eval=5 expected eager qual to be false, got {}",
-                        find_output(&outputs_eager_qual, 5)
+                        find_output_secs(&outputs_eager_qual, 5)
                     );
                     // should agree with rosi upper bound being negative already at t=5, even if it can't finalize yet
                     assert!(
@@ -848,11 +852,11 @@ mod sparse_timestamp_tests {
                 }
                 10 => {
                     assert!(
-                        (find_output(&outputs_f64, 5) + 1.0).abs() < 1e-9,
+                        (find_output_secs(&outputs_f64, 5) + 1.0).abs() < 1e-9,
                         "t_eval=5 expected -1.0, got {}",
-                        find_output(&outputs_f64, 5)
+                        find_output_secs(&outputs_f64, 5)
                     );
-                    let rosi_val = find_output(&outputs_rosi, 5);
+                    let rosi_val = find_output_secs(&outputs_rosi, 5);
                     assert!(
                         rosi_val.0 == -1.0 && rosi_val.1 == -1.0,
                         "t_eval=5 expected ROSI bounds to contain -1.0, got {:?}",
@@ -860,9 +864,9 @@ mod sparse_timestamp_tests {
                     );
                     // eager can short-circuit to false for t=10 already
                     assert!(
-                        !find_output(&outputs_eager_qual, 10),
+                        !find_output_secs(&outputs_eager_qual, 10),
                         "t_eval=5 expected eager qual to be false, got {}",
-                        find_output(&outputs_eager_qual, 10)
+                        find_output_secs(&outputs_eager_qual, 10)
                     );
                 }
                 _ => panic!("unexpected output at t={}", step.timestamp.as_secs()),
@@ -892,6 +896,27 @@ mod sparse_timestamp_tests {
             None,
             None,
         );
+        let mut globally_rosi =
+            Globally::<f64, RingBuffer<RobustnessInterval>, RobustnessInterval, false, true>::new(
+                interval,
+                Box::new(Atomic::<RobustnessInterval>::new_greater_than("x", 0.0)),
+                None,
+                None,
+            );
+
+        let mut eventually_rosi = Eventually::<
+            f64,
+            RingBuffer<RobustnessInterval>,
+            RobustnessInterval,
+            false,
+            true,
+        >::new(
+            interval,
+            Box::new(Atomic::<RobustnessInterval>::new_greater_than("x", 0.0)),
+            None,
+            None,
+        );
+
         let signal_values = vec![1.0, 2.0, 3.0];
         let signal_timestamps = vec![1000, 2000, 3500];
 
@@ -904,27 +929,78 @@ mod sparse_timestamp_tests {
         for s in &signal {
             let globally_out = globally.update(s);
             let eventually_out = eventually.update(s);
+            let globally_rosi_out = globally_rosi.update(s);
+            let eventually_rosi_out = eventually_rosi.update(s);
 
-            if s.timestamp == Duration::from_millis(1000)
-                || s.timestamp == Duration::from_millis(2000)
-            {
+            if s.timestamp == Duration::from_millis(1000) {
+                // no delayed verdicts yet
                 assert!(
                     globally_out.is_empty() && eventually_out.is_empty(),
                     "t_eval={} expected no output, got {:?}",
                     s.timestamp.as_millis(),
                     globally_out
                 );
+                // rosi: G has -inf, 1 and F has 1, +inf for t=1s
+                let glob_rosi_val = find_output_millis(&globally_rosi_out, 1000);
+                let even_rosi_val = find_output_millis(&eventually_rosi_out, 1000);
+                assert!(
+                    glob_rosi_val.0 == f64::NEG_INFINITY && glob_rosi_val.1 == 1.0,
+                    "t_eval=1000 expected G ROSI bounds to be [-inf, 1.0], got {:?}",
+                    glob_rosi_val
+                );
+                assert!(
+                    even_rosi_val.0 == 1.0 && even_rosi_val.1 == f64::INFINITY,
+                    "t_eval=1000 expected F ROSI bounds to be [1.0, +inf], got {:?}",
+                    even_rosi_val
+                );
+                assert!(
+                    globally_rosi_out.len() == 1 && eventually_rosi_out.len() == 1,
+                    "t_eval=1000 expected exactly one ROSI output for G and F, got {:?} and {:?}",
+                    globally_rosi_out,
+                    eventually_rosi_out
+                );
+            } else if s.timestamp == Duration::from_millis(2000) {
+                // no delayed verdicts yet
+                assert!(
+                    globally_out.is_empty() && eventually_out.is_empty(),
+                    "t_eval={} expected no output, got {:?}",
+                    s.timestamp.as_millis(),
+                    globally_out
+                );
+                // rosi: G has -inf, 1, -inf,2 and F has 2, +inf, 2, +inf for t=1s and t=2s
+                let glob_rosi_val_1 = find_output_millis(&globally_rosi_out, 1000);
+                let glob_rosi_val_2 = find_output_millis(&globally_rosi_out, 2000);
+                let even_rosi_val_1 = find_output_millis(&eventually_rosi_out, 1000);
+                let even_rosi_val_2 = find_output_millis(&eventually_rosi_out, 2000);
+                assert!(
+                    glob_rosi_val_1.0 == f64::NEG_INFINITY && glob_rosi_val_1.1 == 1.0,
+                    "t_eval=1000 expected G ROSI bounds to be [-inf, 1.0], got {:?}",
+                    glob_rosi_val_1
+                );
+                assert!(
+                    glob_rosi_val_2.0 == f64::NEG_INFINITY && glob_rosi_val_2.1 == 2.0,
+                    "t_eval=2000 expected G ROSI bounds to be [-inf, 2.0], got {:?}",
+                    glob_rosi_val_2
+                );
+                assert!(
+                    even_rosi_val_1.0 == 2.0 && even_rosi_val_1.1 == f64::INFINITY,
+                    "t_eval=1000 expected F ROSI bounds to be [2.0, +inf], got {:?}",
+                    even_rosi_val_1
+                );
+                assert!(
+                    even_rosi_val_2.0 == 2.0 && even_rosi_val_2.1 == f64::INFINITY,
+                    "t_eval=2000 expected F ROSI bounds to be [2.0, +inf], got {:?}",
+                    even_rosi_val_2
+                );
+                assert!(
+                    globally_rosi_out.len() == 2 && eventually_rosi_out.len() == 2,
+                    "t_eval=2000 expected exactly two ROSI outputs for G and F, got {:?} and {:?}",
+                    globally_rosi_out,
+                    eventually_rosi_out
+                );
             } else if s.timestamp == Duration::from_millis(3500) {
-                let glob_val = globally_out
-                    .iter()
-                    .find(|o| o.timestamp == Duration::from_millis(1000))
-                    .unwrap_or_else(|| panic!("no output for t_eval=1000"))
-                    .value;
-                let ev_val = eventually_out
-                    .iter()
-                    .find(|o| o.timestamp == Duration::from_millis(1000))
-                    .unwrap_or_else(|| panic!("no output for t_eval=1000"))
-                    .value;
+                let glob_val = find_output_millis(&globally_out, 1000);
+                let ev_val = find_output_millis(&eventually_out, 1000);
                 assert!(
                     (glob_val - 1.0).abs() < 1e-9,
                     "t_eval=1000 expected 1.0, got {}",
@@ -935,85 +1011,51 @@ mod sparse_timestamp_tests {
                     "t_eval=1000 expected 2.0, got {}",
                     ev_val
                 );
+                // rosi: G has 1,1 -inf, 2 and -inf, 3 and F has 2,2, 3,+inf, 3,+inf for t=1s, t=2s and t=3.5s
+                let glob_rosi_val_1 = find_output_millis(&globally_rosi_out, 1000);
+                let glob_rosi_val_2 = find_output_millis(&globally_rosi_out, 2000);
+                let glob_rosi_val_3 = find_output_millis(&globally_rosi_out, 3500);
+                let even_rosi_val_1 = find_output_millis(&eventually_rosi_out, 1000);
+                let even_rosi_val_2 = find_output_millis(&eventually_rosi_out, 2000);
+                let even_rosi_val_3 = find_output_millis(&eventually_rosi_out, 3500);
+
+                assert!(
+                    glob_rosi_val_1.0 == 1.0 && glob_rosi_val_1.1 == 1.0,
+                    "t_eval=1000 expected G ROSI bounds to be [1.0, 1.0], got {:?}",
+                    glob_rosi_val_1
+                );
+                assert!(
+                    glob_rosi_val_2.0 == f64::NEG_INFINITY && glob_rosi_val_2.1 == 2.0,
+                    "t_eval=2000 expected G ROSI bounds to be [-inf, 2.0], got {:?}",
+                    glob_rosi_val_2
+                );
+                assert!(
+                    glob_rosi_val_3.0 == f64::NEG_INFINITY && glob_rosi_val_3.1 == 3.0,
+                    "t_eval=3500 expected G ROSI bounds to be [-inf, 3.0], got {:?}",
+                    glob_rosi_val_3
+                );
+                assert!(
+                    even_rosi_val_1.0 == 2.0 && even_rosi_val_1.1 == 2.0,
+                    "t_eval=1000 expected F ROSI bounds to be [2.0, 2.0], got {:?}",
+                    even_rosi_val_1
+                );
+                assert!(
+                    even_rosi_val_2.0 == 3.0 && even_rosi_val_2.1 == f64::INFINITY,
+                    "t_eval=2000 expected F ROSI bounds to be [3.0, +inf], got {:?}",
+                    even_rosi_val_2
+                );
+                assert!(
+                    even_rosi_val_3.0 == 3.0 && even_rosi_val_3.1 == f64::INFINITY,
+                    "t_eval=3500 expected F ROSI bounds to be [3.0, +inf], got {:?}",
+                    even_rosi_val_3
+                );
+                assert!(
+                    globally_rosi_out.len() == 3 && eventually_rosi_out.len() == 3,
+                    "t_eval=3500 expected exactly three ROSI outputs for G and F, got {:?} and {:?}",
+                    globally_rosi_out,
+                    eventually_rosi_out
+                );
             }
-        }
-    }
-    #[test]
-    fn overlapping_intervals_rosi() {
-        // test formula phi_G = G[0,2] x > 0 and phi_F = F[0,2] x>0
-        // vals = 1,2,3 ts=1,2,3.5
-        // at t=3.5, the output for t_eval=1s must be finalized to 1 (for phi_G) and to 2 for phi_F
-        let interval = TimeInterval {
-            start: secs(0),
-            end: secs(2),
-        };
-        let atomic_glob = Atomic::<RobustnessInterval>::new_greater_than("x", 0.0);
-        let atomic_even = Atomic::<RobustnessInterval>::new_greater_than("x", 0.0);
-        let mut globally = Globally::<
-            f64,
-            RingBuffer<RobustnessInterval>,
-            RobustnessInterval,
-            false,
-            true,
-        >::new(interval, Box::new(atomic_glob), None, None);
-        let mut eventually = Eventually::<
-            f64,
-            RingBuffer<RobustnessInterval>,
-            RobustnessInterval,
-            false,
-            true,
-        >::new(interval, Box::new(atomic_even), None, None);
-        let signal_values = vec![1.0, 2.0, 3.0];
-        let signal_timestamps = vec![1000, 2000, 3500];
-
-        let signal: Vec<_> = signal_values
-            .into_iter()
-            .zip(signal_timestamps)
-            .map(|(val, ts)| step!("x", val, Duration::from_millis(ts)))
-            .collect();
-
-        for s in &signal {
-            let globally_out = globally.update(s);
-            let eventually_out = eventually.update(s);
-
-            println!(
-                "t_eval={} globally_out={:?}, eventually_out={:?}",
-                s.timestamp.as_millis(),
-                globally_out,
-                eventually_out
-            );
-
-            // if s.timestamp == Duration::from_millis(1000)
-            //     || s.timestamp == Duration::from_millis(2000)
-            // {
-            //     assert!(
-            //         globally_out.is_empty() && eventually_out.is_empty(),
-            //         "t_eval={} expected no output, got {:?}",
-            //         s.timestamp.as_millis(),
-            //         globally_out
-            //     );
-            // } else if s.timestamp == Duration::from_millis(3500) {
-            //     let glob_val = globally_out
-            //         .iter()
-            //         .find(|o| o.timestamp == Duration::from_millis(1000))
-            //         .unwrap_or_else(|| panic!("no output for t_eval=1000"))
-            //         .value;
-            //     let ev_val = eventually_out
-            //         .iter()
-            //         .find(|o| o.timestamp == Duration::from_millis(1000))
-            //         .unwrap_or_else(|| panic!("no output for t_eval=1000"))
-            //         .value;
-            //     assert!(
-            //         (glob_val - 1.0).abs() < 1e-9,
-            //         "t_eval=1000 expected 1.0, got {}",
-            //         glob_val
-            //     );
-            //     assert!(
-            //         (ev_val - 2.0).abs() < 1e-9,
-            //         "t_eval=1000 expected 2.0, got {}",
-            //         ev_val
-            //     );
-            // }
         }
     }
 }
