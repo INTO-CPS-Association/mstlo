@@ -82,13 +82,13 @@ The following snippet demonstrates how to create a monitor for the STL formula $
 mstlo utilizes the Builder pattern to configure the monitor's formula, semantics, and algorithm before processing the data stream.
 
 ```rust
-use mstlo::step;
 use mstlo::monitor::{Rosi, StlMonitor};
+use mstlo::{step, stl};
 use std::time::Duration;
 
 fn main() {
     // Define a formula using the embedded DSL
-    let formula = mstlo::stl!(G[0, 2](x > 5.0));
+    let formula = stl! {G[0, 2](x > 5.0)};
 
     // Build the monitor
     let mut monitor = StlMonitor::builder()
