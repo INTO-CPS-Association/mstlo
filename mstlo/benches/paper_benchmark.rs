@@ -22,7 +22,8 @@ const DEFAULT_M_RUNS: usize = 50;
 const DEFAULT_WARMUP_RUNS: usize = 1;
 const DEFAULT_SIGNAL_PATH: &str = "benches/signal_generation/signals/signal_20000.csv";
 const DEFAULT_OUTPUT_CSV: &str = "benches/results/paper_native_benchmark_results_N=20000.csv";
-const DEFAULT_OUTPUT_RAW_CSV: &str = "benches/results/paper_native_benchmark_results_N=20000_raw.csv";
+const DEFAULT_OUTPUT_RAW_CSV: &str =
+    "benches/results/paper_native_benchmark_results_N=20000_raw.csv";
 
 #[derive(Copy, Clone, PartialEq)]
 enum SemanticsKind {
@@ -429,7 +430,10 @@ fn bench_item(
     let avg_total = total_time / m_runs as f64;
     let avg_per_sample = avg_total / n_samples as f64;
     let std_total = if m_runs > 1 {
-        let var = run_times.iter().map(|&t| (t - avg_total).powi(2)).sum::<f64>()
+        let var = run_times
+            .iter()
+            .map(|&t| (t - avg_total).powi(2))
+            .sum::<f64>()
             / (m_runs - 1) as f64;
         var.sqrt()
     } else {
@@ -439,27 +443,30 @@ fn bench_item(
     #[cfg(feature = "track-cache-size")]
     let avg_cache_size = total_cache_size_all_runs as f64 / (n_samples as f64 * m_runs as f64);
 
-    Some((BenchResult {
-        formula_id: item.formula_id,
-        spec: item.spec.clone(),
-        semantics: semantics.name(),
-        algorithm: "Incremental",
-        mode: "online",
-        n_samples,
-        m_runs,
-        avg_total_s: avg_total,
-        std_total_s: std_total,
-        avg_per_sample_s: avg_per_sample,
-        std_per_sample_s: std_per_sample,
-        avg_per_sample_us: avg_per_sample * 1e6,
-        std_per_sample_us: std_per_sample * 1e6,
-        #[cfg(feature = "track-cache-size")]
-        avg_cache_size,
-        #[cfg(feature = "track-cache-size")]
-        max_cache_size: max_cache_size_all_runs,
-        benchmark_kind: item.benchmark_kind,
-        interval_len: item.interval_len,
-    }, run_times))
+    Some((
+        BenchResult {
+            formula_id: item.formula_id,
+            spec: item.spec.clone(),
+            semantics: semantics.name(),
+            algorithm: "Incremental",
+            mode: "online",
+            n_samples,
+            m_runs,
+            avg_total_s: avg_total,
+            std_total_s: std_total,
+            avg_per_sample_s: avg_per_sample,
+            std_per_sample_s: std_per_sample,
+            avg_per_sample_us: avg_per_sample * 1e6,
+            std_per_sample_us: std_per_sample * 1e6,
+            #[cfg(feature = "track-cache-size")]
+            avg_cache_size,
+            #[cfg(feature = "track-cache-size")]
+            max_cache_size: max_cache_size_all_runs,
+            benchmark_kind: item.benchmark_kind,
+            interval_len: item.interval_len,
+        },
+        run_times,
+    ))
 }
 
 /// Builds a map of all formulas to test (formula_id -> spec string)
@@ -480,10 +487,7 @@ fn build_formulas_map() -> Vec<(usize, String)> {
     formula_id += 1;
 
     // phi3
-    formulas.push((
-        formula_id,
-        "(x < 0.5) U[0,1000] (x < 0.0)".to_string(),
-    ));
+    formulas.push((formula_id, "(x < 0.5) U[0,1000] (x < 0.0)".to_string()));
     formula_id += 1;
 
     // phi4
@@ -672,8 +676,10 @@ fn main() -> io::Result<()> {
     let warmup_runs = env_usize_or_default("WARMUP_RUNS", DEFAULT_WARMUP_RUNS);
     let signal_path = env_string_or_default("SIGNAL_PATH", DEFAULT_SIGNAL_PATH);
     let output_path = PathBuf::from(env_string_or_default("OUTPUT_CSV", DEFAULT_OUTPUT_CSV));
-    let raw_output_path =
-        PathBuf::from(env_string_or_default("OUTPUT_RAW_CSV", DEFAULT_OUTPUT_RAW_CSV));
+    let raw_output_path = PathBuf::from(env_string_or_default(
+        "OUTPUT_RAW_CSV",
+        DEFAULT_OUTPUT_RAW_CSV,
+    ));
     let selected_formula_ids = parse_formula_ids_from_env()?;
 
     let formulas = build_formulas_map();

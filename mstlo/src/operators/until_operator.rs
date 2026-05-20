@@ -333,7 +333,8 @@ where
         // IS_EAGER && IS_ROSI is the only mode where a non-front entry can be
         // short-circuited. Only call retain() when that actually happened.
         if tasks_to_remove.len() > n_front_to_pop {
-            self.eval_buffer.retain(|t| self.eval_buffer_set.contains(t));
+            self.eval_buffer
+                .retain(|t| self.eval_buffer_set.contains(t));
         }
 
         output_robustness

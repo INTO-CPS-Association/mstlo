@@ -13,22 +13,39 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
-/// Processes the evaluation buffer, computing windowed aggregations and emitting finalized outputs.
-fn process_eval_buffer<C, Y, const IS_EAGER: bool, const IS_ROSI: bool>(
-    eval_buffer: &mut VecDeque<Duration>,
-    eval_buffer_set: &mut HashSet<Duration>,
-    cache: &C,
-    interval: &TimeInterval,
+/// Time-window parameters passed to [`process_eval_buffer`].
+struct WindowParams<'a> {
+    interval: &'a TimeInterval,
     max_lookahead: Duration,
     current_time: Duration,
     upper_bound: Option<Duration>,
-    combine: impl Fn(Y, Y) -> Y,
-    identity: impl Fn() -> Y,
+}
+
+/// Operator-specific semantic parameters passed to [`process_eval_buffer`].
+struct OpParams<Y, FCombine, FIdentity>
+where
+    FCombine: Fn(Y, Y) -> Y,
+    FIdentity: Fn() -> Y,
+{
+    combine: FCombine,
+    identity: FIdentity,
     eager_short_circuit: Y,
+}
+
+/// Processes the evaluation buffer, computing windowed aggregations and emitting finalized outputs.
+#[allow(clippy::skip_while_next)]
+fn process_eval_buffer<C, Y, FCombine, FIdentity, const IS_EAGER: bool, const IS_ROSI: bool>(
+    eval_buffer: &mut VecDeque<Duration>,
+    eval_buffer_set: &mut HashSet<Duration>,
+    cache: &C,
+    window: WindowParams<'_>,
+    op: OpParams<Y, FCombine, FIdentity>,
 ) -> Vec<Step<Y>>
 where
     C: RingBufferTrait<Value = Y>,
     Y: RobustnessSemantics + Debug,
+    FCombine: Fn(Y, Y) -> Y,
+    FIdentity: Fn() -> Y,
 {
     let mut output_robustness = Vec::new();
     let mut tasks_to_remove = Vec::new();
@@ -38,21 +55,21 @@ where
 
     for &t_eval in eval_buffer.iter() {
         // cannot finalize after this bound
-        if let Some(bound) = upper_bound
+        if let Some(bound) = window.upper_bound
             && t_eval >= bound
         {
             break;
         }
 
         // time that a verdict can be finalized
-        let time_finalized = current_time >= t_eval + max_lookahead;
+        let time_finalized = window.current_time >= t_eval + window.max_lookahead;
 
         if !time_finalized && !IS_EAGER && !IS_ROSI {
             break;
         }
 
-        let window_start = t_eval + interval.start;
-        let window_end = t_eval + interval.end;
+        let window_start = t_eval + window.interval.start;
+        let window_end = t_eval + window.interval.end;
 
         // obtain the windowed value for this eval timestamp.  Behavior differs by mode:
         // - RoSI: aggregate all sub-steps in the window (if any) using combine(), or identity() if none.
@@ -63,8 +80,8 @@ where
                 .skip_while(|s| s.timestamp < window_start)
                 .take_while(|s| s.timestamp <= window_end)
                 .map(|s| s.value.clone())
-                .reduce(&combine)
-                .unwrap_or_else(&identity)
+                .reduce(&op.combine)
+                .unwrap_or_else(&op.identity)
         } else {
             cache
                 .iter()
@@ -72,17 +89,17 @@ where
                 .skip_while(|f| f.timestamp < window_start)
                 .next()
                 .map(|entry| entry.value.clone())
-                .unwrap_or_else(&identity)
+                .unwrap_or_else(&op.identity)
         };
 
-        if time_finalized || (IS_EAGER && windowed_value == eager_short_circuit) {
+        if time_finalized || (IS_EAGER && windowed_value == op.eager_short_circuit) {
             output_robustness.push(Step::new("output", windowed_value, t_eval));
             tasks_to_remove.push(t_eval);
             if time_finalized {
                 n_front_to_pop += 1;
             }
         } else if IS_ROSI {
-            let intermediate_value = combine(windowed_value, Y::unknown());
+            let intermediate_value = (op.combine)(windowed_value, Y::unknown());
             output_robustness.push(Step::new("output", intermediate_value, t_eval));
         } else {
             break;
@@ -229,17 +246,21 @@ where
         if let Some(first) = sub_robustness_vec.first()
             && let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead)
         {
-            output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
+            output_robustness.extend(process_eval_buffer::<_, _, _, _, IS_EAGER, IS_ROSI>(
                 &mut self.eval_buffer,
                 &mut self.eval_buffer_set,
                 &self.cache,
-                &self.interval,
-                self.max_lookahead,
-                first.timestamp,
-                Some(split_key),
-                Y::or,
-                Y::eventually_identity,
-                Y::atomic_true(),
+                WindowParams {
+                    interval: &self.interval,
+                    max_lookahead: self.max_lookahead,
+                    current_time: first.timestamp,
+                    upper_bound: Some(split_key),
+                },
+                OpParams {
+                    combine: Y::or,
+                    identity: Y::eventually_identity,
+                    eager_short_circuit: Y::atomic_true(),
+                },
             ));
         }
 
@@ -286,17 +307,21 @@ where
         } else {
             current_time
         };
-        output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
+        output_robustness.extend(process_eval_buffer::<_, _, _, _, IS_EAGER, IS_ROSI>(
             &mut self.eval_buffer,
             &mut self.eval_buffer_set,
             &self.cache,
-            &self.interval,
-            self.max_lookahead,
-            phase_c_time,
-            None,
-            Y::or,
-            Y::eventually_identity,
-            Y::atomic_true(),
+            WindowParams {
+                interval: &self.interval,
+                max_lookahead: self.max_lookahead,
+                current_time: phase_c_time,
+                upper_bound: None,
+            },
+            OpParams {
+                combine: Y::or,
+                identity: Y::eventually_identity,
+                eager_short_circuit: Y::atomic_true(),
+            },
         ));
 
         // Prune the cache.
@@ -413,17 +438,21 @@ where
         if let Some(first) = sub_robustness_vec.first()
             && let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead)
         {
-            output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
+            output_robustness.extend(process_eval_buffer::<_, _, _, _, IS_EAGER, IS_ROSI>(
                 &mut self.eval_buffer,
                 &mut self.eval_buffer_set,
                 &self.cache,
-                &self.interval,
-                self.max_lookahead,
-                first.timestamp,
-                Some(split_key),
-                Y::and,
-                Y::globally_identity,
-                Y::atomic_false(),
+                WindowParams {
+                    interval: &self.interval,
+                    max_lookahead: self.max_lookahead,
+                    current_time: first.timestamp,
+                    upper_bound: Some(split_key),
+                },
+                OpParams {
+                    combine: Y::and,
+                    identity: Y::globally_identity,
+                    eager_short_circuit: Y::atomic_false(),
+                },
             ));
         }
 
@@ -470,17 +499,21 @@ where
         } else {
             current_time
         };
-        output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
+        output_robustness.extend(process_eval_buffer::<_, _, _, _, IS_EAGER, IS_ROSI>(
             &mut self.eval_buffer,
             &mut self.eval_buffer_set,
             &self.cache,
-            &self.interval,
-            self.max_lookahead,
-            phase_c_time,
-            None,
-            Y::and,
-            Y::globally_identity,
-            Y::atomic_false(),
+            WindowParams {
+                interval: &self.interval,
+                max_lookahead: self.max_lookahead,
+                current_time: phase_c_time,
+                upper_bound: None,
+            },
+            OpParams {
+                combine: Y::and,
+                identity: Y::globally_identity,
+                eager_short_circuit: Y::atomic_false(),
+            },
         ));
 
         // Prune the cache.
