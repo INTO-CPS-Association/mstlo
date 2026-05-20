@@ -1,6 +1,6 @@
-use mstlo::monitor::{Algorithm, StlMonitor, semantic_markers};
 use mstlo::SynchronizationStrategy;
 use mstlo::Variables;
+use mstlo::monitor::{Algorithm, StlMonitor, semantic_markers};
 use mstlo::{step, stl};
 use std::time::Duration;
 
