@@ -9,22 +9,14 @@ use crate::core::{
     TimeInterval,
 };
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
 /// Processes the evaluation buffer, computing windowed aggregations and emitting finalized outputs.
-///
-/// The caller provides `combine` (either `Y::or` or `Y::and`) and `identity`
-/// (either `Y::eventually_identity` or `Y::globally_identity`) to specialize
-/// for `Eventually` or `Globally`. `eager_short_circuit` is `Y::atomic_true()`
-/// for `Eventually` and `Y::atomic_false()` for `Globally`.
-///
-/// For non-RoSI, `t = current_time`; `time_finalized` triggers a final output.
-/// For RoSI, `t = cache.get_back().timestamp`; non-finalized entries emit intermediates.
-/// Callers are responsible for passing the appropriate subset of `eval_buffer`.
 fn process_eval_buffer<C, Y, const IS_EAGER: bool, const IS_ROSI: bool>(
-    eval_buffer: &mut BTreeSet<Duration>,
+    eval_buffer: &mut VecDeque<Duration>,
+    eval_buffer_set: &mut HashSet<Duration>,
     cache: &C,
     interval: &TimeInterval,
     max_lookahead: Duration,
@@ -41,13 +33,18 @@ where
     let mut output_robustness = Vec::new();
     let mut tasks_to_remove = Vec::new();
 
+    // Iterate over eval_buffer in order, finalizing entries that are ready based on current_time and mode.
+    let mut n_front_to_pop: usize = 0;
+
     for &t_eval in eval_buffer.iter() {
-        if let Some(bound) = upper_bound {
-            if t_eval >= bound {
-                break;
-            }
+        // cannot finalize after this bound
+        if let Some(bound) = upper_bound
+            && t_eval >= bound
+        {
+            break;
         }
 
+        // time that a verdict can be finalized
         let time_finalized = current_time >= t_eval + max_lookahead;
 
         if !time_finalized && !IS_EAGER && !IS_ROSI {
@@ -57,17 +54,21 @@ where
         let window_start = t_eval + interval.start;
         let window_end = t_eval + interval.end;
 
+        // obtain the windowed value for this eval timestamp.  Behavior differs by mode:
+        // - RoSI: aggregate all sub-steps in the window (if any) using combine(), or identity() if none.
+        // - non-RoSI: find the first sub-step with timestamp ≥ window_start, take its value if it exists and is ≤ window_end, or identity() otherwise.
         let windowed_value = if IS_ROSI {
             cache
                 .iter()
                 .skip_while(|s| s.timestamp < window_start)
                 .take_while(|s| s.timestamp <= window_end)
                 .map(|s| s.value.clone())
-                .reduce(|a, b| combine(a, b))
+                .reduce(&combine)
                 .unwrap_or_else(&identity)
         } else {
             cache
                 .iter()
+                // .find(|f| f.timestamp >= window_start) // equivalent but wayyy slower than skip_while + next but clippy complains..
                 .skip_while(|f| f.timestamp < window_start)
                 .next()
                 .map(|entry| entry.value.clone())
@@ -77,6 +78,9 @@ where
         if time_finalized || (IS_EAGER && windowed_value == eager_short_circuit) {
             output_robustness.push(Step::new("output", windowed_value, t_eval));
             tasks_to_remove.push(t_eval);
+            if time_finalized {
+                n_front_to_pop += 1;
+            }
         } else if IS_ROSI {
             let intermediate_value = combine(windowed_value, Y::unknown());
             output_robustness.push(Step::new("output", intermediate_value, t_eval));
@@ -84,8 +88,21 @@ where
             break;
         }
     }
-    for t in tasks_to_remove {
-        eval_buffer.remove(&t);
+
+    // Remove finalized entries from the set.
+    for &t in &tasks_to_remove {
+        eval_buffer_set.remove(&t);
+    }
+    // Pop the finalized prefix from the front — these are always contiguous.
+    for _ in 0..n_front_to_pop {
+        eval_buffer.pop_front();
+    }
+    // IS_EAGER && IS_ROSI is the only mode where a non-front entry can be
+    // short-circuited (eager fires for a later t_eval while an earlier one is
+    // still emitting RoSI intermediates). Only call retain() when that
+    // actually happened — avoids an O(n) scan on every update.
+    if tasks_to_remove.len() > n_front_to_pop {
+        eval_buffer.retain(|t| eval_buffer_set.contains(t));
     }
 
     output_robustness
@@ -124,7 +141,8 @@ pub struct Eventually<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     interval: TimeInterval,
     operand: Box<dyn StlOperatorAndSignalIdentifier<T, Y>>,
     cache: C,
-    eval_buffer: BTreeSet<Duration>,
+    eval_buffer: VecDeque<Duration>,
+    eval_buffer_set: HashSet<Duration>,
     max_lookahead: Duration,
 }
 
@@ -137,7 +155,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
         interval: TimeInterval,
         operand: Box<dyn StlOperatorAndSignalIdentifier<T, Y>>,
         cache: Option<C>,
-        eval_buffer: Option<BTreeSet<Duration>>,
+        eval_buffer: Option<VecDeque<Duration>>,
     ) -> Self
     where
         T: Clone + 'static,
@@ -145,6 +163,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
         Y: RobustnessSemantics + 'static,
     {
         let max_lookahead = interval.end + operand.get_max_lookahead();
+        let eval_buffer = eval_buffer.unwrap_or_default();
+        let eval_buffer_set: HashSet<Duration> = eval_buffer.iter().copied().collect();
         #[cfg(feature = "track-cache-size")]
         {
             let mut c = cache.unwrap_or_else(|| C::new());
@@ -153,7 +173,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 interval,
                 operand,
                 cache: c,
-                eval_buffer: eval_buffer.unwrap_or_default(),
+                eval_buffer,
+                eval_buffer_set,
                 max_lookahead,
             }
         }
@@ -164,7 +185,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 interval,
                 operand,
                 cache: c,
-                eval_buffer: eval_buffer.unwrap_or_default(),
+                eval_buffer,
+                eval_buffer_set,
                 max_lookahead,
             }
         }
@@ -187,6 +209,7 @@ where
     fn reset(&mut self) {
         self.cache.clear();
         self.eval_buffer.clear();
+        self.eval_buffer_set.clear();
         self.operand.reset();
     }
 
@@ -203,31 +226,36 @@ where
 
         // Phase A: finalize windows that close strictly before the
         // first new sub-step, against the current (pre-Phase-B) cache.
-        if let Some(first) = sub_robustness_vec.first() {
-            if let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead) {
-                output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
-                    &mut self.eval_buffer,
-                    &self.cache,
-                    &self.interval,
-                    self.max_lookahead,
-                    first.timestamp,
-                    Some(split_key),
-                    Y::or,
-                    Y::eventually_identity,
-                    Y::atomic_true(),
-                ));
-            }
+        if let Some(first) = sub_robustness_vec.first()
+            && let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead)
+        {
+            output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
+                &mut self.eval_buffer,
+                &mut self.eval_buffer_set,
+                &self.cache,
+                &self.interval,
+                self.max_lookahead,
+                first.timestamp,
+                Some(split_key),
+                Y::or,
+                Y::eventually_identity,
+                Y::atomic_true(),
+            ));
         }
 
         // Phase B: register every new sub-step and update the Lemire cache.
+        // Use HashSet to deduplicate: RoSI can re-emit existing timestamps as
+        // refined verdicts, which must not create duplicate eval_buffer entries.
         for sub_step in sub_robustness_vec {
-            self.eval_buffer.insert(sub_step.timestamp);
+            if self.eval_buffer_set.insert(sub_step.timestamp) {
+                self.eval_buffer.push_back(sub_step.timestamp);
+            }
             if IS_ROSI {
                 if !self.cache.update_step(sub_step.clone()) {
                     let is_new_step = self
                         .cache
                         .get_back()
-                        .map_or(true, |b| sub_step.timestamp > b.timestamp);
+                        .is_none_or(|b| sub_step.timestamp > b.timestamp);
                     if is_new_step {
                         pop_dominated_values(
                             &mut self.cache,
@@ -260,6 +288,7 @@ where
         };
         output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
             &mut self.eval_buffer,
+            &mut self.eval_buffer_set,
             &self.cache,
             &self.interval,
             self.max_lookahead,
@@ -271,7 +300,7 @@ where
         ));
 
         // Prune the cache.
-        let protected_ts = self.eval_buffer.first().copied().unwrap_or(Duration::ZERO);
+        let protected_ts = self.eval_buffer.front().copied().unwrap_or(Duration::ZERO);
         guarded_prune(&mut self.cache, self.max_lookahead, protected_ts);
 
         output_robustness
@@ -296,7 +325,8 @@ pub struct Globally<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     interval: TimeInterval,
     operand: Box<dyn StlOperatorAndSignalIdentifier<T, Y> + 'static>,
     cache: C,
-    eval_buffer: BTreeSet<Duration>,
+    eval_buffer: VecDeque<Duration>,
+    eval_buffer_set: HashSet<Duration>,
     max_lookahead: Duration,
 }
 
@@ -309,7 +339,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
         interval: TimeInterval,
         operand: Box<dyn StlOperatorAndSignalIdentifier<T, Y>>,
         cache: Option<C>,
-        eval_buffer: Option<BTreeSet<Duration>>,
+        eval_buffer: Option<VecDeque<Duration>>,
     ) -> Self
     where
         T: Clone + 'static,
@@ -317,6 +347,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
         Y: RobustnessSemantics + 'static,
     {
         let max_lookahead = interval.end + operand.get_max_lookahead();
+        let eval_buffer = eval_buffer.unwrap_or_default();
+        let eval_buffer_set: HashSet<Duration> = eval_buffer.iter().copied().collect();
         #[cfg(feature = "track-cache-size")]
         {
             let mut c = cache.unwrap_or_else(|| C::new());
@@ -325,7 +357,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 interval,
                 operand,
                 cache: c,
-                eval_buffer: eval_buffer.unwrap_or_default(),
+                eval_buffer,
+                eval_buffer_set,
                 max_lookahead,
             }
         }
@@ -336,7 +369,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 interval,
                 operand,
                 cache: c,
-                eval_buffer: eval_buffer.unwrap_or_default(),
+                eval_buffer,
+                eval_buffer_set,
                 max_lookahead,
             }
         }
@@ -359,6 +393,7 @@ where
     fn reset(&mut self) {
         self.cache.clear();
         self.eval_buffer.clear();
+        self.eval_buffer_set.clear();
         self.operand.reset();
     }
 
@@ -375,31 +410,36 @@ where
 
         // Phase A: finalize windows that close strictly before the
         // first new sub-step, against the current (pre-Phase-B) cache.
-        if let Some(first) = sub_robustness_vec.first() {
-            if let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead) {
-                output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
-                    &mut self.eval_buffer,
-                    &self.cache,
-                    &self.interval,
-                    self.max_lookahead,
-                    first.timestamp,
-                    Some(split_key),
-                    Y::and,
-                    Y::globally_identity,
-                    Y::atomic_false(),
-                ));
-            }
+        if let Some(first) = sub_robustness_vec.first()
+            && let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead)
+        {
+            output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
+                &mut self.eval_buffer,
+                &mut self.eval_buffer_set,
+                &self.cache,
+                &self.interval,
+                self.max_lookahead,
+                first.timestamp,
+                Some(split_key),
+                Y::and,
+                Y::globally_identity,
+                Y::atomic_false(),
+            ));
         }
 
         // Phase B: register every new sub-step and update the Lemire cache.
+        // Use HashSet to deduplicate: RoSI can re-emit existing timestamps as
+        // refined verdicts, which must not create duplicate eval_buffer entries.
         for sub_step in sub_robustness_vec {
-            self.eval_buffer.insert(sub_step.timestamp);
+            if self.eval_buffer_set.insert(sub_step.timestamp) {
+                self.eval_buffer.push_back(sub_step.timestamp);
+            }
             if IS_ROSI {
                 if !self.cache.update_step(sub_step.clone()) {
                     let is_new_step = self
                         .cache
                         .get_back()
-                        .map_or(true, |b| sub_step.timestamp > b.timestamp);
+                        .is_none_or(|b| sub_step.timestamp > b.timestamp);
                     if is_new_step {
                         pop_dominated_values(
                             &mut self.cache,
@@ -432,6 +472,7 @@ where
         };
         output_robustness.extend(process_eval_buffer::<C, Y, IS_EAGER, IS_ROSI>(
             &mut self.eval_buffer,
+            &mut self.eval_buffer_set,
             &self.cache,
             &self.interval,
             self.max_lookahead,
@@ -443,7 +484,7 @@ where
         ));
 
         // Prune the cache.
-        let protected_ts = self.eval_buffer.first().copied().unwrap_or(Duration::ZERO);
+        let protected_ts = self.eval_buffer.front().copied().unwrap_or(Duration::ZERO);
         guarded_prune(&mut self.cache, self.max_lookahead, protected_ts);
 
         output_robustness
