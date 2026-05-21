@@ -14,8 +14,11 @@ To run the experiments, ensure you have the following installed:
 - Python 3.9 or higher
 - Python packages listed in `requirements.txt` (install via `pip install -r requirements.txt`)
 - RTAMT. This can be installed from source by following the instructions in their [GitHub repository](https://github.com/nickovic/rtamt). Follow their instructions, to make sure to build the CPP library and have it accessible in your Python environment.
+  - To match the build profile of mstlo, make sure to build RTAMT in release mode.
 
-Make also sure that the python bindings for mstlo are properly installed. You can do this by running `pip install -e .` in the `mstlo-python` directory.
+Make also sure that the python bindings for mstlo are installed in your Python environment. You can do this by running `pip install -e .` in the `mstlo-python` directory.
+
+`mstlo-python` builds the Rust code in release mode. To make sure that results are consistent, the bench profile used for the Rust benchmarks is set to inherit from the release profile (see [Cargo.toml](../Cargo.toml) in the root). The panic handling is set to `unwind`, but faster panic handling (e.g., `abort`) could be used for even better performance. However, this would make the benchmarks less comparable to the Python implementations, which do not have this option, as the benchmarking profile overrides the panic handling to `unwind`.
 
 ## Running the Experiments
 
