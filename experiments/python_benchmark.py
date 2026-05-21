@@ -113,8 +113,9 @@ def bench_formula(
             synchronization="None",
         )
         t0 = time.perf_counter()
+        _out = None
         for ts, val in signal:
-            monitor.update("x", val, ts)
+            _out = monitor.update("x", val, ts)
         t1 = time.perf_counter()
         if not is_warmup:
             elapsed = t1 - t0
@@ -207,9 +208,9 @@ def main() -> None:
     print(f"Averaging over M = {args.m_runs} runs (+ {args.warmup_runs} warmup)\n")
 
     semantics = [
-        "DelayedQuantitative",
-        "DelayedQualitative",
-        "EagerQualitative",
+        # "DelayedQuantitative",
+        # "DelayedQualitative",
+        # "EagerQualitative",
         "Rosi",
     ]
     algorithm = "Incremental"
