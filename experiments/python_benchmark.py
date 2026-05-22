@@ -208,9 +208,9 @@ def main() -> None:
     print(f"Averaging over M = {args.m_runs} runs (+ {args.warmup_runs} warmup)\n")
 
     semantics = [
-        # "DelayedQuantitative",
-        # "DelayedQualitative",
-        # "EagerQualitative",
+        "DelayedQuantitative",
+        "DelayedQualitative",
+        "EagerQualitative",
         "Rosi",
     ]
     algorithm = "Incremental"
