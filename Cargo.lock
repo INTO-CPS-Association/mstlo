@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "mstlo"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "dyn-clone",
@@ -625,7 +625,7 @@ dependencies = [
 
 [[package]]
 name = "mstlo-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -634,7 +634,7 @@ dependencies = [
 
 [[package]]
 name = "mstlo-python"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mstlo",
  "pyo3",

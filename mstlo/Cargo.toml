@@ -1,6 +1,6 @@
 [package]
 name = "mstlo"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A Rust library for online monitoring of Signal Temporal Logic (STL) specifications."
 license-file = "../LICENSE"
