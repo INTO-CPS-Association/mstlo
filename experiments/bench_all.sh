@@ -53,7 +53,7 @@ python "$SCRIPT_DIR/rtamt_benchmark.py" \
 	cd "$PROJECT_ROOT/mstlo" || exit 1
 	
 	# run first to measure cache sizes
-	WARMUP_RUNS=$WARMUP_RUNS M_RUNS=1 FORMULA_IDS="1,2,3,4" SIGNAL_PATH="$SIGNAL_FILE" OUTPUT_CSV="$CACHE_SIZE_RESULTS" cargo bench --bench paper_benchmark --features track-cache-size
+	WARMUP_RUNS=0 M_RUNS=1 FORMULA_IDS="1,2,3,4" SIGNAL_PATH="$SIGNAL_FILE" OUTPUT_CSV="$CACHE_SIZE_RESULTS" cargo bench --bench paper_benchmark --features track-cache-size
 
 	# run for performance comparison
 	WARMUP_RUNS=$WARMUP_RUNS M_RUNS=$M_RUNS SIGNAL_PATH="$SIGNAL_FILE" OUTPUT_CSV="$NATIVE_RESULTS" OUTPUT_RAW_CSV="$NATIVE_RESULTS_RAW" cargo bench --bench paper_benchmark
@@ -91,7 +91,9 @@ python "$SCRIPT_DIR/rtamt_benchmark.py" \
         --csv-a "$NATIVE_RESULTS_RAW" \
         --csv-b "$PY_RESULTS_RAW" \
         --label-a "native" --label-b "python" \
-        --group-by "semantics" \
+        --group-by "formula_id" \
+		--filter-a "formula_id in [1, 2, 3, 4]" \
+		--filter-b "formula_id in [1, 2, 3, 4]" \
         --output "$OUTPUT_DIR/data_analysis/mwu/native_vs_python_mwu.csv"
 
 	# mstlo plots
