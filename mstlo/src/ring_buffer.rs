@@ -95,6 +95,12 @@ pub trait RingBufferTrait {
     /// Returns an iterator over all steps from oldest to newest.
     fn iter<'a>(&'a self) -> Self::Iter<'a>;
 
+    fn partition_point<P>(&self, pred: P) -> usize
+    where
+        P: FnMut(&Step<Self::Value>) -> bool;
+
+    fn drain(&mut self, range: std::ops::Range<usize>);
+
     #[cfg(feature = "track-cache-size")]
     /// Enables or disables global cache size tracking for this specific buffer.
     fn set_tracked(&mut self, tracked: bool);
@@ -166,6 +172,24 @@ where
     /// Returns an iterator over all stored steps from oldest to newest.
     pub fn iter(&self) -> std::collections::vec_deque::Iter<'_, Step<T>> {
         self.steps.iter()
+    }
+
+    /// Returns the index of the first step for which `pred` returns `false`.
+    pub fn partition_point<P>(&self, mut pred: P) -> usize
+    where
+        P: FnMut(&Step<T>) -> bool,
+    {
+        self.steps.partition_point(|step| pred(step))
+    }
+
+    /// Removes steps in the specified index range, updating the global cache counter if tracked.
+    pub fn drain(&mut self, range: std::ops::Range<usize>) {
+        #[cfg(feature = "track-cache-size")]
+        if self.is_tracked {
+            let drain_count = range.end.saturating_sub(range.start);
+            GLOBAL_CACHE_SIZE.fetch_sub(drain_count, Ordering::Relaxed);
+        }
+        self.steps.drain(range);
     }
 }
 
@@ -263,6 +287,17 @@ where
 
     fn iter<'a>(&'a self) -> Self::Iter<'a> {
         self.iter()
+    }
+
+    fn partition_point<P>(&self, pred: P) -> usize
+    where
+        P: FnMut(&Step<Self::Value>) -> bool,
+    {
+        self.partition_point(pred)
+    }
+
+    fn drain(&mut self, range: std::ops::Range<usize>) {
+        self.drain(range)
     }
 
     #[cfg(feature = "track-cache-size")]

@@ -9,107 +9,143 @@ use crate::core::{
     TimeInterval,
 };
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
-/// Returns `true` if it is safe to evict the cache entry at `back_ts` in favour
-/// of a new entry arriving at `new_ts`.
-///
-/// Lemire back-eviction is only valid when every pending evaluation task whose
-/// window contains `back_ts` also contains `new_ts`.  Evicting prematurely
-/// removes an entry that a pending task still needs, which corrupts the result.
-///
-/// The check uses a sufficient O(1) condition based solely on the *oldest*
-/// pending task (the tightest constraint in the evaluation buffer):
-///
-/// * **Condition A** – `oldest + b ≥ new_ts`: the oldest pending task's window
-///   right-edge still reaches `new_ts`, so `new_ts` is inside every pending
-///   window.  Safe to evict.
-/// * **Condition B** – `oldest > back_ts − a`: even the oldest pending task's
-///   window starts after `back_ts`, meaning no pending window contains
-///   `back_ts` at all.  Safe to evict.
-///
-/// If neither condition holds, eviction is conservatively deferred.  Any entry
-/// retained this way is a true minimum/maximum candidate for some still-open
-/// window and will be cleaned up by `guarded_prune` once no longer needed.
-fn is_lemire_eviction_safe(
-    back_ts: Duration,
-    new_ts: Duration,
-    interval: &TimeInterval,
-    eval_buffer: &BTreeSet<Duration>,
-) -> bool {
-    let Some(&oldest) = eval_buffer.first() else {
-        return true; // No pending evaluations — unconditionally safe.
-    };
-    // Condition A: oldest + b >= new_ts  <=>  oldest >= new_ts - b
-    if oldest >= new_ts.saturating_sub(interval.end) {
-        return true;
+/// Time-window parameters passed to [`process_eval_buffer`].
+struct WindowParams<'a> {
+    interval: &'a TimeInterval,
+    max_lookahead: Duration,
+    current_time: Duration,
+    upper_bound: Option<Duration>,
+}
+
+/// Operator-specific semantic parameters passed to [`process_eval_buffer`].
+struct OpParams<Y, FCombine, FIdentity>
+where
+    FCombine: Fn(Y, Y) -> Y,
+    FIdentity: Fn() -> Y,
+{
+    combine: FCombine,
+    identity: FIdentity,
+    eager_short_circuit: Y,
+}
+
+/// Processes the evaluation buffer, computing windowed aggregations and emitting finalized outputs.
+#[allow(clippy::skip_while_next)]
+fn process_eval_buffer<C, Y, FCombine, FIdentity, const IS_EAGER: bool, const IS_ROSI: bool>(
+    eval_buffer: &mut VecDeque<Duration>,
+    eval_buffer_set: &mut HashSet<Duration>,
+    cache: &C,
+    window: WindowParams<'_>,
+    op: OpParams<Y, FCombine, FIdentity>,
+) -> Vec<Step<Y>>
+where
+    C: RingBufferTrait<Value = Y>,
+    Y: RobustnessSemantics + Debug,
+    FCombine: Fn(Y, Y) -> Y,
+    FIdentity: Fn() -> Y,
+{
+    let mut output_robustness = Vec::new();
+    let mut tasks_to_remove = Vec::new();
+
+    // Iterate over eval_buffer in order, finalizing entries that are ready based on current_time and mode.
+    let mut n_front_to_pop: usize = 0;
+
+    for &t_eval in eval_buffer.iter() {
+        // cannot finalize after this bound
+        if let Some(bound) = window.upper_bound
+            && t_eval >= bound
+        {
+            break;
+        }
+
+        // time that a verdict can be finalized
+        let time_finalized = window.current_time >= t_eval + window.max_lookahead;
+
+        if !time_finalized && !IS_EAGER && !IS_ROSI {
+            break;
+        }
+
+        let window_start = t_eval + window.interval.start;
+        let window_end = t_eval + window.interval.end;
+
+        // obtain the windowed value for this eval timestamp.  Behavior differs by mode:
+        // - RoSI: aggregate all sub-steps in the window (if any) using combine(), or identity() if none.
+        // - non-RoSI: find the first sub-step with timestamp ≥ window_start, take its value if it exists and is ≤ window_end, or identity() otherwise.
+        let windowed_value = if IS_ROSI {
+            cache
+                .iter()
+                .skip_while(|s| s.timestamp < window_start)
+                .take_while(|s| s.timestamp <= window_end)
+                .map(|s| s.value.clone())
+                .reduce(&op.combine)
+                .unwrap_or_else(&op.identity)
+        } else {
+            cache
+                .iter()
+                // .find(|f| f.timestamp >= window_start) // equivalent but wayyy slower than skip_while + next but clippy complains..
+                .skip_while(|f| f.timestamp < window_start)
+                .next()
+                .map(|entry| entry.value.clone())
+                .unwrap_or_else(&op.identity)
+        };
+
+        if time_finalized || (IS_EAGER && windowed_value == op.eager_short_circuit) {
+            output_robustness.push(Step::new("output", windowed_value, t_eval));
+            tasks_to_remove.push(t_eval);
+            if time_finalized {
+                n_front_to_pop += 1;
+            }
+        } else if IS_ROSI {
+            let intermediate_value = (op.combine)(windowed_value, Y::unknown());
+            output_robustness.push(Step::new("output", intermediate_value, t_eval));
+        } else {
+            break;
+        }
     }
-    // Condition B: oldest > back_ts - a
-    if oldest > back_ts.saturating_sub(interval.start) {
-        return true;
+
+    // Remove finalized entries from the set.
+    for &t in &tasks_to_remove {
+        eval_buffer_set.remove(&t);
     }
-    false
+    // Pop the finalized prefix from the front — these are always contiguous.
+    for _ in 0..n_front_to_pop {
+        eval_buffer.pop_front();
+    }
+    // IS_EAGER && IS_ROSI is the only mode where a non-front entry can be
+    // short-circuited (eager fires for a later t_eval while an earlier one is
+    // still emitting RoSI intermediates). Only call retain() when that
+    // actually happened — avoids an O(n) scan on every update.
+    if tasks_to_remove.len() > n_front_to_pop {
+        eval_buffer.retain(|t| eval_buffer_set.contains(t));
+    }
+
+    output_robustness
 }
 
 /// Removes dominated values from the back of a monotone cache (Lemire
-/// sliding min/max), guarded by an O(1) safety check.
+/// sliding min/max).
 ///
 /// `is_max = true` is used for `Eventually`; `is_max = false` for `Globally`.
-///
-/// Each entry is pushed at most once and evicted at most once, so the total
-/// cost across all insertions is O(n) — amortised O(1) per step.
-///
-/// The safety gate ensures that an entry is only evicted once every pending
-/// evaluation task whose window covers that entry also covers the new entry.
-/// For dense (gap = 1) timestamps the gate always passes, so Lemire behaves
-/// exactly as before.  For sparse timestamps where a gap exceeds the window
-/// width the gate blocks the eviction; the entry stays and is later cleaned
-/// up by `guarded_prune`.  The window query uses a bounded scan
-/// (`skip_while`/`take_while`) so it remains correct in both cases: with a
-/// healthy Lemire deque the scan terminates at the monotone-minimum front
-/// entry in O(1); with a sparse-timestamp gap the window contains at most one
-/// entry, also O(1).
-///
-/// ### Eager mode (`is_eager = true`)
-///
-/// In eager qualitative mode the safety gate is **not applied**.  Any task
-/// still pending in `eval_buffer` has already been checked for the
-/// short-circuit condition (`atomic_false` / `atomic_true`) at every prior
-/// step; if it had been triggered the task would have been removed.  The
-/// surviving tasks therefore contain only identity values in their windows so
-/// far (`true` for `Globally`, `false` for `Eventually`).  Evicting an
-/// identity value from the Lemire deque never changes the fold result, so
-/// back-eviction is always semantically safe and must not be blocked.
-///
-/// Concretely: without this exception, on a formula like `G[0,1000](φ)` the
-/// safety gate's Condition A (`oldest ≥ new_ts − b`) fails permanently once
-/// `t > 1000`, causing every eviction to be blocked and the cache to balloon
-/// to ~`max_lookahead` entries — which is O(1100) for the inner-F[\0,100\]
-/// nesting — instead of the O(1) steady-state size that Lemire normally
-/// achieves.
 fn pop_dominated_values<C, Y>(
     cache: &mut C,
     sub_step: &Step<Y>,
     is_max: bool,
-    interval: &TimeInterval,
-    eval_buffer: &BTreeSet<Duration>,
-    is_eager: bool,
+    window_length: Duration,
 ) where
     C: RingBufferTrait<Value = Y>,
     Y: RobustnessSemantics + Debug,
 {
     while let Some(back) = cache.get_back() {
-        if !Y::prune_dominated(back.value.clone(), sub_step.value.clone(), is_max) {
-            break; // Back is not dominated; no earlier entry will be either.
-        }
-        if !is_eager
-            && !is_lemire_eviction_safe(back.timestamp, sub_step.timestamp, interval, eval_buffer)
+        if Y::prune_dominated(back.value.clone(), sub_step.value.clone(), is_max)
+            && back.timestamp + window_length >= sub_step.timestamp
         {
-            break; // Value-dominated but not yet safe to remove.
+            cache.pop_back();
+        } else {
+            break;
         }
-        cache.pop_back();
     }
 }
 
@@ -122,7 +158,8 @@ pub struct Eventually<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     interval: TimeInterval,
     operand: Box<dyn StlOperatorAndSignalIdentifier<T, Y>>,
     cache: C,
-    eval_buffer: BTreeSet<Duration>,
+    eval_buffer: VecDeque<Duration>,
+    eval_buffer_set: HashSet<Duration>,
     max_lookahead: Duration,
 }
 
@@ -135,7 +172,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
         interval: TimeInterval,
         operand: Box<dyn StlOperatorAndSignalIdentifier<T, Y>>,
         cache: Option<C>,
-        eval_buffer: Option<BTreeSet<Duration>>,
+        eval_buffer: Option<VecDeque<Duration>>,
     ) -> Self
     where
         T: Clone + 'static,
@@ -143,6 +180,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
         Y: RobustnessSemantics + 'static,
     {
         let max_lookahead = interval.end + operand.get_max_lookahead();
+        let eval_buffer = eval_buffer.unwrap_or_default();
+        let eval_buffer_set: HashSet<Duration> = eval_buffer.iter().copied().collect();
         #[cfg(feature = "track-cache-size")]
         {
             let mut c = cache.unwrap_or_else(|| C::new());
@@ -151,7 +190,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 interval,
                 operand,
                 cache: c,
-                eval_buffer: eval_buffer.unwrap_or_default(),
+                eval_buffer,
+                eval_buffer_set,
                 max_lookahead,
             }
         }
@@ -162,7 +202,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 interval,
                 operand,
                 cache: c,
-                eval_buffer: eval_buffer.unwrap_or_default(),
+                eval_buffer,
+                eval_buffer_set,
                 max_lookahead,
             }
         }
@@ -185,6 +226,7 @@ where
     fn reset(&mut self) {
         self.cache.clear();
         self.eval_buffer.clear();
+        self.eval_buffer_set.clear();
         self.operand.reset();
     }
 
@@ -197,125 +239,94 @@ where
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let sub_robustness_vec = self.operand.update(step);
         let mut output_robustness = Vec::new();
+        let current_time = step.timestamp;
 
-        // 1. Add new sub-formula results to the cache
-        if IS_ROSI {
-            for sub_step in sub_robustness_vec {
-                self.eval_buffer.insert(sub_step.timestamp);
+        // Phase A: finalize windows that close strictly before the
+        // first new sub-step, against the current (pre-Phase-B) cache.
+        if let Some(first) = sub_robustness_vec.first()
+            && let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead)
+        {
+            output_robustness.extend(process_eval_buffer::<_, _, _, _, IS_EAGER, IS_ROSI>(
+                &mut self.eval_buffer,
+                &mut self.eval_buffer_set,
+                &self.cache,
+                WindowParams {
+                    interval: &self.interval,
+                    max_lookahead: self.max_lookahead,
+                    current_time: first.timestamp,
+                    upper_bound: Some(split_key),
+                },
+                OpParams {
+                    combine: Y::or,
+                    identity: Y::eventually_identity,
+                    eager_short_circuit: Y::atomic_true(),
+                },
+            ));
+        }
 
-                // Try to update existing step
+        // Phase B: register every new sub-step and update the Lemire cache.
+        // Use HashSet to deduplicate: RoSI can re-emit existing timestamps as
+        // refined verdicts, which must not create duplicate eval_buffer entries.
+        for sub_step in sub_robustness_vec {
+            if self.eval_buffer_set.insert(sub_step.timestamp) {
+                self.eval_buffer.push_back(sub_step.timestamp);
+            }
+            if IS_ROSI {
                 if !self.cache.update_step(sub_step.clone()) {
-                    // Not found in cache.
-                    // Check if this is a NEW step or an OLD one that was pruned.
-                    let is_new_step = match self.cache.get_back() {
-                        Some(back) => sub_step.timestamp > back.timestamp,
-                        None => true,
-                    };
-
+                    let is_new_step = self
+                        .cache
+                        .get_back()
+                        .is_none_or(|b| sub_step.timestamp > b.timestamp);
                     if is_new_step {
-                        // New step: Safe to prune back and append (Lemire)
                         pop_dominated_values(
                             &mut self.cache,
                             &sub_step,
                             true,
-                            &self.interval,
-                            &self.eval_buffer,
-                            false, // IS_ROSI: always apply safety gate
-                        ); // true for Max (Eventually)
+                            self.interval.window_length(),
+                        );
                         self.cache.add_step(sub_step);
                     }
                 }
-            }
-        } else {
-            // Non-RoSI path (f64/bool)
-            for sub_step in &sub_robustness_vec {
-                self.eval_buffer.insert(sub_step.timestamp);
+            } else {
                 pop_dominated_values(
                     &mut self.cache,
-                    sub_step,
+                    &sub_step,
                     true,
-                    &self.interval,
-                    &self.eval_buffer,
-                    IS_EAGER, // skip safety gate in eager mode — see fn doc
-                ); // true for Max
-                self.cache.add_step(sub_step.clone());
+                    self.interval.window_length(),
+                );
+                self.cache.add_step(sub_step);
             }
         }
 
-        let mut tasks_to_remove = Vec::new();
-        let current_time = step.timestamp;
+        // Phase C: process remaining eval_buffer entries with the updated cache.
+        let phase_c_time = if IS_ROSI {
+            self.cache
+                .get_back()
+                .map(|s| s.timestamp)
+                .unwrap_or(Duration::ZERO)
+        } else {
+            current_time
+        };
+        output_robustness.extend(process_eval_buffer::<_, _, _, _, IS_EAGER, IS_ROSI>(
+            &mut self.eval_buffer,
+            &mut self.eval_buffer_set,
+            &self.cache,
+            WindowParams {
+                interval: &self.interval,
+                max_lookahead: self.max_lookahead,
+                current_time: phase_c_time,
+                upper_bound: None,
+            },
+            OpParams {
+                combine: Y::or,
+                identity: Y::eventually_identity,
+                eager_short_circuit: Y::atomic_true(),
+            },
+        ));
 
-        // 2. Process the evaluation buffer
-        for &t_eval in self.eval_buffer.iter() {
-            let window_start = t_eval + self.interval.start;
-            let window_end = t_eval + self.interval.end;
-
-            // Bounded window scan — correct for any timestamp density.
-            //
-            // With dense timestamps the Lemire safety gate always passes, so
-            // the deque is properly maintained: the first entry at or after
-            // `window_start` is the maximum and the scan terminates in O(1).
-            // With sparse timestamps (gap > window width) the gate may block
-            // some evictions, leaving a non-monotone deque; the bounded
-            // `take_while` ensures we never read past `window_end` in that
-            // case, so correctness is preserved regardless.
-            let windowed_max_value = self
-                .cache
-                .iter()
-                .skip_while(|entry| entry.timestamp < window_start)
-                .take_while(|entry| entry.timestamp <= window_end)
-                .map(|entry| entry.value.clone())
-                .fold(Y::eventually_identity(), Y::or);
-
-            let final_value: Option<Y>;
-            let mut remove_task = false;
-
-            let t = if IS_ROSI {
-                self.cache
-                    .get_back()
-                    .map(|s| s.timestamp)
-                    .unwrap_or(Duration::ZERO)
-            } else {
-                current_time
-            };
-
-            // state-based logic
-            if t >= t_eval + self.max_lookahead {
-                // Case 1: Full window has passed. This is a final, "closed" value.
-                final_value = Some(windowed_max_value);
-                remove_task = true;
-            } else if IS_EAGER && windowed_max_value == Y::atomic_true() {
-                // Case 2: Eager short-circuit. Found "true" before window closed.
-                final_value = Some(windowed_max_value);
-                remove_task = true;
-            } else if IS_ROSI {
-                // Case 3: Intermediate ROSI. Window is still open.
-                // We must 'or' with the unknown future.
-                let intermediate_value = Y::or(windowed_max_value, Y::unknown()); // Use unknown() from your code
-                final_value = Some(intermediate_value);
-                // DO NOT remove task, it's not finished
-            } else {
-                // Case 4: Cannot evaluate yet (e.g., bool/f64 and window is still open)
-                // Since the buffer is time-ordered, we stop.
-                break;
-            }
-
-            if let Some(val) = final_value {
-                output_robustness.push(Step::new("output", val, t_eval));
-            }
-
-            if remove_task {
-                tasks_to_remove.push(t_eval);
-            }
-        }
-
-        // 3. Prune the cache and buffer
-        let protected_ts = self.eval_buffer.first().copied().unwrap_or(Duration::ZERO);
-        let lookahead = self.get_max_lookahead();
-        guarded_prune(&mut self.cache, lookahead, protected_ts);
-        for t in tasks_to_remove {
-            self.eval_buffer.remove(&t);
-        }
+        // Prune the cache.
+        let protected_ts = self.eval_buffer.front().copied().unwrap_or(Duration::ZERO);
+        guarded_prune(&mut self.cache, self.max_lookahead, protected_ts);
 
         output_robustness
     }
@@ -339,7 +350,8 @@ pub struct Globally<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     interval: TimeInterval,
     operand: Box<dyn StlOperatorAndSignalIdentifier<T, Y> + 'static>,
     cache: C,
-    eval_buffer: BTreeSet<Duration>,
+    eval_buffer: VecDeque<Duration>,
+    eval_buffer_set: HashSet<Duration>,
     max_lookahead: Duration,
 }
 
@@ -352,7 +364,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
         interval: TimeInterval,
         operand: Box<dyn StlOperatorAndSignalIdentifier<T, Y>>,
         cache: Option<C>,
-        eval_buffer: Option<BTreeSet<Duration>>,
+        eval_buffer: Option<VecDeque<Duration>>,
     ) -> Self
     where
         T: Clone + 'static,
@@ -360,6 +372,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
         Y: RobustnessSemantics + 'static,
     {
         let max_lookahead = interval.end + operand.get_max_lookahead();
+        let eval_buffer = eval_buffer.unwrap_or_default();
+        let eval_buffer_set: HashSet<Duration> = eval_buffer.iter().copied().collect();
         #[cfg(feature = "track-cache-size")]
         {
             let mut c = cache.unwrap_or_else(|| C::new());
@@ -368,7 +382,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 interval,
                 operand,
                 cache: c,
-                eval_buffer: eval_buffer.unwrap_or_default(),
+                eval_buffer,
+                eval_buffer_set,
                 max_lookahead,
             }
         }
@@ -379,7 +394,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 interval,
                 operand,
                 cache: c,
-                eval_buffer: eval_buffer.unwrap_or_default(),
+                eval_buffer,
+                eval_buffer_set,
                 max_lookahead,
             }
         }
@@ -402,6 +418,7 @@ where
     fn reset(&mut self) {
         self.cache.clear();
         self.eval_buffer.clear();
+        self.eval_buffer_set.clear();
         self.operand.reset();
     }
 
@@ -414,125 +431,94 @@ where
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let sub_robustness_vec = self.operand.update(step);
         let mut output_robustness = Vec::new();
+        let current_time = step.timestamp;
 
-        // 1. Add new sub-formula results to the cache
-        if IS_ROSI {
-            for sub_step in sub_robustness_vec {
-                self.eval_buffer.insert(sub_step.timestamp);
+        // Phase A: finalize windows that close strictly before the
+        // first new sub-step, against the current (pre-Phase-B) cache.
+        if let Some(first) = sub_robustness_vec.first()
+            && let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead)
+        {
+            output_robustness.extend(process_eval_buffer::<_, _, _, _, IS_EAGER, IS_ROSI>(
+                &mut self.eval_buffer,
+                &mut self.eval_buffer_set,
+                &self.cache,
+                WindowParams {
+                    interval: &self.interval,
+                    max_lookahead: self.max_lookahead,
+                    current_time: first.timestamp,
+                    upper_bound: Some(split_key),
+                },
+                OpParams {
+                    combine: Y::and,
+                    identity: Y::globally_identity,
+                    eager_short_circuit: Y::atomic_false(),
+                },
+            ));
+        }
 
+        // Phase B: register every new sub-step and update the Lemire cache.
+        // Use HashSet to deduplicate: RoSI can re-emit existing timestamps as
+        // refined verdicts, which must not create duplicate eval_buffer entries.
+        for sub_step in sub_robustness_vec {
+            if self.eval_buffer_set.insert(sub_step.timestamp) {
+                self.eval_buffer.push_back(sub_step.timestamp);
+            }
+            if IS_ROSI {
                 if !self.cache.update_step(sub_step.clone()) {
-                    // Not found in cache.
-                    // Check if this is a NEW step or an OLD one that was pruned.
-                    let is_new_step = match self.cache.get_back() {
-                        Some(back) => sub_step.timestamp > back.timestamp,
-                        None => true,
-                    };
-
+                    let is_new_step = self
+                        .cache
+                        .get_back()
+                        .is_none_or(|b| sub_step.timestamp > b.timestamp);
                     if is_new_step {
-                        // New step: Safe to prune back and append (Lemire)
                         pop_dominated_values(
                             &mut self.cache,
                             &sub_step,
                             false,
-                            &self.interval,
-                            &self.eval_buffer,
-                            false, // IS_ROSI: always apply safety gate
-                        ); // false for Min (Globally)
+                            self.interval.window_length(),
+                        );
                         self.cache.add_step(sub_step);
                     }
                 }
-            }
-        } else {
-            // Non-RoSI path (f64/bool)
-            for sub_step in &sub_robustness_vec {
+            } else {
                 pop_dominated_values(
                     &mut self.cache,
-                    sub_step,
+                    &sub_step,
                     false,
-                    &self.interval,
-                    &self.eval_buffer,
-                    IS_EAGER, // skip safety gate in eager mode — see fn doc
-                ); // false for Min
-                self.eval_buffer.insert(sub_step.timestamp);
-                self.cache.add_step(sub_step.clone());
+                    self.interval.window_length(),
+                );
+                self.cache.add_step(sub_step);
             }
         }
 
-        let mut tasks_to_remove = Vec::new();
-        let current_time = step.timestamp;
+        // Phase C: process remaining eval_buffer entries with the updated cache.
+        let phase_c_time = if IS_ROSI {
+            self.cache
+                .get_back()
+                .map(|s| s.timestamp)
+                .unwrap_or(Duration::ZERO)
+        } else {
+            current_time
+        };
+        output_robustness.extend(process_eval_buffer::<_, _, _, _, IS_EAGER, IS_ROSI>(
+            &mut self.eval_buffer,
+            &mut self.eval_buffer_set,
+            &self.cache,
+            WindowParams {
+                interval: &self.interval,
+                max_lookahead: self.max_lookahead,
+                current_time: phase_c_time,
+                upper_bound: None,
+            },
+            OpParams {
+                combine: Y::and,
+                identity: Y::globally_identity,
+                eager_short_circuit: Y::atomic_false(),
+            },
+        ));
 
-        // 2. Process the evaluation buffer
-        for &t_eval in self.eval_buffer.iter() {
-            let window_start = t_eval + self.interval.start;
-            let window_end = t_eval + self.interval.end;
-
-            // Bounded window scan — correct for any timestamp density.
-            //
-            // With dense timestamps the Lemire safety gate always passes, so
-            // the deque is properly maintained: the first entry at or after
-            // `window_start` is the minimum and the scan terminates in O(1).
-            // With sparse timestamps (gap > window width) the gate may block
-            // some evictions, leaving a non-monotone deque; the bounded
-            // `take_while` ensures we never read past `window_end` in that
-            // case, so correctness is preserved regardless.
-            let windowed_min_value = self
-                .cache
-                .iter()
-                .skip_while(|entry| entry.timestamp < window_start)
-                .take_while(|entry| entry.timestamp <= window_end)
-                .map(|entry| entry.value.clone())
-                .fold(Y::globally_identity(), Y::and);
-
-            let final_value: Option<Y>;
-            let mut remove_task = false;
-
-            // we can finalize when cache has a ver
-            let t = if IS_ROSI {
-                self.cache
-                    .get_back()
-                    .map(|s| s.timestamp)
-                    .unwrap_or(Duration::ZERO)
-            } else {
-                current_time
-            };
-
-            // state-based logic
-            if t >= t_eval + self.max_lookahead {
-                // Case 1: Full window has passed. This is a final, "closed" value.
-                final_value = Some(windowed_min_value);
-                remove_task = true;
-            } else if IS_EAGER && windowed_min_value == Y::atomic_false() {
-                // Case 2: Eager short-circuit. Found "false" before window closed.
-                final_value = Some(windowed_min_value);
-                remove_task = true;
-            } else if IS_ROSI {
-                // Case 3: Intermediate ROSI. Window is still open.
-                // We must 'and' with the unknown future.
-                let intermediate_value = Y::and(windowed_min_value, Y::unknown());
-                final_value = Some(intermediate_value);
-                // DO NOT remove task, it's not finished
-            } else {
-                // Case 4: Cannot evaluate yet (e.g., bool/f64 and window is still open)
-                // Since the buffer is time-ordered, we stop.
-                break;
-            }
-
-            if let Some(val) = final_value {
-                output_robustness.push(Step::new("output", val, t_eval));
-            }
-
-            if remove_task {
-                tasks_to_remove.push(t_eval);
-            }
-        }
-
-        // 3. Prune the cache and buffer
-        let protected_ts = self.eval_buffer.first().copied().unwrap_or(Duration::ZERO);
-        let lookahead = self.get_max_lookahead();
-        guarded_prune(&mut self.cache, lookahead, protected_ts);
-        for t in tasks_to_remove {
-            self.eval_buffer.remove(&t);
-        }
+        // Prune the cache.
+        let protected_ts = self.eval_buffer.front().copied().unwrap_or(Duration::ZERO);
+        guarded_prune(&mut self.cache, self.max_lookahead, protected_ts);
 
         output_robustness
     }
@@ -626,7 +612,8 @@ mod tests {
             assert_eq!(output.timestamp, expected.timestamp);
             assert!(
                 (output.value - expected.value).abs() < 1e-9,
-                "left: {}, right: {}",
+                "t={:?} output: {}, expected: {}",
+                output.timestamp,
                 output.value,
                 expected.value
             );
@@ -768,6 +755,10 @@ mod sparse_timestamp_tests {
         Duration::from_secs(s)
     }
 
+    fn millis(ms: u64) -> Duration {
+        Duration::from_millis(ms)
+    }
+
     fn g02_globally_f64() -> Globally<f64, RingBuffer<f64>, f64, false, false> {
         let interval = TimeInterval {
             start: secs(0),
@@ -804,13 +795,23 @@ mod sparse_timestamp_tests {
         ]
     }
 
-    fn find_output<Y>(outputs: &[Step<Y>], ts: u64) -> Y
+    fn find_output_secs<Y>(outputs: &[Step<Y>], ts: u64) -> Y
     where
         Y: Copy,
     {
         outputs
             .iter()
             .find(|s| s.timestamp == secs(ts))
+            .unwrap_or_else(|| panic!("no output for t_eval={ts}"))
+            .value
+    }
+    fn find_output_millis<Y>(outputs: &[Step<Y>], ts: u64) -> Y
+    where
+        Y: Copy,
+    {
+        outputs
+            .iter()
+            .find(|s| s.timestamp == millis(ts))
             .unwrap_or_else(|| panic!("no output for t_eval={ts}"))
             .value
     }
@@ -859,37 +860,37 @@ mod sparse_timestamp_tests {
                 // at 2 f64 emits for 0, and rosi agrees in bounds
                 2 => {
                     assert!(
-                        (find_output(&outputs_f64, 0) - 12.0).abs() < 1e-9,
+                        (find_output_secs(&outputs_f64, 0) - 12.0).abs() < 1e-9,
                         "t_eval=0 expected 12.0, got {}",
-                        find_output(&outputs_f64, 0)
+                        find_output_secs(&outputs_f64, 0)
                     );
-                    let rosi_val = find_output(&outputs_rosi, 0);
+                    let rosi_val = find_output_secs(&outputs_rosi, 0);
                     assert!(
                         rosi_val.0 == 12.0 && rosi_val.1 == 12.0,
                         "t_eval=0 expected ROSI bounds to contain 12.0, got {:?}",
                         rosi_val
                     );
                     assert!(
-                        find_output(&outputs_eager_qual, 0),
+                        find_output_secs(&outputs_eager_qual, 0),
                         "t_eval=0 expected eager qual to be true, got {}",
-                        find_output(&outputs_eager_qual, 0)
+                        find_output_secs(&outputs_eager_qual, 0)
                     )
                 }
                 // at 5 f64 emits for 1 and 2, and rosi agrees in bounds
                 5 => {
                     assert!(
-                        (find_output(&outputs_f64, 1) - 12.0).abs() < 1e-9,
+                        (find_output_secs(&outputs_f64, 1) - 12.0).abs() < 1e-9,
                         "t_eval=1 expected 12.0, got {}",
-                        find_output(&outputs_f64, 1)
+                        find_output_secs(&outputs_f64, 1)
                     );
                     assert!(
-                        (find_output(&outputs_f64, 2) - 13.0).abs() < 1e-9,
+                        (find_output_secs(&outputs_f64, 2) - 13.0).abs() < 1e-9,
                         "t_eval=2 expected 13.0, got {}",
-                        find_output(&outputs_f64, 2)
+                        find_output_secs(&outputs_f64, 2)
                     );
-                    let rosi_val_1 = find_output(&outputs_rosi, 1);
-                    let rosi_val_2 = find_output(&outputs_rosi, 2);
-                    let rosi_val_5 = find_output(&outputs_rosi, 5);
+                    let rosi_val_1 = find_output_secs(&outputs_rosi, 1);
+                    let rosi_val_2 = find_output_secs(&outputs_rosi, 2);
+                    let rosi_val_5 = find_output_secs(&outputs_rosi, 5);
                     assert!(
                         rosi_val_1.0 == 12.0 && rosi_val_1.1 == 12.0,
                         "t_eval=1 expected ROSI bounds to contain 12.0, got {:?}",
@@ -901,20 +902,20 @@ mod sparse_timestamp_tests {
                         rosi_val_2
                     );
                     assert!(
-                        find_output(&outputs_eager_qual, 1),
+                        find_output_secs(&outputs_eager_qual, 1),
                         "t_eval=1 expected eager qual to be true, got {}",
-                        find_output(&outputs_eager_qual, 1)
+                        find_output_secs(&outputs_eager_qual, 1)
                     );
                     assert!(
-                        find_output(&outputs_eager_qual, 2),
+                        find_output_secs(&outputs_eager_qual, 2),
                         "t_eval=2 expected eager qual to be true, got {}",
-                        find_output(&outputs_eager_qual, 2)
+                        find_output_secs(&outputs_eager_qual, 2)
                     );
                     // it sees the -1.0 at t=5 and finalizes to false immediately, without waiting for t=10
                     assert!(
-                        !find_output(&outputs_eager_qual, 5),
+                        !find_output_secs(&outputs_eager_qual, 5),
                         "t_eval=5 expected eager qual to be false, got {}",
-                        find_output(&outputs_eager_qual, 5)
+                        find_output_secs(&outputs_eager_qual, 5)
                     );
                     // should agree with rosi upper bound being negative already at t=5, even if it can't finalize yet
                     assert!(
@@ -925,11 +926,11 @@ mod sparse_timestamp_tests {
                 }
                 10 => {
                     assert!(
-                        (find_output(&outputs_f64, 5) + 1.0).abs() < 1e-9,
+                        (find_output_secs(&outputs_f64, 5) + 1.0).abs() < 1e-9,
                         "t_eval=5 expected -1.0, got {}",
-                        find_output(&outputs_f64, 5)
+                        find_output_secs(&outputs_f64, 5)
                     );
-                    let rosi_val = find_output(&outputs_rosi, 5);
+                    let rosi_val = find_output_secs(&outputs_rosi, 5);
                     assert!(
                         rosi_val.0 == -1.0 && rosi_val.1 == -1.0,
                         "t_eval=5 expected ROSI bounds to contain -1.0, got {:?}",
@@ -937,12 +938,197 @@ mod sparse_timestamp_tests {
                     );
                     // eager can short-circuit to false for t=10 already
                     assert!(
-                        !find_output(&outputs_eager_qual, 10),
+                        !find_output_secs(&outputs_eager_qual, 10),
                         "t_eval=5 expected eager qual to be false, got {}",
-                        find_output(&outputs_eager_qual, 10)
+                        find_output_secs(&outputs_eager_qual, 10)
                     );
                 }
                 _ => panic!("unexpected output at t={}", step.timestamp.as_secs()),
+            }
+        }
+    }
+
+    #[test]
+    fn overlapping_intervals() {
+        // test formula phi_G = G[0,2] x > 0 and phi_F = F[0,2] x>0
+        // vals = 1,2,3 ts=1,2,3.5
+        // at t=3.5, the output for t_eval=1s must be finalized to 1 (for phi_G) and to 2 for phi_F
+        let interval = TimeInterval {
+            start: secs(0),
+            end: secs(2),
+        };
+        let atomic = Atomic::<f64>::new_greater_than("x", 0.0);
+        let mut globally = Globally::<f64, RingBuffer<f64>, f64, false, false>::new(
+            interval,
+            Box::new(atomic.clone()),
+            None,
+            None,
+        );
+        let mut eventually = Eventually::<f64, RingBuffer<f64>, f64, false, false>::new(
+            interval,
+            Box::new(atomic.clone()),
+            None,
+            None,
+        );
+        let mut globally_rosi =
+            Globally::<f64, RingBuffer<RobustnessInterval>, RobustnessInterval, false, true>::new(
+                interval,
+                Box::new(Atomic::<RobustnessInterval>::new_greater_than("x", 0.0)),
+                None,
+                None,
+            );
+
+        let mut eventually_rosi = Eventually::<
+            f64,
+            RingBuffer<RobustnessInterval>,
+            RobustnessInterval,
+            false,
+            true,
+        >::new(
+            interval,
+            Box::new(Atomic::<RobustnessInterval>::new_greater_than("x", 0.0)),
+            None,
+            None,
+        );
+
+        let signal_values = vec![1.0, 2.0, 3.0];
+        let signal_timestamps = vec![1000, 2000, 3500];
+
+        let signal: Vec<_> = signal_values
+            .into_iter()
+            .zip(signal_timestamps)
+            .map(|(val, ts)| step!("x", val, Duration::from_millis(ts)))
+            .collect();
+
+        for s in &signal {
+            let globally_out = globally.update(s);
+            let eventually_out = eventually.update(s);
+            let globally_rosi_out = globally_rosi.update(s);
+            let eventually_rosi_out = eventually_rosi.update(s);
+
+            if s.timestamp == Duration::from_millis(1000) {
+                // no delayed verdicts yet
+                assert!(
+                    globally_out.is_empty() && eventually_out.is_empty(),
+                    "t_eval={} expected no output, got {:?}",
+                    s.timestamp.as_millis(),
+                    globally_out
+                );
+                // rosi: G has -inf, 1 and F has 1, +inf for t=1s
+                let glob_rosi_val = find_output_millis(&globally_rosi_out, 1000);
+                let even_rosi_val = find_output_millis(&eventually_rosi_out, 1000);
+                assert!(
+                    glob_rosi_val.0 == f64::NEG_INFINITY && glob_rosi_val.1 == 1.0,
+                    "t_eval=1000 expected G ROSI bounds to be [-inf, 1.0], got {:?}",
+                    glob_rosi_val
+                );
+                assert!(
+                    even_rosi_val.0 == 1.0 && even_rosi_val.1 == f64::INFINITY,
+                    "t_eval=1000 expected F ROSI bounds to be [1.0, +inf], got {:?}",
+                    even_rosi_val
+                );
+                assert!(
+                    globally_rosi_out.len() == 1 && eventually_rosi_out.len() == 1,
+                    "t_eval=1000 expected exactly one ROSI output for G and F, got {:?} and {:?}",
+                    globally_rosi_out,
+                    eventually_rosi_out
+                );
+            } else if s.timestamp == Duration::from_millis(2000) {
+                // no delayed verdicts yet
+                assert!(
+                    globally_out.is_empty() && eventually_out.is_empty(),
+                    "t_eval={} expected no output, got {:?}",
+                    s.timestamp.as_millis(),
+                    globally_out
+                );
+                // rosi: G has -inf, 1, -inf,2 and F has 2, +inf, 2, +inf for t=1s and t=2s
+                let glob_rosi_val_1 = find_output_millis(&globally_rosi_out, 1000);
+                let glob_rosi_val_2 = find_output_millis(&globally_rosi_out, 2000);
+                let even_rosi_val_1 = find_output_millis(&eventually_rosi_out, 1000);
+                let even_rosi_val_2 = find_output_millis(&eventually_rosi_out, 2000);
+                assert!(
+                    glob_rosi_val_1.0 == f64::NEG_INFINITY && glob_rosi_val_1.1 == 1.0,
+                    "t_eval=1000 expected G ROSI bounds to be [-inf, 1.0], got {:?}",
+                    glob_rosi_val_1
+                );
+                assert!(
+                    glob_rosi_val_2.0 == f64::NEG_INFINITY && glob_rosi_val_2.1 == 2.0,
+                    "t_eval=2000 expected G ROSI bounds to be [-inf, 2.0], got {:?}",
+                    glob_rosi_val_2
+                );
+                assert!(
+                    even_rosi_val_1.0 == 2.0 && even_rosi_val_1.1 == f64::INFINITY,
+                    "t_eval=1000 expected F ROSI bounds to be [2.0, +inf], got {:?}",
+                    even_rosi_val_1
+                );
+                assert!(
+                    even_rosi_val_2.0 == 2.0 && even_rosi_val_2.1 == f64::INFINITY,
+                    "t_eval=2000 expected F ROSI bounds to be [2.0, +inf], got {:?}",
+                    even_rosi_val_2
+                );
+                assert!(
+                    globally_rosi_out.len() == 2 && eventually_rosi_out.len() == 2,
+                    "t_eval=2000 expected exactly two ROSI outputs for G and F, got {:?} and {:?}",
+                    globally_rosi_out,
+                    eventually_rosi_out
+                );
+            } else if s.timestamp == Duration::from_millis(3500) {
+                let glob_val = find_output_millis(&globally_out, 1000);
+                let ev_val = find_output_millis(&eventually_out, 1000);
+                assert!(
+                    (glob_val - 1.0).abs() < 1e-9,
+                    "t_eval=1000 expected 1.0, got {}",
+                    glob_val
+                );
+                assert!(
+                    (ev_val - 2.0).abs() < 1e-9,
+                    "t_eval=1000 expected 2.0, got {}",
+                    ev_val
+                );
+                // rosi: G has 1,1 -inf, 2 and -inf, 3 and F has 2,2, 3,+inf, 3,+inf for t=1s, t=2s and t=3.5s
+                let glob_rosi_val_1 = find_output_millis(&globally_rosi_out, 1000);
+                let glob_rosi_val_2 = find_output_millis(&globally_rosi_out, 2000);
+                let glob_rosi_val_3 = find_output_millis(&globally_rosi_out, 3500);
+                let even_rosi_val_1 = find_output_millis(&eventually_rosi_out, 1000);
+                let even_rosi_val_2 = find_output_millis(&eventually_rosi_out, 2000);
+                let even_rosi_val_3 = find_output_millis(&eventually_rosi_out, 3500);
+
+                assert!(
+                    glob_rosi_val_1.0 == 1.0 && glob_rosi_val_1.1 == 1.0,
+                    "t_eval=1000 expected G ROSI bounds to be [1.0, 1.0], got {:?}",
+                    glob_rosi_val_1
+                );
+                assert!(
+                    glob_rosi_val_2.0 == f64::NEG_INFINITY && glob_rosi_val_2.1 == 2.0,
+                    "t_eval=2000 expected G ROSI bounds to be [-inf, 2.0], got {:?}",
+                    glob_rosi_val_2
+                );
+                assert!(
+                    glob_rosi_val_3.0 == f64::NEG_INFINITY && glob_rosi_val_3.1 == 3.0,
+                    "t_eval=3500 expected G ROSI bounds to be [-inf, 3.0], got {:?}",
+                    glob_rosi_val_3
+                );
+                assert!(
+                    even_rosi_val_1.0 == 2.0 && even_rosi_val_1.1 == 2.0,
+                    "t_eval=1000 expected F ROSI bounds to be [2.0, 2.0], got {:?}",
+                    even_rosi_val_1
+                );
+                assert!(
+                    even_rosi_val_2.0 == 3.0 && even_rosi_val_2.1 == f64::INFINITY,
+                    "t_eval=2000 expected F ROSI bounds to be [3.0, +inf], got {:?}",
+                    even_rosi_val_2
+                );
+                assert!(
+                    even_rosi_val_3.0 == 3.0 && even_rosi_val_3.1 == f64::INFINITY,
+                    "t_eval=3500 expected F ROSI bounds to be [3.0, +inf], got {:?}",
+                    even_rosi_val_3
+                );
+                assert!(
+                    globally_rosi_out.len() == 3 && eventually_rosi_out.len() == 3,
+                    "t_eval=3500 expected exactly three ROSI outputs for G and F, got {:?} and {:?}",
+                    globally_rosi_out,
+                    eventually_rosi_out
+                );
             }
         }
     }

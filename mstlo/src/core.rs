@@ -28,6 +28,12 @@ pub struct TimeInterval {
     pub end: Duration,
 }
 
+impl TimeInterval {
+    pub fn window_length(&self) -> Duration {
+        self.end - self.start
+    }
+}
+
 /// Common trait for all executable STL operators.
 ///
 /// Implementations consume new input samples through [`StlOperatorTrait::update`]
@@ -359,8 +365,6 @@ impl RobustnessSemantics for RobustnessInterval {
         // returns true: old can be discarded since it can never be smaller than new and we want the worst only
 
         if is_max {
-            // Max/Eventually: Discard old if it can never exceed new.
-            // We need new's lower bound to be >= old's upper bound.
             old.1 <= new.0
         } else {
             // Min/Globally: Discard old if it can never be smaller than new.

@@ -9,7 +9,7 @@ use crate::core::{
     TimeInterval,
 };
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{HashSet, VecDeque};
 use std::fmt::Display;
 use std::time::Duration;
 
@@ -29,7 +29,8 @@ pub struct Until<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_cache: C,
     right_cache: C,
     t_max: (Duration, Duration), // (left t_max, right t_max)
-    eval_buffer: BTreeSet<Duration>,
+    eval_buffer: VecDeque<Duration>,
+    eval_buffer_set: HashSet<Duration>,
     left_signals_set: HashSet<&'static str>,
     right_signals_set: HashSet<&'static str>,
     max_lookahead: Duration,
@@ -69,7 +70,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
                 left_cache: l_cache,
                 right_cache: r_cache,
                 t_max: (Duration::ZERO, Duration::ZERO),
-                eval_buffer: BTreeSet::new(),
+                eval_buffer: VecDeque::new(),
+                eval_buffer_set: HashSet::new(),
                 left_signals_set: HashSet::new(),
                 right_signals_set: HashSet::new(),
                 max_lookahead,
@@ -84,7 +86,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
                 left_cache: left_cache.unwrap_or_else(|| C::new()),
                 right_cache: right_cache.unwrap_or_else(|| C::new()),
                 t_max: (Duration::ZERO, Duration::ZERO),
-                eval_buffer: BTreeSet::new(),
+                eval_buffer: VecDeque::new(),
+                eval_buffer_set: HashSet::new(),
                 left_signals_set: HashSet::new(),
                 right_signals_set: HashSet::new(),
                 max_lookahead,
@@ -128,6 +131,7 @@ where
         self.left_cache.clear();
         self.right_cache.clear();
         self.eval_buffer.clear();
+        self.eval_buffer_set.clear();
         self.t_max = (Duration::ZERO, Duration::ZERO);
         self.left.reset();
         self.right.reset();
@@ -172,16 +176,25 @@ where
 
         let t_max_combined = self.t_max.0.min(self.t_max.1);
 
-        // Add all updates to eval_buffer and caches
+        // Add all updates to eval_buffer and caches.
+        // Use HashSet to deduplicate: RoSI can re-emit existing timestamps as
+        // refined verdicts, and left/right may share timestamps.
         for update in &right_updates {
-            self.eval_buffer.insert(update.timestamp);
+            if self.eval_buffer_set.insert(update.timestamp) {
+                self.eval_buffer.push_back(update.timestamp);
+            }
             Self::add_to_cache::<IS_ROSI>(&mut self.right_cache, update.clone());
         }
         for update in &left_updates {
-            self.eval_buffer.insert(update.timestamp);
+            if self.eval_buffer_set.insert(update.timestamp) {
+                self.eval_buffer.push_back(update.timestamp);
+            }
             Self::add_to_cache::<IS_ROSI>(&mut self.left_cache, update.clone());
         }
         let mut tasks_to_remove = Vec::new();
+        // Finalized entries (Case 1) are always at the front — track separately
+        // to use pop_front() instead of retain() in the common case.
+        let mut n_front_to_pop: usize = 0;
         let current_time = step.timestamp;
 
         // If there is no data in the left cache it cannot be calculated yet
@@ -271,6 +284,7 @@ where
                 // (This also captures Eager results that were `false` until the end)
                 final_value = Some(max_robustness);
                 remove_task = true;
+                n_front_to_pop += 1;
             } else if IS_EAGER && max_robustness == Y::atomic_true() {
                 // Case 2a: Eager short-circuit (Satisfaction). Found "true" before window closed.
                 final_value = Some(max_robustness); // which is Y::atomic_true()
@@ -304,14 +318,23 @@ where
         }
 
         // 3. Prune the caches and remove completed tasks from the buffer.
-        let protected_ts = self.eval_buffer.first().copied().unwrap_or(Duration::ZERO);
+        let protected_ts = self.eval_buffer.front().copied().unwrap_or(Duration::ZERO);
         let lookahead = self.max_lookahead;
         guarded_prune(&mut self.left_cache, lookahead, protected_ts);
         guarded_prune(&mut self.right_cache, lookahead, protected_ts);
 
-        for t in tasks_to_remove {
-            // println!("Removing completed task at t_eval={:?}", t);
-            self.eval_buffer.remove(&t);
+        for &t in &tasks_to_remove {
+            self.eval_buffer_set.remove(&t);
+        }
+        // Pop finalized prefix from front (Case 1: always contiguous).
+        for _ in 0..n_front_to_pop {
+            self.eval_buffer.pop_front();
+        }
+        // IS_EAGER && IS_ROSI is the only mode where a non-front entry can be
+        // short-circuited. Only call retain() when that actually happened.
+        if tasks_to_remove.len() > n_front_to_pop {
+            self.eval_buffer
+                .retain(|t| self.eval_buffer_set.contains(t));
         }
 
         output_robustness
