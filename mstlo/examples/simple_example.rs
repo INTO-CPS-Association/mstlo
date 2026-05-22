@@ -1,10 +1,10 @@
 use mstlo::monitor::{Rosi, StlMonitor};
-use mstlo::step;
+use mstlo::{step, stl};
 use std::time::Duration;
 
 fn main() {
     // Define a formula using the embedded DSL
-    let formula = mstlo::stl!(G[0, 2](x > 5.0));
+    let formula = stl!(G[0, 2](x > 5.0));
 
     // Build the monitor
     let mut monitor = StlMonitor::builder()
