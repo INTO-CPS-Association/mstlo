@@ -46,6 +46,10 @@ where
         self.max_lookahead
     }
 
+    fn total_size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.operand.total_size()
+    }
+
     fn reset(&mut self) {
         self.operand.reset();
     }

@@ -223,6 +223,14 @@ where
         self.max_lookahead
     }
 
+    fn total_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.cache.heap_size()
+            + self.eval_buffer.capacity() * std::mem::size_of::<Duration>()
+            + self.eval_buffer_set.capacity() * (std::mem::size_of::<Duration>() + 1)
+            + self.operand.total_size()
+    }
+
     fn reset(&mut self) {
         self.cache.clear();
         self.eval_buffer.clear();
@@ -413,6 +421,14 @@ where
 
     fn get_max_lookahead(&self) -> Duration {
         self.max_lookahead
+    }
+
+    fn total_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.cache.heap_size()
+            + self.eval_buffer.capacity() * std::mem::size_of::<Duration>()
+            + self.eval_buffer_set.capacity() * (std::mem::size_of::<Duration>() + 1)
+            + self.operand.total_size()
     }
 
     fn reset(&mut self) {

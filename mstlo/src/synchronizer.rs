@@ -76,6 +76,16 @@ where
         self.pending.clear();
     }
 
+    /// Returns estimated heap memory in bytes used by the synchronizer's
+    /// internal data structures.
+    pub fn heap_size(&self) -> usize {
+        self.pending.capacity() * std::mem::size_of::<Step<T>>()
+            + self.last_steps.capacity()
+                * (std::mem::size_of::<&str>() + std::mem::size_of::<Step<T>>() + 1)
+            + self.timeline.len()
+                * (std::mem::size_of::<Duration>() + 2 * std::mem::size_of::<usize>())
+    }
+
     /// Processes a new real step and generates interpolated steps if necessary.
     /// All resulting steps (interpolated + real) are added to `self.pending`.
     ///
