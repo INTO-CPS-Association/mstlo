@@ -279,6 +279,9 @@ where
                 }
             }
         }
+        if self.steps.capacity() > self.steps.len() * 2 {
+            self.steps.shrink_to_fit();
+        }
     }
 
     fn clear(&mut self) {
