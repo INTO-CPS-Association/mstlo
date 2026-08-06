@@ -92,6 +92,12 @@ pub trait RingBufferTrait {
     /// Removes all steps from the buffer.
     fn clear(&mut self);
 
+    /// Returns the number of bytes allocated on the heap by this buffer.
+    ///
+    /// This uses `capacity()` (not `len()`) to reflect actual allocated memory,
+    /// including any unused but reserved capacity.
+    fn heap_size(&self) -> usize;
+
     /// Returns an iterator over all steps from oldest to newest.
     fn iter<'a>(&'a self) -> Self::Iter<'a>;
 
@@ -283,6 +289,10 @@ where
 
     fn clear(&mut self) {
         self.clear()
+    }
+
+    fn heap_size(&self) -> usize {
+        self.steps.capacity() * std::mem::size_of::<Step<T>>()
     }
 
     fn iter<'a>(&'a self) -> Self::Iter<'a> {

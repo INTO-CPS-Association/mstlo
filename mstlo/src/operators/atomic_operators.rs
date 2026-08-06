@@ -136,6 +136,10 @@ where
     fn get_max_lookahead(&self) -> Duration {
         Duration::ZERO
     }
+
+    fn total_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
 }
 
 impl<Y> SignalIdentifier for Atomic<Y> {

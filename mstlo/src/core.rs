@@ -60,6 +60,25 @@ pub trait StlOperatorTrait<T: Clone>: DynClone + Display + SignalIdentifier {
     /// Configuration (interval bounds, signal identifiers, max lookahead) is preserved.
     /// The default implementation is a no-op, suitable for stateless operators like `Atomic`.
     fn reset(&mut self) {}
+
+    /// Returns total memory (stack + heap) in bytes consumed by this operator
+    /// and all its children recursively.
+    ///
+    /// Stack memory is obtained via `size_of::<Self>()` in each concrete
+    /// implementation. Heap memory includes:
+    /// - `VecDeque` allocations measured by `capacity() * sizeof(element)`,
+    /// - `HashSet` allocations estimated as `capacity() * (sizeof(T) + 1)`
+    ///   (element slot + control byte in Swiss table),
+    /// - `RingBuffer` heap via [`crate::ring_buffer::RingBufferTrait::heap_size`],
+    /// - child operators via their own recursive `total_size()` calls.
+    ///
+    /// # Note on shared state
+    /// [`Variables`] containers use `Rc<RefCell<HashMap>>` and may be shared
+    /// across multiple `Atomic` operators. This method counts each reference
+    /// independently without deduplication, so the HashMap heap will be
+    /// double-counted for each shared reference. This is likely to be
+    /// a very small constant overhead and can be ignored in most cases.
+    fn total_size(&self) -> usize;
 }
 
 clone_trait_object!(<T: Clone, Y> StlOperatorTrait<T, Output = Y>);
