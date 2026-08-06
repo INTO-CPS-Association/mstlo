@@ -64,7 +64,7 @@ pub use monitor::{
 pub use parser::{ParseError, parse_stl};
 #[cfg(feature = "track-cache-size")]
 pub use ring_buffer::GLOBAL_CACHE_SIZE;
-pub use ring_buffer::{RingBuffer, RingBufferTrait, Step};
+pub use ring_buffer::{PruningStrategy, RingBuffer, RingBufferTrait, Step};
 pub use synchronizer::{Interpolatable, SynchronizationStrategy, Synchronizer};
 
 pub use mstlo_macros::{step, stl};

@@ -19,7 +19,7 @@ use crate::operators::binary_operators::{And, Or};
 use crate::operators::not_operator::Not;
 use crate::operators::unary_temporal_operators::{Eventually, Globally};
 use crate::operators::until_operator::Until;
-use crate::ring_buffer::{RingBuffer, Step};
+use crate::ring_buffer::{PruningStrategy, RingBuffer, Step};
 use crate::synchronizer::{Interpolatable, SynchronizationStrategy, Synchronizer};
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -373,6 +373,7 @@ impl StlMonitor<f64, f64> {
             semantics: Semantics::DelayedQuantitative, // Default, but will be overwritten if semantics() is called
             synchronization_strategy: SynchronizationStrategy::default(),
             variables: Variables::new(),
+            pruning_strategy: PruningStrategy::default(),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -615,6 +616,7 @@ pub struct StlMonitorBuilder<T, Y> {
     semantics: Semantics,
     synchronization_strategy: SynchronizationStrategy,
     variables: Variables,
+    pruning_strategy: PruningStrategy,
     _phantom: std::marker::PhantomData<(T, Y)>,
 }
 
@@ -658,6 +660,23 @@ impl<T, Y> StlMonitorBuilder<T, Y> {
         self
     }
 
+    /// Sets the pruning strategy for internal caches.
+    ///
+    /// Controls whether caches shrink their internal allocation after pruning.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let monitor = StlMonitor::builder()
+    ///     .formula(formula)
+    ///     .pruning_strategy(PruningStrategy::ShrinkToFit)
+    ///     .build()?;
+    /// ```
+    pub fn pruning_strategy(mut self, strategy: PruningStrategy) -> Self {
+        self.pruning_strategy = strategy;
+        self
+    }
+
     /// Applies the semantics, switching the Builder's generic type `Y` to match the semantics.
     /// This allows inference of the output type (bool, f64, RobustnessInterval).
     ///
@@ -679,6 +698,7 @@ impl<T, Y> StlMonitorBuilder<T, Y> {
             semantics: S::as_enum(),
             synchronization_strategy: self.synchronization_strategy,
             variables: self.variables,
+            pruning_strategy: self.pruning_strategy,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -717,11 +737,16 @@ where
                     formula_def.clone(),
                     self.semantics,
                     self.variables.clone(),
+                    self.pruning_strategy,
                 );
                 self.initialize_operator(operator)
             }
             (Algorithm::Naive, Semantics::DelayedQualitative | Semantics::DelayedQuantitative) => {
-                self.build_naive_operator(formula_def.clone(), self.semantics)
+                self.build_naive_operator(
+                    formula_def.clone(),
+                    self.semantics,
+                    self.pruning_strategy,
+                )
             }
             (Algorithm::Naive, Semantics::EagerQualitative | Semantics::RobustnessInterval) => {
                 return Err("Naive algorithm does not support RoSI/Eager evaluation");
@@ -747,6 +772,7 @@ where
         &self,
         formula: FormulaDefinition,
         _semantics: Semantics,
+        pruning_strategy: PruningStrategy,
     ) -> Box<dyn StlOperatorTrait<T, Output = Y>>
     where
         T: Into<f64> + Copy + 'static,
@@ -757,6 +783,7 @@ where
         Box::new(StlFormula::<T, RingBuffer<T>, Y>::new(
             formula_enum,
             RingBuffer::new(),
+            pruning_strategy,
         ))
     }
 }
@@ -804,6 +831,7 @@ fn build_incremental_operator<T, Y>(
     formula: FormulaDefinition,
     semantics: Semantics,
     variables: Variables,
+    pruning_strategy: PruningStrategy,
 ) -> Box<dyn StlOperatorAndSignalIdentifier<T, Y>>
 where
     T: Into<f64> + Copy + 'static,
@@ -818,10 +846,10 @@ where
     macro_rules! dispatch_operator {
         ($OpType:ident, $( $arg:expr ),* ) => {
             match (is_eager, is_rosi) {
-                (true, true) => Box::new($OpType::<T, RingBuffer<Y>, Y, true, true>::new( $( $arg ),* )),
-                (true, false) => Box::new($OpType::<T, RingBuffer<Y>, Y, true, false>::new( $( $arg ),* )),
-                (false, true) => Box::new($OpType::<T, RingBuffer<Y>, Y, false, true>::new( $( $arg ),* )),
-                (false, false) => Box::new($OpType::<T, RingBuffer<Y>, Y, false, false>::new( $( $arg ),* )),
+                (true, true) => Box::new($OpType::<T, RingBuffer<Y>, Y, true, true>::new( $( $arg ),*, pruning_strategy )),
+                (true, false) => Box::new($OpType::<T, RingBuffer<Y>, Y, true, false>::new( $( $arg ),*, pruning_strategy )),
+                (false, true) => Box::new($OpType::<T, RingBuffer<Y>, Y, false, true>::new( $( $arg ),*, pruning_strategy )),
+                (false, false) => Box::new($OpType::<T, RingBuffer<Y>, Y, false, false>::new( $( $arg ),*, pruning_strategy )),
             }
         };
     }
@@ -839,19 +867,21 @@ where
         FormulaDefinition::False => Box::new(Atomic::new_false()),
 
         FormulaDefinition::Not(op) => {
-            let child = build_incremental_operator(*op, semantics, variables);
+            let child = build_incremental_operator(*op, semantics, variables, pruning_strategy);
             Box::new(Not::new(child))
         }
 
         FormulaDefinition::And(l, r) => {
-            let left = build_incremental_operator(*l, semantics, variables.clone());
-            let right = build_incremental_operator(*r, semantics, variables);
+            let left =
+                build_incremental_operator(*l, semantics, variables.clone(), pruning_strategy);
+            let right = build_incremental_operator(*r, semantics, variables, pruning_strategy);
             dispatch_operator!(And, left, right, None, None)
         }
 
         FormulaDefinition::Or(l, r) => {
-            let left = build_incremental_operator(*l, semantics, variables.clone());
-            let right = build_incremental_operator(*r, semantics, variables);
+            let left =
+                build_incremental_operator(*l, semantics, variables.clone(), pruning_strategy);
+            let right = build_incremental_operator(*r, semantics, variables, pruning_strategy);
             dispatch_operator!(Or, left, right, None, None)
         }
 
@@ -860,24 +890,26 @@ where
                 *l,
                 semantics,
                 variables.clone(),
+                pruning_strategy,
             )));
-            let right = build_incremental_operator(*r, semantics, variables);
+            let right = build_incremental_operator(*r, semantics, variables, pruning_strategy);
             dispatch_operator!(Or, not_left, right, None, None)
         }
 
         FormulaDefinition::Eventually(i, op) => {
-            let child = build_incremental_operator(*op, semantics, variables);
+            let child = build_incremental_operator(*op, semantics, variables, pruning_strategy);
             dispatch_operator!(Eventually, i, child, None, None)
         }
 
         FormulaDefinition::Globally(i, op) => {
-            let child = build_incremental_operator(*op, semantics, variables);
+            let child = build_incremental_operator(*op, semantics, variables, pruning_strategy);
             dispatch_operator!(Globally, i, child, None, None)
         }
 
         FormulaDefinition::Until(i, l, r) => {
-            let left = build_incremental_operator(*l, semantics, variables.clone());
-            let right = build_incremental_operator(*r, semantics, variables);
+            let left =
+                build_incremental_operator(*l, semantics, variables.clone(), pruning_strategy);
+            let right = build_incremental_operator(*r, semantics, variables, pruning_strategy);
             dispatch_operator!(Until, i, left, right, None, None)
         }
     }

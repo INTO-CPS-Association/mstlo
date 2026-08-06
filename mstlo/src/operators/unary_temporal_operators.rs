@@ -8,7 +8,7 @@ use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
     TimeInterval,
 };
-use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
+use crate::ring_buffer::{PruningStrategy, RingBufferTrait, Step, guarded_prune};
 use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Display};
 use std::time::Duration;
@@ -161,6 +161,7 @@ pub struct Eventually<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     eval_buffer: VecDeque<Duration>,
     eval_buffer_set: HashSet<Duration>,
     max_lookahead: Duration,
+    pruning_strategy: PruningStrategy,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -173,6 +174,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
         operand: Box<dyn StlOperatorAndSignalIdentifier<T, Y>>,
         cache: Option<C>,
         eval_buffer: Option<VecDeque<Duration>>,
+        pruning_strategy: PruningStrategy,
     ) -> Self
     where
         T: Clone + 'static,
@@ -193,6 +195,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 eval_buffer,
                 eval_buffer_set,
                 max_lookahead,
+                pruning_strategy,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -205,6 +208,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 eval_buffer,
                 eval_buffer_set,
                 max_lookahead,
+                pruning_strategy,
             }
         }
     }
@@ -326,7 +330,12 @@ where
 
         // Prune the cache.
         let protected_ts = self.eval_buffer.front().copied().unwrap_or(Duration::ZERO);
-        guarded_prune(&mut self.cache, self.max_lookahead, protected_ts);
+        guarded_prune(
+            &mut self.cache,
+            self.max_lookahead,
+            protected_ts,
+            self.pruning_strategy,
+        );
 
         output_robustness
     }
@@ -353,6 +362,7 @@ pub struct Globally<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     eval_buffer: VecDeque<Duration>,
     eval_buffer_set: HashSet<Duration>,
     max_lookahead: Duration,
+    pruning_strategy: PruningStrategy,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -365,6 +375,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
         operand: Box<dyn StlOperatorAndSignalIdentifier<T, Y>>,
         cache: Option<C>,
         eval_buffer: Option<VecDeque<Duration>>,
+        pruning_strategy: PruningStrategy,
     ) -> Self
     where
         T: Clone + 'static,
@@ -385,6 +396,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 eval_buffer,
                 eval_buffer_set,
                 max_lookahead,
+                pruning_strategy,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -397,6 +409,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 eval_buffer,
                 eval_buffer_set,
                 max_lookahead,
+                pruning_strategy,
             }
         }
     }
@@ -518,7 +531,12 @@ where
 
         // Prune the cache.
         let protected_ts = self.eval_buffer.front().copied().unwrap_or(Duration::ZERO);
-        guarded_prune(&mut self.cache, self.max_lookahead, protected_ts);
+        guarded_prune(
+            &mut self.cache,
+            self.max_lookahead,
+            protected_ts,
+            self.pruning_strategy,
+        );
 
         output_robustness
     }
@@ -585,6 +603,7 @@ mod tests {
             Box::new(atomic),
             None,
             None,
+            PruningStrategy::default(),
         );
         eventually.get_signal_identifiers();
 
@@ -632,6 +651,7 @@ mod tests {
             Box::new(atomic),
             None,
             None,
+            PruningStrategy::default(),
         );
         globally.get_signal_identifiers();
 
@@ -678,6 +698,7 @@ mod tests {
             Box::new(atomic),
             None,
             None,
+            PruningStrategy::default(),
         );
         let ids = globally.get_signal_identifiers();
         let expected_ids: HashSet<&'static str> = vec!["x"].into_iter().collect();
@@ -696,6 +717,7 @@ mod tests {
             Box::new(atomic),
             None,
             None,
+            PruningStrategy::default(),
         );
         assert_eq!(format!("{globally}"), "G[1, 5](x > 10)");
     }
@@ -712,6 +734,7 @@ mod tests {
             Box::new(atomic),
             None,
             None,
+            PruningStrategy::default(),
         );
         assert_eq!(format!("{eventually}"), "F[0, 3](y < 5)");
     }
@@ -765,7 +788,13 @@ mod sparse_timestamp_tests {
             end: secs(2),
         };
         let atomic = Atomic::<f64>::new_greater_than("x", 3.0);
-        Globally::new(interval, Box::new(atomic), None, None)
+        Globally::new(
+            interval,
+            Box::new(atomic),
+            None,
+            None,
+            PruningStrategy::default(),
+        )
     }
     fn g02_globally_rosi()
     -> Globally<f64, RingBuffer<RobustnessInterval>, RobustnessInterval, true, true> {
@@ -774,7 +803,13 @@ mod sparse_timestamp_tests {
             end: secs(2),
         };
         let atomic = Atomic::<RobustnessInterval>::new_greater_than("x", 3.0);
-        Globally::new(interval, Box::new(atomic), None, None)
+        Globally::new(
+            interval,
+            Box::new(atomic),
+            None,
+            None,
+            PruningStrategy::default(),
+        )
     }
     fn g02_globally_eager_qual() -> Globally<f64, RingBuffer<bool>, bool, true, false> {
         let interval = TimeInterval {
@@ -782,7 +817,13 @@ mod sparse_timestamp_tests {
             end: secs(2),
         };
         let atomic = Atomic::<bool>::new_greater_than("x", 3.0);
-        Globally::new(interval, Box::new(atomic), None, None)
+        Globally::new(
+            interval,
+            Box::new(atomic),
+            None,
+            None,
+            PruningStrategy::default(),
+        )
     }
 
     fn sparse_steps() -> Vec<Step<f64>> {
@@ -963,12 +1004,14 @@ mod sparse_timestamp_tests {
             Box::new(atomic.clone()),
             None,
             None,
+            PruningStrategy::default(),
         );
         let mut eventually = Eventually::<f64, RingBuffer<f64>, f64, false, false>::new(
             interval,
             Box::new(atomic.clone()),
             None,
             None,
+            PruningStrategy::default(),
         );
         let mut globally_rosi =
             Globally::<f64, RingBuffer<RobustnessInterval>, RobustnessInterval, false, true>::new(
@@ -976,6 +1019,7 @@ mod sparse_timestamp_tests {
                 Box::new(Atomic::<RobustnessInterval>::new_greater_than("x", 0.0)),
                 None,
                 None,
+                PruningStrategy::default(),
             );
 
         let mut eventually_rosi = Eventually::<
@@ -989,6 +1033,7 @@ mod sparse_timestamp_tests {
             Box::new(Atomic::<RobustnessInterval>::new_greater_than("x", 0.0)),
             None,
             None,
+            PruningStrategy::default(),
         );
 
         let signal_values = vec![1.0, 2.0, 3.0];

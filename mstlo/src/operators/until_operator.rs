@@ -8,7 +8,7 @@ use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
     TimeInterval,
 };
-use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
+use crate::ring_buffer::{PruningStrategy, RingBufferTrait, Step, guarded_prune};
 use std::collections::{HashSet, VecDeque};
 use std::fmt::Display;
 use std::time::Duration;
@@ -34,6 +34,7 @@ pub struct Until<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_signals_set: HashSet<&'static str>,
     right_signals_set: HashSet<&'static str>,
     max_lookahead: Duration,
+    pruning_strategy: PruningStrategy,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -49,6 +50,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
         right: Box<dyn StlOperatorAndSignalIdentifier<T, Y>>,
         left_cache: Option<C>,
         right_cache: Option<C>,
+        pruning_strategy: PruningStrategy,
     ) -> Self
     where
         T: Clone + 'static,
@@ -75,6 +77,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
                 left_signals_set: HashSet::new(),
                 right_signals_set: HashSet::new(),
                 max_lookahead,
+                pruning_strategy,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -91,6 +94,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
                 left_signals_set: HashSet::new(),
                 right_signals_set: HashSet::new(),
                 max_lookahead,
+                pruning_strategy,
             }
         }
     }
@@ -320,8 +324,18 @@ where
         // 3. Prune the caches and remove completed tasks from the buffer.
         let protected_ts = self.eval_buffer.front().copied().unwrap_or(Duration::ZERO);
         let lookahead = self.max_lookahead;
-        guarded_prune(&mut self.left_cache, lookahead, protected_ts);
-        guarded_prune(&mut self.right_cache, lookahead, protected_ts);
+        guarded_prune(
+            &mut self.left_cache,
+            lookahead,
+            protected_ts,
+            self.pruning_strategy,
+        );
+        guarded_prune(
+            &mut self.right_cache,
+            lookahead,
+            protected_ts,
+            self.pruning_strategy,
+        );
 
         for &t in &tasks_to_remove {
             self.eval_buffer_set.remove(&t);
@@ -398,13 +412,14 @@ mod tests {
         let atomic_left = Atomic::<RobustnessInterval>::new_greater_than("x", 0.0);
         let atomic_right = Atomic::<RobustnessInterval>::new_greater_than("x", 3.0);
 
-        let globally = Globally::<
-            f64,
-            RingBuffer<RobustnessInterval>,
-            RobustnessInterval,
-            false,
-            true,
-        >::new(interval_2, Box::new(atomic_left), None, None);
+        let globally =
+            Globally::<f64, RingBuffer<RobustnessInterval>, RobustnessInterval, false, true>::new(
+                interval_2,
+                Box::new(atomic_left),
+                None,
+                None,
+                PruningStrategy::default(),
+            );
 
         let eventually = Eventually::<
             f64,
@@ -412,7 +427,13 @@ mod tests {
             RobustnessInterval,
             false,
             true,
-        >::new(interval_2, Box::new(atomic_right), None, None);
+        >::new(
+            interval_2,
+            Box::new(atomic_right),
+            None,
+            None,
+            PruningStrategy::default(),
+        );
 
         let mut until =
             Until::<f64, RingBuffer<RobustnessInterval>, RobustnessInterval, false, true>::new(
@@ -421,6 +442,7 @@ mod tests {
                 Box::new(eventually),
                 None,
                 None,
+                PruningStrategy::default(),
             );
         println!("Until operator: {}", until);
 
@@ -470,12 +492,14 @@ mod tests {
             Box::new(atomic_left.clone()),
             None,
             None,
+            PruningStrategy::default(),
         );
         let mut eventually = Eventually::<f64, RingBuffer<f64>, f64, true, false>::new(
             interval,
             Box::new(atomic_right.clone()),
             None,
             None,
+            PruningStrategy::default(),
         );
 
         let mut until = Until::<f64, RingBuffer<f64>, f64, true, false>::new(
@@ -484,6 +508,7 @@ mod tests {
             Box::new(eventually.clone()),
             None,
             None,
+            PruningStrategy::default(),
         );
         println!("Until operator: {}", until);
 
@@ -532,12 +557,14 @@ mod tests {
             Box::new(atomic_left.clone()),
             None,
             None,
+            PruningStrategy::default(),
         );
         let mut eventually = Eventually::<f64, RingBuffer<bool>, bool, true, false>::new(
             interval,
             Box::new(atomic_right.clone()),
             None,
             None,
+            PruningStrategy::default(),
         );
 
         let mut until = Until::<f64, RingBuffer<bool>, bool, true, false>::new(
@@ -546,6 +573,7 @@ mod tests {
             Box::new(eventually.clone()),
             None,
             None,
+            PruningStrategy::default(),
         );
         println!("Until operator: {}", until);
 
@@ -592,6 +620,7 @@ mod tests {
             Box::new(atomic_right),
             None,
             None,
+            PruningStrategy::default(),
         );
         until.get_signal_identifiers();
         let signal_values = vec![2.0, 2.0, 2.0, 6.0, 12.0];
@@ -637,6 +666,7 @@ mod tests {
             Box::new(atomic_right),
             None,
             None,
+            PruningStrategy::default(),
         );
         let ids = until.get_signal_identifiers();
         let expected_ids: HashSet<&'static str> = vec!["x", "y"].into_iter().collect();
@@ -657,6 +687,7 @@ mod tests {
             Box::new(atomic_right),
             None,
             None,
+            PruningStrategy::default(),
         );
         assert_eq!(format!("{until}"), "(x > 0) U[1, 5] (y < 10)");
     }

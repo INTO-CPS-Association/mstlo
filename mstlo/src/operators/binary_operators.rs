@@ -9,7 +9,7 @@
 use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
 };
-use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
+use crate::ring_buffer::{PruningStrategy, RingBufferTrait, Step, guarded_prune};
 use std::collections::HashSet;
 use std::fmt::{Debug, Display};
 use std::time::Duration;
@@ -142,6 +142,7 @@ pub struct And<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_signals_set: HashSet<&'static str>,
     right_signals_set: HashSet<&'static str>,
     max_lookahead: Duration,
+    pruning_strategy: PruningStrategy,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> And<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -153,6 +154,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> And<T, C, Y, IS_EAGER, 
         right: Box<dyn StlOperatorAndSignalIdentifier<T, Y>>,
         left_cache: Option<C>,
         right_cache: Option<C>,
+        pruning_strategy: PruningStrategy,
     ) -> Self
     where
         T: Clone + 'static,
@@ -171,6 +173,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> And<T, C, Y, IS_EAGER, 
             left_signals_set: HashSet::new(),
             right_signals_set: HashSet::new(),
             max_lookahead,
+            pruning_strategy,
         }
     }
 }
@@ -272,8 +275,18 @@ where
             .min(self.right_last_known.timestamp)
             .saturating_sub(lookahead);
 
-        guarded_prune(&mut self.left_cache, lookahead, protected_ts);
-        guarded_prune(&mut self.right_cache, lookahead, protected_ts);
+        guarded_prune(
+            &mut self.left_cache,
+            lookahead,
+            protected_ts,
+            self.pruning_strategy,
+        );
+        guarded_prune(
+            &mut self.right_cache,
+            lookahead,
+            protected_ts,
+            self.pruning_strategy,
+        );
 
         // Update last_eval_time based on delayed semantics
         if let Some(eval_time) = if IS_ROSI {
@@ -321,6 +334,7 @@ pub struct Or<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_signals_set: HashSet<&'static str>,
     right_signals_set: HashSet<&'static str>,
     max_lookahead: Duration,
+    pruning_strategy: PruningStrategy,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Or<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -332,6 +346,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Or<T, C, Y, IS_EAGER, I
         right: Box<dyn StlOperatorAndSignalIdentifier<T, Y>>,
         left_cache: Option<C>,
         right_cache: Option<C>,
+        pruning_strategy: PruningStrategy,
     ) -> Self
     where
         T: Clone + 'static,
@@ -358,6 +373,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Or<T, C, Y, IS_EAGER, I
             left_signals_set: HashSet::new(),
             right_signals_set: HashSet::new(),
             max_lookahead,
+            pruning_strategy,
         }
     }
 }
@@ -459,8 +475,18 @@ where
             .min(self.right_last_known.timestamp)
             .saturating_sub(lookahead);
 
-        guarded_prune(&mut self.left_cache, lookahead, protected_ts);
-        guarded_prune(&mut self.right_cache, lookahead, protected_ts);
+        guarded_prune(
+            &mut self.left_cache,
+            lookahead,
+            protected_ts,
+            self.pruning_strategy,
+        );
+        guarded_prune(
+            &mut self.right_cache,
+            lookahead,
+            protected_ts,
+            self.pruning_strategy,
+        );
 
         // Update last_eval_time based on delayed semantics
         if let Some(eval_time) = if IS_ROSI {
@@ -530,12 +556,14 @@ mod tests {
             Box::new(atomic2.clone()),
             None,
             None,
+            PruningStrategy::default(),
         );
         let or = Or::<f64, RingBuffer<f64>, f64, false, false>::new(
             Box::new(atomic1),
             Box::new(atomic2),
             None,
             None,
+            PruningStrategy::default(),
         );
 
         assert_eq!(and.to_string(), "(x > 10) ∧ (y < 5)");
@@ -551,6 +579,7 @@ mod tests {
             Box::new(atomic2.clone()),
             None,
             None,
+            PruningStrategy::default(),
         );
         and.get_signal_identifiers();
 
@@ -563,6 +592,7 @@ mod tests {
             Box::new(atomic2),
             None,
             None,
+            PruningStrategy::default(),
         );
         or.get_signal_identifiers();
 
@@ -580,6 +610,7 @@ mod tests {
             Box::new(atomic2),
             None,
             None,
+            PruningStrategy::default(),
         );
         and.get_signal_identifiers();
 
@@ -600,6 +631,7 @@ mod tests {
             Box::new(atomic2),
             None,
             None,
+            PruningStrategy::default(),
         );
         or.get_signal_identifiers();
 
@@ -620,6 +652,7 @@ mod tests {
             Box::new(atomic2),
             None,
             None,
+            PruningStrategy::default(),
         );
         let ids = and.get_signal_identifiers();
         let expected: HashSet<&'static str> = ["x", "y"].iter().cloned().collect();

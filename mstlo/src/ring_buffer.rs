@@ -12,6 +12,16 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::VecDeque, time::Duration};
 
+/// Controls whether pruning also shrinks excess buffer capacity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PruningStrategy {
+    /// Never shrink the buffer after pruning (default).
+    #[default]
+    Never,
+    /// Shrink-to-fit when capacity exceeds 2x length.
+    ShrinkToFit,
+}
+
 #[cfg(feature = "track-cache-size")]
 /// Global counter for elements currently residing in any ring buffer.
 pub static GLOBAL_CACHE_SIZE: AtomicUsize = AtomicUsize::new(0);
@@ -87,7 +97,7 @@ pub trait RingBufferTrait {
     fn update_step(&mut self, step: Step<Self::Value>) -> bool;
 
     /// Prune steps older than `max_age` from the buffer.
-    fn prune(&mut self, max_age: Duration);
+    fn prune(&mut self, max_age: Duration, strategy: PruningStrategy);
 
     /// Removes all steps from the buffer.
     fn clear(&mut self);
@@ -247,7 +257,7 @@ where
     fn update_step(&mut self, step: Step<Self::Value>) -> bool {
         self.update_step(step)
     }
-    fn prune(&mut self, max_age: Duration) {
+    fn prune(&mut self, max_age: Duration, strategy: PruningStrategy) {
         let current_time = match self.get_back() {
             Some(step) => step.timestamp,
             None => return, // Buffer is empty, nothing to prune
@@ -279,7 +289,8 @@ where
                 }
             }
         }
-        if self.steps.capacity() > self.steps.len() * 2 {
+        if strategy == PruningStrategy::ShrinkToFit && self.steps.capacity() > self.steps.len() * 2
+        {
             self.steps.shrink_to_fit();
         }
     }
@@ -328,15 +339,20 @@ impl<T> Drop for RingBuffer<T> {
 /// * `cache` - The ring buffer to prune
 /// * `lookahead` - The normal lookahead duration for pruning
 /// * `protected_ts` - Timestamp to protect; entries at or after this will not be pruned
-pub fn guarded_prune<C>(cache: &mut C, lookahead: Duration, protected_ts: Duration)
-where
+/// * `strategy` - Controls whether excess capacity is shrunk after pruning
+pub fn guarded_prune<C>(
+    cache: &mut C,
+    lookahead: Duration,
+    protected_ts: Duration,
+    strategy: PruningStrategy,
+) where
     C: RingBufferTrait,
 {
     let Some(back) = cache.get_back() else { return };
     // Preserve entries at or after the earliest pending evaluation timestamp.
     let distance_to_protected = back.timestamp.saturating_sub(protected_ts);
     let effective_max_age = lookahead.max(distance_to_protected);
-    cache.prune(effective_max_age);
+    cache.prune(effective_max_age, strategy);
 }
 
 #[cfg(test)]
@@ -390,7 +406,7 @@ mod tests {
 
         // Prune steps older than 1 second from the latest timestamp (which is 3 seconds)
         // This should remove the step with timestamp 1 second
-        signal.prune(Duration::from_secs(1));
+        signal.prune(Duration::from_secs(1), PruningStrategy::Never);
 
         assert_eq!(signal.len(), 2);
         assert_eq!(signal.get_front().unwrap().value, 2);
@@ -502,7 +518,7 @@ mod tests {
     fn ring_prune_empty_buffer() {
         let mut signal: RingBuffer<f64> = RingBuffer::new();
         // Pruning an empty buffer should be a no-op
-        signal.prune(Duration::from_secs(1));
+        signal.prune(Duration::from_secs(1), PruningStrategy::Never);
         assert!(signal.is_empty());
     }
 

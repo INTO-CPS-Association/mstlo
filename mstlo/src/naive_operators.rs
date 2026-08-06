@@ -14,8 +14,8 @@
 //! - No eager short-circuit evaluation mode (only delayed-style evaluation).
 
 use crate::core::{RobustnessSemantics, SignalIdentifier, StlOperatorTrait, TimeInterval};
-use crate::ring_buffer::RingBufferTrait;
 use crate::ring_buffer::Step;
+use crate::ring_buffer::{PruningStrategy, RingBufferTrait};
 use std::fmt::Display;
 use std::time::Duration;
 
@@ -53,6 +53,7 @@ where
     formula: StlOperator,
     signal: C,
     last_eval_time: Option<Duration>,
+    pruning_strategy: PruningStrategy,
     _phantom: std::marker::PhantomData<Y>,
 }
 
@@ -63,11 +64,12 @@ where
     Y: RobustnessSemantics + 'static,
 {
     /// Creates a new naive formula evaluator with an external signal buffer.
-    pub fn new(formula: StlOperator, signal: C) -> Self {
+    pub fn new(formula: StlOperator, signal: C, pruning_strategy: PruningStrategy) -> Self {
         Self {
             formula,
             signal,
             last_eval_time: None,
+            pruning_strategy,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -124,7 +126,7 @@ where
             self.last_eval_time = Some(t_eval);
         }
 
-        self.signal.prune(max_lookahead);
+        self.signal.prune(max_lookahead, self.pruning_strategy);
 
         match robustness {
             Some(robustness_step) => {
@@ -542,6 +544,7 @@ mod tests {
                     Box::new(StlOperator::False),
                 ),
                 RingBuffer::new(),
+                PruningStrategy::default(),
             );
 
             assert_eq!(formula.get_max_lookahead(), Duration::from_secs(2));
@@ -869,6 +872,7 @@ mod tests {
                 )),
             ),
             RingBuffer::new(),
+            PruningStrategy::default(),
         );
 
         let ids = formula.get_signal_identifiers();
@@ -890,6 +894,7 @@ mod tests {
                 Box::new(StlOperator::GreaterThan("x", 10.0)),
             ),
             RingBuffer::new(),
+            PruningStrategy::default(),
         );
 
         // Not enough data yet (timestamp 0 < max_lookahead 2)
@@ -919,6 +924,7 @@ mod tests {
                 Box::new(StlOperator::GreaterThan("x", 10.0)),
             ),
             RingBuffer::new(),
+            PruningStrategy::default(),
         );
 
         let display = format!("{formula}");
@@ -1004,6 +1010,7 @@ mod tests {
                 )),
             ),
             RingBuffer::new(),
+            PruningStrategy::default(),
         );
 
         let ids = formula.get_signal_identifiers();
