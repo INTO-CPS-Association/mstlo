@@ -1,6 +1,6 @@
-# Experiments
+# Synthetic Signal
 
-- [Experiments](#experiments)
+- [Synthetic Signal](#synthetic-signal)
   - [Prerequisites](#prerequisites)
   - [Running the Experiments](#running-the-experiments)
   - [Results](#results)
