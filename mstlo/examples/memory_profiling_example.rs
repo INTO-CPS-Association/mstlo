@@ -6,7 +6,7 @@
 //!    phase (increasing signal under G/min), then drops during the
 //!    good phase (decreasing signal collapses the cache).
 
-use mstlo::{step, stl, DelayedQuantitative, StlMonitor};
+use mstlo::{DelayedQuantitative, StlMonitor, step, stl};
 use std::time::Duration;
 
 fn ms(ms: u64) -> Duration {
