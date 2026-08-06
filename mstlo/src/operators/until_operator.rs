@@ -127,6 +127,18 @@ where
         self.max_lookahead
     }
 
+    fn total_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.left_cache.heap_size()
+            + self.right_cache.heap_size()
+            + self.eval_buffer.capacity() * std::mem::size_of::<Duration>()
+            + self.eval_buffer_set.capacity() * (std::mem::size_of::<Duration>() + 1)
+            + self.left_signals_set.capacity() * (std::mem::size_of::<&str>() + 1)
+            + self.right_signals_set.capacity() * (std::mem::size_of::<&str>() + 1)
+            + self.left.total_size()
+            + self.right.total_size()
+    }
+
     fn reset(&mut self) {
         self.left_cache.clear();
         self.right_cache.clear();

@@ -578,6 +578,19 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
         self.root_operator.reset();
         self.synchronizer.reset();
     }
+
+    #[allow(rustdoc::private_intra_doc_links)]
+    /// Returns total memory (stack + heap) in bytes consumed by the entire
+    /// monitor, including the root operator tree, all children recursively,
+    /// and the synchronizer's internal buffers.
+    ///
+    /// See [`StlOperatorTrait::total_size`] for details on how operator memory
+    /// is measured.
+    pub fn total_size(&self) -> usize {
+        self.root_operator.total_size()
+            + std::mem::size_of_val(&self.synchronizer)
+            + self.synchronizer.heap_size()
+    }
 }
 
 impl<T: Clone + Interpolatable, Y> Display for StlMonitor<T, Y> {

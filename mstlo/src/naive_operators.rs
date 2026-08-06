@@ -95,6 +95,10 @@ where
         self.formula.get_max_lookahead()
     }
 
+    fn total_size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.signal.heap_size() + self.formula.total_size()
+    }
+
     fn reset(&mut self) {
         self.signal.clear();
         self.last_eval_time = None;
@@ -140,6 +144,19 @@ where
 }
 
 impl StlOperator {
+    fn total_size(&self) -> usize {
+        let children: usize = match self {
+            StlOperator::Not(f) => f.total_size(),
+            StlOperator::And(l, r) | StlOperator::Or(l, r) | StlOperator::Implies(l, r) => {
+                l.total_size() + r.total_size()
+            }
+            StlOperator::Globally(_, f) | StlOperator::Eventually(_, f) => f.total_size(),
+            StlOperator::Until(_, l, r) => l.total_size() + r.total_size(),
+            _ => 0,
+        };
+        std::mem::size_of::<Self>() + children
+    }
+
     /// Computes the robustness of the formula at a specific time `t_eval`.
     /// This function assumes all necessary signal data (up to `t_eval + max_lookahead`) is present.
     fn robustness_naive<T, C, Y>(
@@ -333,12 +350,11 @@ impl StlOperator {
         let upper_bound_t_prime = t_eval + interval.end;
 
         // Check if we have enough data in the signal
-        if let Some(back_step) = signal.get_back() {
+        {
+            let back_step = signal.get_back()?;
             if back_step.timestamp < upper_bound_t_prime {
                 return None; // Not enough data to evaluate yet
             }
-        } else {
-            return None; // Signal is empty
         }
 
         let result = signal
@@ -371,12 +387,11 @@ impl StlOperator {
         let lower_bound_t_prime = t_eval + interval.start;
         let upper_bound_t_prime = t_eval + interval.end;
 
-        if let Some(back_step) = signal.get_back() {
+        {
+            let back_step = signal.get_back()?;
             if back_step.timestamp < upper_bound_t_prime {
                 return None;
             }
-        } else {
-            return None;
         }
 
         let result = signal
@@ -408,12 +423,11 @@ impl StlOperator {
         let lower_bound_t_prime = t_eval + interval.start;
         let upper_bound_t_prime = t_eval + interval.end;
 
-        if let Some(back_step) = signal.get_back() {
+        {
+            let back_step = signal.get_back()?;
             if back_step.timestamp < upper_bound_t_prime {
                 return None;
             }
-        } else {
-            return None;
         }
 
         let result = signal
