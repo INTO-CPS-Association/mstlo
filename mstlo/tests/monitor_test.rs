@@ -39,10 +39,7 @@ fn run_monitor_test<Y, S>(
         let mut all_results = Vec::new();
         for step in signal.clone() {
             let output = monitor.update(&step);
-            println!(
-                "Step at {:?}, Monitor Output: {:?}",
-                step.timestamp, &output
-            );
+            println!("Step at {:?}, Monitor Output: {:?}", step.timestamp, output);
             all_results.push(output.all_raw_outputs());
         }
 

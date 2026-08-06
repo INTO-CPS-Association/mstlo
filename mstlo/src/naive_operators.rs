@@ -335,12 +335,11 @@ impl StlOperator {
         let upper_bound_t_prime = t_eval + interval.end;
 
         // Check if we have enough data in the signal
-        if let Some(back_step) = signal.get_back() {
+        {
+            let back_step = signal.get_back()?;
             if back_step.timestamp < upper_bound_t_prime {
                 return None; // Not enough data to evaluate yet
             }
-        } else {
-            return None; // Signal is empty
         }
 
         let result = signal
@@ -373,12 +372,11 @@ impl StlOperator {
         let lower_bound_t_prime = t_eval + interval.start;
         let upper_bound_t_prime = t_eval + interval.end;
 
-        if let Some(back_step) = signal.get_back() {
+        {
+            let back_step = signal.get_back()?;
             if back_step.timestamp < upper_bound_t_prime {
                 return None;
             }
-        } else {
-            return None;
         }
 
         let result = signal
@@ -410,12 +408,11 @@ impl StlOperator {
         let lower_bound_t_prime = t_eval + interval.start;
         let upper_bound_t_prime = t_eval + interval.end;
 
-        if let Some(back_step) = signal.get_back() {
+        {
+            let back_step = signal.get_back()?;
             if back_step.timestamp < upper_bound_t_prime {
                 return None;
             }
-        } else {
-            return None;
         }
 
         let result = signal
