@@ -579,6 +579,7 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
         self.synchronizer.reset();
     }
 
+    #[allow(rustdoc::private_intra_doc_links)]
     /// Returns total memory (stack + heap) in bytes consumed by the entire
     /// monitor, including the root operator tree, all children recursively,
     /// and the synchronizer's internal buffers.
