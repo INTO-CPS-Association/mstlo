@@ -3,9 +3,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SIGNAL_DIR="$SCRIPT_DIR/BENCH_RESULTS/signal_generation/signals"
-OUTPUT_DIR="$SCRIPT_DIR/BENCH_RESULTS/outputs"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+SIGNAL_DIR="$SCRIPT_DIR/paper_results/signal_generation/signals"
+OUTPUT_DIR="$SCRIPT_DIR/paper_results/outputs"
 
 WARMUP_RUNS=10
 M_RUNS=50
@@ -141,6 +141,14 @@ python "$SCRIPT_DIR/rtamt_benchmark.py" \
 		--fg-mode "both" \
 		--plot-std \
 		--no-log-scale
+
+	python "$SCRIPT_DIR/data_analysis/performance_comparison_w_rtamt.py" \
+		--benchmark-csv "$NATIVE_RESULTS" \
+		--regression-csv "$OUTPUT_DIR/data_analysis/regression_fit/regression_fit_results.csv" \
+		--output "$OUTPUT_DIR/data_analysis/mstlo_plots/performance_comparison_w_rtamt_all.pdf" \
+		--log-x \
+		--x-min 10 \
+		--rtamt-csv "$RTAMT_RESULTS"
 
 	# RTAMT plots
 	python "$SCRIPT_DIR/data_analysis/rtamt_performance_plot.py" --benchmark-csv "$RTAMT_RESULTS" --semantics dense-time-python-offline --output "$OUTPUT_DIR/data_analysis/rtamt_plots/dense-time-offline_all.pdf"

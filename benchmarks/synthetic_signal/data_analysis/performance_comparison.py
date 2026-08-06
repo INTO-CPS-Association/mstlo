@@ -189,6 +189,22 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Use log scale on y-axis (default: true)",
     )
+    parser.add_argument(
+        "--log-x",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use log scale on x-axis too, i.e. a log-log plot (default: false)",
+    )
+    parser.add_argument(
+        "--x-min",
+        type=float,
+        default=None,
+        help=(
+            "Drop points with interval_len < this value, curves included. Useful with "
+            "--log-x, where the sparsely sampled low-b region is stretched over "
+            "several empty decades (e.g. --x-min 100)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -260,11 +276,16 @@ def main() -> None:
 
     if args.plot_operators is not None:
         df_plot = df_plot[df_plot["operator"].isin(args.plot_operators)]
-        operators_to_plot = [op for op in operators_to_plot if op in args.plot_operators]
+        operators_to_plot = [
+            op for op in operators_to_plot if op in args.plot_operators
+        ]
 
     if args.plot_semantics is not None:
         requested = {SEMANTICS_ALIASES[s] for s in args.plot_semantics}
         df_plot = df_plot[df_plot["semantics"].isin(requested)]
+
+    if args.x_min is not None:
+        df_plot = df_plot[df_plot["interval_len"] >= args.x_min]
 
     fit_params = _build_fit_params(fits_orig, df_plot, operators_to_plot, args.fg_mode)
 
@@ -319,30 +340,34 @@ def main() -> None:
         if fit is not None:
             x_min, x_max = g["interval_len"].min(), g["interval_len"].max()
             if fit["model_name"] == "constant":
+                x_fit = np.array([x_min, x_max])
+                y_fit = np.full(2, fit["intercept"])
+            else:
+                # Sample in log space on a log x-axis, otherwise nearly all the points
+                # land in the last decade and the low-x part renders as a polyline.
+                space = np.logspace if args.log_x else np.linspace
+                lo, hi = (
+                    (np.log10(x_min), np.log10(x_max)) if args.log_x else (x_min, x_max)
+                )
+                x_fit = space(lo, hi, 500)
+                y_fit = eval_fit(fit, x_fit)
+
+            # A log y-axis cannot show non-positive predictions, and several fits have
+            # negative intercepts.
+            if args.log_scale:
+                keep = y_fit > 0
+                x_fit, y_fit = x_fit[keep], y_fit[keep]
+
+            if len(x_fit):
                 ax.plot(
-                    [x_min, x_max],
-                    [fit["intercept"], fit["intercept"]],
+                    x_fit,
+                    y_fit,
                     color=color,
                     linewidth=1.8,
                     linestyle=":",
                     alpha=0.6,
                     zorder=2,
                 )
-            else:
-                x_fit = np.linspace(x_min, x_max, 500)
-                y_fit = eval_fit(fit, x_fit)
-                y_data_min = g["avg_per_sample_us"].min()
-                mask = y_fit >= y_data_min
-                if mask.any():
-                    ax.plot(
-                        x_fit[mask],
-                        y_fit[mask],
-                        color=color,
-                        linewidth=1.8,
-                        linestyle=":",
-                        alpha=0.6,
-                        zorder=2,
-                    )
 
         x_last = g["interval_len"].iloc[-1]
         y_last = g["avg_per_sample_us"].iloc[-1]
@@ -359,9 +384,15 @@ def main() -> None:
 
     if args.log_scale:
         ax.set_yscale("log")
+    if args.log_x:
+        ax.set_xscale("log")
 
     ax.set_xlabel("Temporal upper bound ($b$)", labelpad=5)
-    y_label = "Average time per sample (\u00b5s, log scale)" if args.log_scale else "Average time per sample (\u00b5s)"
+    y_label = (
+        "Average time per sample (\u00b5s, log scale)"
+        if args.log_scale
+        else "Average time per sample (\u00b5s)"
+    )
     ax.set_ylabel(y_label, labelpad=5)
     # ax.set_title("Performance scaling of temporal operators", pad=5)
     ax.grid(True, which="major", linestyle="--", linewidth=0.8, alpha=0.55)
@@ -370,8 +401,16 @@ def main() -> None:
     ax.tick_params(which="both", top=True, right=True, width=1.1)
 
     x_data_max = df_plot["interval_len"].max()
-    x_label = x_data_max * 1.015
-    x_right = x_data_max * 1.35
+    if args.log_x:
+        # Reserve the label gutter as a fraction of the *decades* on screen; a fixed
+        # multiplicative padding is a negligible slice of a log axis.
+        x_data_min = df_plot["interval_len"].min()
+        decades = np.log10(x_data_max / max(x_data_min, 1e-12))
+        x_label = x_data_max * 10 ** (0.01 * decades)
+        x_right = x_data_max * 10 ** (0.26 * decades)
+    else:
+        x_label = x_data_max * 1.015
+        x_right = x_data_max * 1.35
     ax.set_xlim(right=x_right)
 
     # Force matplotlib to finalise autoscaling so get_ylim() returns the real limits.
@@ -383,17 +422,17 @@ def main() -> None:
     non_rosi_indices = [
         i for i, info in enumerate(direct_labels) if info["semantics"] != "RoSI"
     ]
-    operators = sorted({direct_labels[i]["operator"] for i in non_rosi_indices})
-    for op in operators:
-        idx = [i for i in non_rosi_indices if direct_labels[i]["operator"] == op]
-        if not idx:
-            continue
-        y_vals = [direct_labels[i]["y"] for i in idx]
-        min_frac = 0.13 if op == "G" else 0.10
+    # Spread them as one group rather than per operator: labels from different
+    # operators sit at similar y and would otherwise be allowed to overlap.
+    if non_rosi_indices:
         adjusted = adjust_label_positions(
-            y_vals, y_min, y_max, min_frac=min_frac, log_scale=args.log_scale
+            [direct_labels[i]["y"] for i in non_rosi_indices],
+            y_min,
+            y_max,
+            min_frac=0.075,
+            log_scale=args.log_scale,
         )
-        for i, y_adj in zip(idx, adjusted):
+        for i, y_adj in zip(non_rosi_indices, adjusted):
             y_targets[i] = y_adj
 
     for i, label_info in enumerate(direct_labels):
