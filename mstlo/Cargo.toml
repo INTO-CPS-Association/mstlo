@@ -34,6 +34,14 @@ harness = false
 name = "paper_benchmark"
 harness = false
 
+[[bench]]
+name = "incubator_benchmark"
+harness = false
+
+[[bench]]
+name = "memory_profile_benchmark"
+harness = false
+
 [features]
 default = []
 track-cache-size = []
