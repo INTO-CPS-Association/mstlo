@@ -635,9 +635,8 @@ mod tests {
     fn total_size_includes_children() {
         let a1 = Atomic::<f64>::new_greater_than("x", 10.0);
         let a2 = Atomic::<f64>::new_less_than("y", 5.0);
-        let child_sum =
-            <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a1)
-                + <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a2);
+        let child_sum = <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a1)
+            + <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a2);
         let and = And::<f64, RingBuffer<f64>, f64, false, false>::new(
             Box::new(a1),
             Box::new(a2),
@@ -651,9 +650,8 @@ mod tests {
     fn total_size_or_includes_children() {
         let a1 = Atomic::<f64>::new_greater_than("x", 10.0);
         let a2 = Atomic::<f64>::new_less_than("y", 5.0);
-        let child_sum =
-            <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a1)
-                + <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a2);
+        let child_sum = <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a1)
+            + <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a2);
         let or = Or::<f64, RingBuffer<f64>, f64, false, false>::new(
             Box::new(a1),
             Box::new(a2),

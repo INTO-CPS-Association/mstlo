@@ -663,9 +663,8 @@ mod tests {
         };
         let a_left = Atomic::<f64>::new_greater_than("x", 5.0);
         let a_right = Atomic::<f64>::new_less_than("y", 10.0);
-        let child_sum =
-            <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a_left)
-                + <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a_right);
+        let child_sum = <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a_left)
+            + <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a_right);
         let until = Until::<f64, RingBuffer<f64>, f64, false, false>::new(
             interval,
             Box::new(a_left),
