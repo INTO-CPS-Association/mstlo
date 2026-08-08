@@ -61,15 +61,23 @@ pub trait StlOperatorTrait<T: Clone>: DynClone + Display + SignalIdentifier {
     /// The default implementation is a no-op, suitable for stateless operators like `Atomic`.
     fn reset(&mut self) {}
 
-    /// Returns total memory (stack + heap) in bytes consumed by this operator
-    /// and all its children recursively.
+    /// Returns estimated total memory (stack + heap) in bytes consumed by this
+    /// operator and all its children recursively.
     ///
     /// Stack memory is obtained via `size_of::<Self>()` in each concrete
     /// implementation. Heap memory includes:
+    /// - `RingBuffer` heap via [`crate::ring_buffer::RingBufferTrait::heap_size`],
     /// - `VecDeque` allocations measured by `capacity() * sizeof(element)`,
     /// - `HashSet` allocations estimated as `capacity() * (sizeof(T) + 1)`
-    ///   (element slot + control byte in Swiss table),
-    /// - `RingBuffer` heap via [`crate::ring_buffer::RingBufferTrait::heap_size`],
+    ///   (element slot + control byte in Swiss table). Removing elements
+    ///   leaves behind tombstones that cannot be reused until the next
+    ///   rehash, and each tombstone reduces `capacity()` by one. The memory
+    ///   for those tombstone slots is still allocated, so the estimate
+    ///   undercounts when the set has accumulated many removals. A drop in
+    ///   `capacity()` therefore reflects unusable tombstone slots, not a
+    ///   reduction in allocated memory, unless it is a result of calling `shrink_to_fit()`.
+    /// - `BTreeSet` (Only used if Synchronization strategy is not None)
+    ///   allocations estimated as `len() * (sizeof(T) + 2 * sizeof(usize)`,
     /// - child operators via their own recursive `total_size()` calls.
     ///
     /// # Note on shared state
