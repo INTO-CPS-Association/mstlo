@@ -93,9 +93,6 @@ pub trait RingBufferTrait {
     fn clear(&mut self);
 
     /// Returns the number of bytes allocated on the heap by this buffer.
-    ///
-    /// This uses `capacity()` (not `len()`) to reflect actual allocated memory,
-    /// including any unused but reserved capacity.
     fn heap_size(&self) -> usize;
 
     /// Returns an iterator over all steps from oldest to newest.
