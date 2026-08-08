@@ -656,6 +656,48 @@ mod tests {
     }
 
     #[test]
+    fn total_size_includes_children() {
+        let interval = TimeInterval {
+            start: Duration::from_secs(0),
+            end: Duration::from_secs(4),
+        };
+        let a_left = Atomic::<f64>::new_greater_than("x", 5.0);
+        let a_right = Atomic::<f64>::new_less_than("y", 10.0);
+        let child_sum =
+            <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a_left)
+                + <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a_right);
+        let until = Until::<f64, RingBuffer<f64>, f64, false, false>::new(
+            interval,
+            Box::new(a_left),
+            Box::new(a_right),
+            None,
+            None,
+        );
+        assert!(until.total_size() >= child_sum + std::mem::size_of_val(&until));
+    }
+
+    #[test]
+    fn total_size_after_data() {
+        let interval = TimeInterval {
+            start: Duration::from_secs(0),
+            end: Duration::from_secs(4),
+        };
+        let a_left = Atomic::<f64>::new_greater_than("x", 5.0);
+        let a_right = Atomic::<f64>::new_less_than("x", 10.0);
+        let mut until = Until::<f64, RingBuffer<f64>, f64, false, false>::new(
+            interval,
+            Box::new(a_left),
+            Box::new(a_right),
+            None,
+            None,
+        );
+        until.get_signal_identifiers();
+        let before = until.total_size();
+        until.update(&step!("x", 7.0, Duration::from_secs(0)));
+        assert!(until.total_size() >= before + std::mem::size_of::<Step<f64>>());
+    }
+
+    #[test]
     fn until_display() {
         let interval = TimeInterval {
             start: Duration::from_secs(1),

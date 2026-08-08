@@ -361,4 +361,37 @@ mod tests {
         });
         assert_eq!(sync.pending.len(), 1);
     }
+
+    #[test]
+    fn heap_size_empty() {
+        let sync: Synchronizer<f64> = Synchronizer::new(SynchronizationStrategy::None);
+        assert_eq!(sync.heap_size(), 0);
+    }
+
+    #[test]
+    fn heap_size_after_evaluate() {
+        let mut sync = Synchronizer::new(SynchronizationStrategy::None);
+        sync.evaluate(Step {
+            signal: "A",
+            value: 1.0,
+            timestamp: Duration::from_secs(1),
+        });
+        // pending queue holds at least one Step
+        assert!(sync.heap_size() >= std::mem::size_of::<Step<f64>>());
+    }
+
+    #[test]
+    fn heap_size_after_reset() {
+        let mut sync = Synchronizer::new(SynchronizationStrategy::ZeroOrderHold);
+        sync.evaluate(Step {
+            signal: "A",
+            value: 1.0,
+            timestamp: Duration::from_secs(1),
+        });
+        let before = sync.heap_size();
+        assert!(before > 0);
+        sync.reset();
+        // reset clears collections but capacity may remain
+        assert!(sync.heap_size() <= before);
+    }
 }
