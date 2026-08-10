@@ -20,32 +20,127 @@ The example here is shipped with data generated from the incubator simulation, w
 
 ### Generating the data from scratch
 
-If you want to generate the data from scratch, clone the repository above:
+`run_experiment.py` starts the two course services as subprocesses, each from its own folder exactly as the notebooks instruct, and then acts as the monitoring client. Both services resolve their imports relative to their own working directory, so **the layout below is needed** — the paths are hard-coded, and `run_experiment.py` looks for them next to `benchmarks/`, not next to itself:
 
-```bash
-cd benchmarks/incubator
-git clone https://github.com/clagms/IncubatorDTCourse.git
+```text
+benchmarks/
+  incubator_dt/software/startup.conf        the course's git submodule
+  5-IncubatorPTEmulator/pt_emulator_service.py
+  2-Controller-Modelling/controller.py
+  incubator/run_experiment.py               this benchmark
 ```
 
- and follow the instructions from the notebooks from `0-Pre-requisites` up until `6-PuttingItAllTogether`. Then, run the `run_experiment.py` script to generate the data. The script will generate a `data` folder with the necessary CSV files. You can then run the benchmarks using this data.
+1. **Get the course, with its submodule, pinned to the commit this benchmark was recorded against:**
 
-Note that RabbitMQ must be up first (from `6-PuttingItAllTogether`, run `python start_influxdb_rabbitmq.py`; `docker ps` should show `rabbitmq-server`).
+   ```bash
+   cd benchmarks
+   git clone --recurse-submodules https://github.com/clagms/IncubatorDTCourse.git /tmp/course
+   git -C /tmp/course checkout 8dca7629a2480b3726901006f834270afae202b4
+   git -C /tmp/course submodule update --init --recursive
+   cp -R /tmp/course/* .
+   ```
 
-`run_experiment.py` starts the two course services as subprocesses, each from its own folder exactly as the notebooks instruct, and then acts as the monitoring client.
+   The `incubator_dt` submodule is [`Example_Digital-Twin_Incubator`](https://github.com/INTO-CPS-Association/Example_Digital-Twin_Incubator) at `0a851c027587c96664ff319d82fff8e8d68cf80d`. A plain clone without `--recurse-submodules` leaves it empty and nothing will import.
+
+2. **Install the course's own dependencies plus `pyhocon`.** The course ships two requirements files, and `pyhocon` — which both services and `run_experiment.py` import directly — is in neither, nor in this repository's:
+
+   ```bash
+   cd benchmarks
+   pip install -r requirements.txt -r incubator_dt/software/requirements.txt pyhocon
+   ```
+
+   (`benchmarks/requirements.txt` here is the course's, copied in by step 1; this repository's own is `benchmarks/synthetic_signal/requirements.txt`.)
+
+3. **Produce the two service scripts.** `5-IncubatorPTEmulator/pt_emulator_service.py` and `2-Controller-Modelling/controller.py` are **not committed to the course** — they come from `%%writefile` cells. Step through the notebooks from `0-Pre-requisites` up until `6-PuttingItAllTogether`, which writes them out along the way.
+
+4. **Add lid support to the emulator (exercise 2 of `5-IncubatorPTEmulator`).** Stepping through the notebooks is *not* sufficient. The cell that writes `pt_emulator_service.py` produces an emulator with no lid support at all, because the course leaves that as an exercise:
+
+   > 2. Adjust the incubator emulator service so that one can simulate the opening of the lid, by sending a rabbitmq message to the emulator, much like the heater is turned on. To simulate the opening of the lid, all you need to do is change the `self._G_br` by, e.g., multiplying it by 10. […] To close the lid, revert `self._G_br` to its original value.
+
+   `run_experiment.py` publishes `{"lid_open": …}` on `routing.key.lid` and reads `fields["lid_open"]` from every state message, so the stock emulator fails on its first sample with `KeyError: 'lid_open'`. Four edits to `pt_emulator_service.py` are needed. Beside the other routing keys near the top of the file:
+
+   ```python
+   ROUTING_KEY_LID = "routing.key.lid"
+   ```
+
+   In `__init__`, next to `self._heater_on = 0.0`:
+
+   ```python
+   self._lid_open = False
+   ```
+
+   In `setup()`, next to the heater queue:
+
+   ```python
+   self.lid_queue_name = self._rabbitmq.declare_local_queue(routing_key=ROUTING_KEY_LID)
+   ```
+
+   A reader for it, beside `_try_read_heat_control`, and its use in `check_control_commands`:
+
+   ```python
+   def _try_read_lid_control(self):
+       msg = self._rabbitmq.get_message(self.lid_queue_name)
+       if msg is not None:
+           self._lid_open = msg["lid_open"]
+           return msg["lid_open"]
+       else:
+           return None
+   ```
+
+   ```python
+   def check_control_commands(self):
+       heat_cmd = self._try_read_heat_control()
+       lid_cmd = self._try_read_lid_control()          # added
+
+       if heat_cmd is not None:
+           self._l.info(f"Heat command: on={heat_cmd}")
+           self._heater_on = 1.0 if heat_cmd else 0.0
+       if lid_cmd is not None:                         # added
+           self._l.debug(f"Lid command: open={lid_cmd}")
+           self._G_br = self._G_br*10 if lid_cmd else self._G_br/10
+   ```
+
+   And, in the `fields` dict that `send_state` publishes, so the recording can be labelled by phase:
+
+   ```python
+   "lid_open": self._lid_open
+   ```
+
+   Do **not** apply exercise 3 (measurement noise) — the benchmark monitors a clean signal. Exercise 1 (settable room temperature) is harmless but unnecessary: `run_experiment.py` never publishes a room temperature.
+
+   If the emulator you produce calls `logging.config.fileConfig("logging.conf")`, make sure such a file exists in `5-IncubatorPTEmulator/`. `configparser` ignores a file that is not there, so a missing one surfaces later as `KeyError: 'formatters'` rather than as a missing file; the course's digital twin ships a usable one at `incubator_dt/software/logging.conf`. The notebook's own version of the emulator uses `logging.basicConfig` instead and needs nothing.
+
+5. **Start RabbitMQ.** From `6-PuttingItAllTogether`, run `python start_influxdb_rabbitmq.py`; `docker ps` should show `rabbitmq-server`. The broker address the services use is `rabbitmq.ip` in `incubator_dt/software/startup.conf`.
+
+6. **Record a session:**
+
+   ```bash
+   cd benchmarks/incubator
+   python run_experiment.py --warmup-cycles 1 --normal-cycles 3 --lid-duration 1200
+   ```
+
+   The emulator runs in real time at one sample every 3 s, so a full session takes **roughly 70 minutes** of wall clock. Output is `data/signal.csv`, `data/latency.csv` and `logs/{emulator,controller}.log`.
+
+   **This overwrites the committed recording.** Undo with `git checkout -- data/`.
 
 Opening the lid publishes `{"lid_open": true}` on `routing.key.lid`, which the emulator service handles by multiplying the box-to-room conductance `G_br` by 10.
 
+A containerised version of all of the above — course, submodule, broker and services, no notebook stepping — lives in the tool-showcase repository, [mstlo-benchmarks](https://github.com/INTO-CPS-Association/mstlo-benchmarks).
+
 ### The run
 
-1. **pre-heat**: the emulator always starts the box at 30 °C, and climbing into the control band takes ~15 minutes   because the heating element has to warm up first.
-2. **warm-up**: run on until the thermostat has completed a full cycle under normal room conditions.
-3. **normal+lid-open**: one contiguous stretch: normal operation, the lid opening at `--lid-open-at`, and everything after, to `--duration`.
+One continuous session produces the whole dataset, so every phase shares identical conditions. All of it is recorded and tagged in a `phase` column:
+
+1. **pre-heat**: the emulator always starts the box at 30 °C, and climbing into the control band takes ~15 minutes because the heating element has to warm up first. Nothing speeds this up; the climb is simply recorded.
+2. **warm-up**: `--warmup-cycles` complete thermostat cycles under normal room conditions, so the start-up transient is not mistaken for a violation.
+3. **normal**: `--normal-cycles` cycles of undisturbed steady-state operation.
+4. **lid-open**: the lid opens and recording continues for `--lid-duration` seconds.
+
+Only phases 3 and 4 are fed to the monitors, and `replay.py` reproduces exactly that by filtering on `phase`. The earlier phases are on disk for plotting and for sizing the specification windows.
 
 ### Installations
 
-This benchmark covers both `mstlo`, `mstlo-python`, and `RTAMT`. Please follow the instructions in the [Synthetic Signal](../synthetic_signal/README.md) section to install the necessary dependencies for these libraries.
-
-
+This benchmark covers both `mstlo`, `mstlo-python`, and `RTAMT`. Please follow the [Prerequisites](../synthetic_signal/README.md#prerequisites) of the synthetic-signal benchmark to install the necessary dependencies for these libraries — in particular [Installing RTAMT](../synthetic_signal/README.md#installing-rtamt), which is a source build with a patched C++ backend.
 
 ## Running the Experiments
 
@@ -57,9 +152,11 @@ Assuming that the data is available from the incubator simulation, the experimen
 sh run_incubator_bench.sh
 ```
 
-`run_incubator_bench.sh` does everything except gathering the data: it replays, derives, runs all the benchmarks against the recorded signal, and plots. 
+`run_incubator_bench.sh` does everything except gathering the data: it replays, derives, runs all the benchmarks against the recorded signal, and plots.
 
-There is a possibility to skip evaluation of RTAMT. `SKIP_RTAMT=1 sh run_incubator_bench.sh` leaves it out globally: the Python benchmark then times `mstlo-python` alone and never imports `rtamt`, so everything else still runs on an interpreter without it. `benchmark.py --no-rtamt` does the same for a single stage.
+By default it covers the `normal` and `lid_open` phases (989 samples), which is what the committed artefacts in `data/` were produced from. `PHASES= sh run_incubator_bench.sh` monitors the whole session (1337 samples) instead, and `M_RUNS=5 sh run_incubator_bench.sh` is a quick pass.
+
+**NOTE: the script writes into the committed `data/` and `figures/`, overwriting them in place.** Undo with `git checkout -- data figures`.
 
 ### Memory
 

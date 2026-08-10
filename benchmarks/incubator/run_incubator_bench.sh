@@ -4,17 +4,17 @@
 # is:
 #
 #   1. replay the signal through the monitors and derive the dataset
-#   2. time mstlo-python and RTAMT on that signal (SKIP_RTAMT drops RTAMT)
+#   2. time mstlo-python and RTAMT on that signal
 #   3. time the native Rust monitor, record its memory footprint, and take a
 #      separate single pass for the cache sizes
 #   4. draw the figures
 #
+# RTAMT has to be installed; see ../synthetic_signal/README.md for the build.
 # Override any of the paths below if yours differ.
 #
-#   ./run_incubator_bench.sh                          # M = 50, whole session
+#   ./run_incubator_bench.sh                          # M = 50, normal+lid_open
 #   M_RUNS=5 ./run_incubator_bench.sh                 # quick pass
-#   PHASES=normal,lid_open ./run_incubator_bench.sh   # steady state only
-#   SKIP_RTAMT=1 ./run_incubator_bench.sh             # mstlo only, no RTAMT
+#   PHASES= ./run_incubator_bench.sh                  # the whole session
 
 set -e
 
@@ -27,23 +27,14 @@ M_RUNS="${M_RUNS:-50}"
 WARMUP_RUNS="${WARMUP_RUNS:-1}"
 SIGNAL="$DATA_DIR/signal.csv"
 
-# Which phases of the recording every stage sees, comma-separated.  Empty, the
-# default, is the whole session: the monitors then get one uninterrupted signal,
+# Which phases of the recording every stage sees, comma-separated.  The default
+# is what the committed artefacts in data/ cover (989 samples).  Empty is the
+# whole session (1337 samples): the monitors then get one uninterrupted signal,
 # and the replay, the datasets, both benchmarks and the figures all cover the
 # same samples.
-PHASES="${PHASES:-}"
+PHASES="${PHASES-normal,lid_open}"
 
-# Set to anything non-empty to leave RTAMT out: stage 2 then times mstlo alone
-# and never imports rtamt, so the script also runs in an environment without it.
-SKIP_RTAMT="${SKIP_RTAMT:-}"
-
-if [ -n "$SKIP_RTAMT" ]; then
-	RTAMT_ARGS="--no-rtamt"
-	TOOLS="mstlo-python"
-else
-	RTAMT_ARGS=""
-	TOOLS="mstlo-python and RTAMT"
-fi
+TOOLS="mstlo-python and RTAMT"
 
 if [ ! -f "$SIGNAL" ]; then
 	echo "missing $SIGNAL -- run run_experiment.py first" >&2
@@ -87,7 +78,7 @@ echo
 echo "=== 2/4  $TOOLS, M = $M_RUNS ==="
 
 python benchmark.py --m-runs "$M_RUNS" --warmup-runs "$WARMUP_RUNS" \
-	$PHASE_ARGS $RTAMT_ARGS
+	$PHASE_ARGS
 
 echo
 echo "=== 3/4  native Rust, timings (M = $M_RUNS), memory and cache sizes ==="

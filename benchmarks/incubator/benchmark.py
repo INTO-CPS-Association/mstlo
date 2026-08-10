@@ -167,6 +167,9 @@ def main():
     parser.add_argument("--warmup-runs", type=int, default=1)
     parser.add_argument("--phases", nargs="*", default=[],
                         help="phases to benchmark; empty uses the whole session")
+    # Unused by run_incubator_bench.sh, which always benchmarks against RTAMT.
+    # The containerised showcase (github.com/INTO-CPS-Association/mstlo-benchmarks)
+    # ships no RTAMT and depends on this flag -- do not remove it as dead code.
     parser.add_argument("--no-rtamt", action="store_true",
                         help="time mstlo only, leaving RTAMT out entirely")
     args = parser.parse_args()
