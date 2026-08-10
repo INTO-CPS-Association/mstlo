@@ -121,6 +121,15 @@ mod tests {
     }
 
     #[test]
+    fn total_size_includes_child() {
+        let atomic = Atomic::<f64>::new_greater_than("x", 10.0);
+        let child_size = <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&atomic);
+        let not: Not<f64, f64> = Not::new(Box::new(atomic));
+        let not_size = <Not<f64, f64> as StlOperatorTrait<f64>>::total_size(&not);
+        assert!(not_size >= child_size + std::mem::size_of::<Not<f64, f64>>());
+    }
+
+    #[test]
     fn not_display() {
         let atomic = Atomic::<f64>::new_greater_than("x", 10.0);
         let not: Not<f64, f64> = Not::new(Box::new(atomic));

@@ -541,4 +541,34 @@ mod tests {
         });
         assert!(!not_updated);
     }
+
+    #[test]
+    fn heap_size_empty() {
+        let signal: RingBuffer<f64> = RingBuffer::new();
+        assert_eq!(signal.heap_size(), 0);
+    }
+
+    #[test]
+    fn heap_size_after_add() {
+        let mut signal = RingBuffer::new();
+        signal.add_step(Step {
+            signal: "x",
+            value: 1.0,
+            timestamp: Duration::from_secs(1),
+        });
+        assert!(signal.heap_size() >= std::mem::size_of::<Step<f64>>());
+    }
+
+    #[test]
+    fn heap_size_after_clear() {
+        let mut signal = RingBuffer::new();
+        signal.add_step(Step {
+            signal: "x",
+            value: 1.0,
+            timestamp: Duration::from_secs(1),
+        });
+        signal.clear();
+        // clear() drops elements but VecDeque may retain capacity
+        let _ = signal.heap_size();
+    }
 }
