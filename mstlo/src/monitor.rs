@@ -580,12 +580,12 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
     }
 
     #[allow(rustdoc::private_intra_doc_links)]
-    /// Returns total memory (stack + heap) in bytes consumed by the entire
+    /// Returns estimated total memory (stack + heap) in bytes consumed by the entire
     /// monitor, including the root operator tree, all children recursively,
     /// and the synchronizer's internal buffers.
     ///
     /// See [`StlOperatorTrait::total_size`] for details on how operator memory
-    /// is measured.
+    /// is estimated.
     pub fn total_size(&self) -> usize {
         self.root_operator.total_size()
             + std::mem::size_of_val(&self.synchronizer)
@@ -1737,5 +1737,75 @@ mod tests {
             // Should not panic or produce incorrect output.
             let _ = output.verdicts();
         }
+    }
+
+    #[test]
+    fn total_size_includes_root_operator() {
+        let formula = FormulaDefinition::GreaterThan("x", 5.0);
+        let monitor: StlMonitor<f64, bool> = StlMonitor::builder()
+            .formula(formula)
+            .semantics(DelayedQualitative)
+            .algorithm(Algorithm::Incremental)
+            .build()
+            .unwrap();
+        assert!(monitor.total_size() >= std::mem::size_of_val(&monitor));
+    }
+
+    #[test]
+    fn total_size_grows_after_data() {
+        let formula = stl!(G[0, 2] (x > 10.0));
+        let mut monitor: StlMonitor<f64, f64> = StlMonitor::builder()
+            .formula(formula)
+            .semantics(DelayedQuantitative)
+            .algorithm(Algorithm::Incremental)
+            .build()
+            .unwrap();
+        let initial = monitor.total_size();
+        monitor.update(&step!("x", 15.0, Duration::from_secs(0)));
+        assert!(monitor.total_size() >= initial + std::mem::size_of::<Step<f64>>());
+    }
+
+    #[test]
+    fn total_size_reset_drops_to_initial() {
+        let formula = stl!(G[0, 2] (x > 10.0));
+        let mut monitor: StlMonitor<f64, f64> = StlMonitor::builder()
+            .formula(formula)
+            .semantics(DelayedQuantitative)
+            .algorithm(Algorithm::Incremental)
+            .build()
+            .unwrap();
+        let before = monitor.total_size();
+        monitor.update(&step!("x", 15.0, Duration::from_secs(0)));
+        let after_feed = monitor.total_size();
+        assert!(after_feed > before);
+        monitor.reset();
+        let after_reset = monitor.total_size();
+        assert!(after_reset <= after_feed);
+    }
+
+    #[test]
+    fn total_size_with_synchronizer() {
+        let formula = stl!(x > 5.0 && y < 20.0);
+        let mut monitor: StlMonitor<f64, f64> = StlMonitor::builder()
+            .formula(formula)
+            .semantics(DelayedQuantitative)
+            .algorithm(Algorithm::Incremental)
+            .synchronization_strategy(SynchronizationStrategy::ZeroOrderHold)
+            .build()
+            .unwrap();
+        let before = monitor.total_size();
+        monitor.update(&step!("x", 10.0, Duration::from_secs(0)));
+        assert!(monitor.total_size() >= before + std::mem::size_of::<Step<f64>>());
+    }
+
+    #[test]
+    fn total_size_naive_algorithm() {
+        let monitor: StlMonitor<f64, f64> = StlMonitor::builder()
+            .formula(stl!(G[0, 2] (x > 10.0)))
+            .semantics(DelayedQuantitative)
+            .algorithm(Algorithm::Naive)
+            .build()
+            .unwrap();
+        assert!(monitor.total_size() >= std::mem::size_of_val(&monitor));
     }
 }

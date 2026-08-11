@@ -686,6 +686,49 @@ mod tests {
     }
 
     #[test]
+    fn total_size_includes_operand() {
+        let interval = TimeInterval {
+            start: Duration::from_secs(0),
+            end: Duration::from_secs(4),
+        };
+        let atomic = Atomic::<f64>::new_greater_than("x", 10.0);
+        let child_size = <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&atomic);
+        let eventually = Eventually::<f64, RingBuffer<f64>, f64, false, false>::new(
+            interval,
+            Box::new(atomic.clone()),
+            None,
+            None,
+        );
+        assert!(eventually.total_size() >= child_size + std::mem::size_of_val(&eventually));
+        let globally = Globally::<f64, RingBuffer<f64>, f64, false, false>::new(
+            interval,
+            Box::new(atomic),
+            None,
+            None,
+        );
+        assert!(globally.total_size() >= child_size + std::mem::size_of_val(&globally));
+    }
+
+    #[test]
+    fn total_size_after_data() {
+        let interval = TimeInterval {
+            start: Duration::from_secs(0),
+            end: Duration::from_secs(4),
+        };
+        let atomic = Atomic::<f64>::new_greater_than("x", 10.0);
+        let mut eventually = Eventually::<f64, RingBuffer<f64>, f64, false, false>::new(
+            interval,
+            Box::new(atomic),
+            None,
+            None,
+        );
+        eventually.get_signal_identifiers();
+        let before = eventually.total_size();
+        eventually.update(&step!("x", 15.0, Duration::from_secs(0)));
+        assert!(eventually.total_size() >= before + std::mem::size_of::<Step<f64>>());
+    }
+
+    #[test]
     fn eventually_display() {
         let interval = TimeInterval {
             start: Duration::from_secs(0),

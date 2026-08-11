@@ -632,6 +632,52 @@ mod tests {
     }
 
     #[test]
+    fn total_size_includes_children() {
+        let a1 = Atomic::<f64>::new_greater_than("x", 10.0);
+        let a2 = Atomic::<f64>::new_less_than("y", 5.0);
+        let child_sum = <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a1)
+            + <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a2);
+        let and = And::<f64, RingBuffer<f64>, f64, false, false>::new(
+            Box::new(a1),
+            Box::new(a2),
+            None,
+            None,
+        );
+        assert!(and.total_size() >= child_sum + std::mem::size_of_val(&and));
+    }
+
+    #[test]
+    fn total_size_or_includes_children() {
+        let a1 = Atomic::<f64>::new_greater_than("x", 10.0);
+        let a2 = Atomic::<f64>::new_less_than("y", 5.0);
+        let child_sum = <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a1)
+            + <Atomic<f64> as StlOperatorTrait<f64>>::total_size(&a2);
+        let or = Or::<f64, RingBuffer<f64>, f64, false, false>::new(
+            Box::new(a1),
+            Box::new(a2),
+            None,
+            None,
+        );
+        assert!(or.total_size() >= child_sum + std::mem::size_of_val(&or));
+    }
+
+    #[test]
+    fn total_size_grows_after_update() {
+        let a1 = Atomic::<f64>::new_greater_than("x", 10.0);
+        let a2 = Atomic::<f64>::new_less_than("x", 20.0);
+        let mut and = And::<f64, RingBuffer<f64>, f64, false, false>::new(
+            Box::new(a1),
+            Box::new(a2),
+            None,
+            None,
+        );
+        and.get_signal_identifiers();
+        let before = and.total_size();
+        and.update(&step!("x", 15.0, Duration::from_secs(5)));
+        assert!(and.total_size() >= before + std::mem::size_of::<Step<f64>>());
+    }
+
+    #[test]
     fn binary_operators_signal_identifiers() {
         let atomic1 = Atomic::<f64>::new_greater_than("x", 10.0);
         let atomic2 = Atomic::<f64>::new_less_than("y", 5.0);
