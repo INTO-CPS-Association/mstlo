@@ -70,7 +70,7 @@ fn test_until_two_disjoint_signals(
     )]
     strategy: SynchronizationStrategy,
 ) {
-    let formula = stl! {G[0,2](x > 0) U[0, 5] (y > 5)};
+    let formula = stl! {G[0,2](x > 0) U[0, 4] (y > 5)};
 
     let x_steps = create_steps("x", vec![5.0, 3.0, 1.0, -7.0, 1.0], vec![0, 3, 4, 5, 7, 8]);
     let y_steps = create_steps("y", vec![1.0, 8.0, 8.0, 10.0], vec![2, 6, 9, 10]);
