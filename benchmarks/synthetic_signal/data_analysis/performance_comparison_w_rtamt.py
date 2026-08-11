@@ -43,7 +43,7 @@ RTAMT_SEMANTICS = "DelayedQuantitative"
 RTAMT_VARIANTS = {
     "dense-online": ("dense-time-python", "online", "RTAMT dense"),
     "discrete-online": ("discrete-time-python", "online", "RTAMT discrete"),
-    "discrete-cpp-online": ("discrete-time-cpp", "online", "RTAMT C++"),
+    "discrete-cpp-online": ("discrete-time-cpp", "online", "RTAMT discr."),
     "dense-offline": ("dense-time-python", "offline", "RTAMT dense off."),
     "discrete-offline": ("discrete-time-python", "offline", "RTAMT discrete off."),
 }
@@ -435,7 +435,8 @@ def main() -> None:
         _, _, name = RTAMT_VARIANTS[variant]
         # RTAMT implements delayed quantitative semantics, so it shares that colour;
         # the implementation is encoded by marker fill and line style instead.
-        semantics_colors[_rtamt_semantics(variant)] = semantics_colors[RTAMT_SEMANTICS]
+        semantics_colors[_rtamt_semantics(variant)] = "#417b70"
+        # semantics_colors[RTAMT_SEMANTICS]
         # With a single variant on the plot there is nothing to disambiguate, so
         # keep the label short.
         semantics_display[_rtamt_semantics(variant)] = (
@@ -551,10 +552,10 @@ def main() -> None:
         # Reserve the label gutter as a fraction of the *decades* on screen; a fixed
         # multiplicative padding is a negligible slice of a log axis.
         decades = np.log10(x_data_max / max(x_data_min, 1e-12))
-        x_label = x_data_max * 10 ** (0.01 * decades)
+        x_label = x_data_max * 10 ** (0.04 * decades)
         x_right = x_data_max * 10 ** (0.26 * decades)
     else:
-        x_label = x_data_max * 1.015
+        x_label = x_data_max * 1.05
         x_right = x_data_max * 1.35
     ax.set_xlim(right=x_right)
 
@@ -586,6 +587,37 @@ def main() -> None:
         for i, y_adj in zip(gutter_indices, adjusted):
             y_targets[i] = y_adj
 
+    label_bbox = {
+        "boxstyle": "round,pad=0.15",
+        "fc": "white",
+        "ec": "none",
+        "alpha": 0.85,
+    }
+
+    # Leader lines run to a shared gutter x, so one aimed at a high label crosses
+    # every label row below it. Drawing them all before any text -- rather than
+    # per annotation, where a later arrow paints over an earlier label's backing
+    # box -- keeps each label legible where a leader passes behind it.
+    for i, label_info in enumerate(direct_labels):
+        if label_info["inline"]:
+            continue
+        ax.annotate(
+            "",
+            xy=(label_info["x"], label_info["y"]),
+            xytext=(x_label, y_targets[i]),
+            textcoords="data",
+            annotation_clip=False,
+            zorder=4,
+            arrowprops={
+                "arrowstyle": "-",
+                "lw": 1.0,
+                "color": label_info["color"],
+                "alpha": 0.8,
+                "shrinkA": 0,
+                "shrinkB": 4,
+            },
+        )
+
     annotations = []
     for i, label_info in enumerate(direct_labels):
         y_target = y_targets[i]
@@ -602,20 +634,15 @@ def main() -> None:
                     va="center",
                     ha="left",
                     clip_on=False,
-                    bbox={
-                        "boxstyle": "round,pad=0.1",
-                        "fc": "white",
-                        "ec": "none",
-                        "alpha": 0.75,
-                    },
+                    zorder=5,
+                    bbox=dict(label_bbox),
                 )
             )
         else:
             annotations.append(
                 ax.annotate(
                     label_info["label"],
-                    xy=(label_info["x"], label_info["y"]),
-                    xytext=(x_label, y_target),
+                    xy=(x_label, y_target),
                     textcoords="data",
                     color=label_info["color"],
                     fontsize=11,
@@ -623,20 +650,8 @@ def main() -> None:
                     va="center",
                     ha="left",
                     clip_on=False,
-                    bbox={
-                        "boxstyle": "round,pad=0.1",
-                        "fc": "white",
-                        "ec": "none",
-                        "alpha": 0.75,
-                    },
-                    arrowprops={
-                        "arrowstyle": "-",
-                        "lw": 1.0,
-                        "color": label_info["color"],
-                        "alpha": 0.8,
-                        "shrinkA": 0,
-                        "shrinkB": 0,
-                    },
+                    zorder=5,
+                    bbox=dict(label_bbox),
                 )
             )
 
