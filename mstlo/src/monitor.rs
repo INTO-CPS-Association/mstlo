@@ -831,7 +831,10 @@ where
     macro_rules! dispatch_operator {
         ($OpType:ident, $( $arg:expr ),* ) => {
             match (is_eager, is_rosi) {
-                (true, true) => Box::new($OpType::<T, RingBuffer<Y>, Y, true, true>::new( $( $arg ),* )),
+                // `EagerQualitative` and `RobustnessInterval` are distinct `Semantics`
+                // variants, so this arm is unreachable. Skipping it also drops one
+                // monomorphization per operator type.
+                (true, true) => unreachable!("eager and RoSI semantics are mutually exclusive"),
                 (true, false) => Box::new($OpType::<T, RingBuffer<Y>, Y, true, false>::new( $( $arg ),* )),
                 (false, true) => Box::new($OpType::<T, RingBuffer<Y>, Y, false, true>::new( $( $arg ),* )),
                 (false, false) => Box::new($OpType::<T, RingBuffer<Y>, Y, false, false>::new( $( $arg ),* )),
