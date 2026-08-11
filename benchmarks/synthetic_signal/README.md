@@ -24,9 +24,7 @@ Make also sure that the python bindings for mstlo are installed in your Python e
 
 The benchmarks compare against [RTAMT](https://github.com/nickovic/rtamt) at the version the paper used, requires:
 
-1. **The version is not on PyPI.** `requirements.txt` asks for `rtamt==0.4.10`, but PyPI's newest release is `0.3.5`. `0.4.10` only ever existed as the version string in `setup.py` on `master`, so `pip install rtamt==0.4.10` cannot work.
-2. **`pip` doesn't gives you the C++ backend.** As noted in RTAMT's documentation, the published wheels contain no compiled wrappers: `import rtamt.lib.rtamt_stl_library_wrapper.stl_and_node` fails after a plain `pip install rtamt`. The backend is a separate `cmake` step over Boost.Python, and it must be built `Release` to be comparable with mstlo's bench profile.
-3. **The C++ backend has a bug upstream.** `StlDiscreteTimeOnlineAstVisitorCpp` has no `visitVariable`, so input variables are never registered and every monitor raises `KeyError` on its first `update()`. RTAMT's own C++ test suite fails **62 of 106** tests at commit `5cb70d1`. [`rtamt-cpp-visitvariable.patch`](rtamt-cpp-visitvariable.patch) adds the method back, which takes that suite to **1 failed, 105 passed**; the patched backend then agrees with RTAMT's pure-Python backend to `0.0` on all four paper formulas.
+> **The C++ backend has a bug upstream.** `StlDiscreteTimeOnlineAstVisitorCpp` raises `KeyError` on its first `update()`. RTAMT's own C++ test suite fails **62 of 106** tests at commit `5cb70d1`. [PR209]([rtamt-cpp-visitvariable.patch](https://github.com/nickovic/rtamt/pull/209)) fixes this.
 
 Debian/Ubuntu, into whatever environment the benchmarks will run in:
 
@@ -37,20 +35,11 @@ git clone https://github.com/nickovic/rtamt
 cd rtamt
 git checkout 5cb70d15615790536fae85a05e7ee76a38b4e079
 
-git apply /path/to/mstlo/benchmarks/synthetic_signal/rtamt-cpp-visitvariable.patch
-
 cmake -S rtamt -B rtamt/build -DCMAKE_BUILD_TYPE=Release -DPythonVersion=3
 cmake --build rtamt/build -j"$(nproc)"
 
 pip install .
 ```
-
-<!-- One gotcha worth knowing: the wrappers `pip` installs resolve `librtamt_stl_library.so` through an RPATH pointing into `rtamt/build`. **Deleting the build tree breaks every import.** Either keep it, or put the library somewhere the loader looks:
-
-```bash
-sudo cp rtamt/build/cpplib/stl/rtamt_stl_library/librtamt_stl_library.so /usr/local/lib/
-sudo ldconfig
-``` -->
 
 ## Running the Experiments
 
