@@ -186,9 +186,8 @@ where
         // Add all updates to eval_buffer and caches.
         // Collect timestamps from both children, sort, dedup, then push
         // in order so interleaved timestamps don't violate monotonicity.
-        let mut all_ts: Vec<Duration> = Vec::with_capacity(
-            left_updates.len() + right_updates.len(),
-        );
+        let mut all_ts: Vec<Duration> =
+            Vec::with_capacity(left_updates.len() + right_updates.len());
         for update in &right_updates {
             all_ts.push(update.timestamp);
             Self::add_to_cache::<IS_ROSI>(&mut self.right_cache, update.clone());
@@ -342,8 +341,7 @@ where
         }
         if tasks_to_remove.len() > n_front_to_pop {
             let non_front = &tasks_to_remove[n_front_to_pop..];
-            self.eval_buffer
-                .retain(|t| !non_front.contains(t));
+            self.eval_buffer.retain(|t| !non_front.contains(t));
         }
 
         output_robustness
