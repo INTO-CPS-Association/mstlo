@@ -1,0 +1,93 @@
+# Synthetic Signal
+
+- [Synthetic Signal](#synthetic-signal)
+  - [Prerequisites](#prerequisites)
+    - [Installing RTAMT](#installing-rtamt)
+  - [Running the Experiments](#running-the-experiments)
+  - [Results](#results)
+  - [Results from the paper](#results-from-the-paper)
+
+## Prerequisites
+
+To run the experiments, ensure you have the following installed:
+
+- Rust (with Cargo)
+- Python 3.9 or higher
+- Python packages listed in `requirements.txt` (install via `pip install -r requirements.txt`). Note that the `rtamt==0.4.10` line in that file records the version the paper used; it is not installable from PyPI. See below.
+- RTAMT, built from source with its C++ backend. See [Installing RTAMT](#installing-rtamt).
+
+Make also sure that the python bindings for mstlo are installed in your Python environment. You can do this by running `pip install -e .` in the `mstlo-python` directory.
+
+`mstlo-python` builds the Rust code in release mode. To make sure that results are consistent, the bench profile used for the Rust benchmarks is set to inherit from the release profile (see [Cargo.toml](../../Cargo.toml) in the root). The panic handling is set to `unwind`, but faster panic handling (e.g., `abort`) could be used for even better performance. However, this would make the benchmarks less comparable to the Python implementations, which do not have this option, as the benchmarking profile overrides the panic handling to `unwind`.
+
+### Installing RTAMT
+
+The benchmarks compare against [RTAMT](https://github.com/nickovic/rtamt) at the version the paper used, requires:
+
+1. **The version is not on PyPI.** `requirements.txt` asks for `rtamt==0.4.10`, but PyPI's newest release is `0.3.5`. `0.4.10` only ever existed as the version string in `setup.py` on `master`, so `pip install rtamt==0.4.10` cannot work.
+2. **`pip` doesn't gives you the C++ backend.** As noted in RTAMT's documentation, the published wheels contain no compiled wrappers: `import rtamt.lib.rtamt_stl_library_wrapper.stl_and_node` fails after a plain `pip install rtamt`. The backend is a separate `cmake` step over Boost.Python, and it must be built `Release` to be comparable with mstlo's bench profile.
+3. **The C++ backend has a bug upstream.** `StlDiscreteTimeOnlineAstVisitorCpp` has no `visitVariable`, so input variables are never registered and every monitor raises `KeyError` on its first `update()`. RTAMT's own C++ test suite fails **62 of 106** tests at commit `5cb70d1`. [`rtamt-cpp-visitvariable.patch`](rtamt-cpp-visitvariable.patch) adds the method back, which takes that suite to **1 failed, 105 passed**; the patched backend then agrees with RTAMT's pure-Python backend to `0.0` on all four paper formulas.
+
+Debian/Ubuntu, into whatever environment the benchmarks will run in:
+
+```bash
+sudo apt-get install -y cmake libboost-all-dev python3-dev
+
+git clone https://github.com/nickovic/rtamt
+cd rtamt
+git checkout 5cb70d15615790536fae85a05e7ee76a38b4e079
+
+git apply /path/to/mstlo/benchmarks/synthetic_signal/rtamt-cpp-visitvariable.patch
+
+cmake -S rtamt -B rtamt/build -DCMAKE_BUILD_TYPE=Release -DPythonVersion=3
+cmake --build rtamt/build -j"$(nproc)"
+
+pip install .
+```
+
+<!-- One gotcha worth knowing: the wrappers `pip` installs resolve `librtamt_stl_library.so` through an RPATH pointing into `rtamt/build`. **Deleting the build tree breaks every import.** Either keep it, or put the library somewhere the loader looks:
+
+```bash
+sudo cp rtamt/build/cpplib/stl/rtamt_stl_library/librtamt_stl_library.so /usr/local/lib/
+sudo ldconfig
+``` -->
+
+## Running the Experiments
+
+To reproduce the experiments in the paper, run the `bench_all.sh` script. This will generate the necessary signals, run the benchmarks for mstlo, mstlo-python, and RTAMT and then perform the data analysis and plots.
+
+```bash
+sh benchmarks/synthetic_signal/bench_all.sh
+```
+
+The script derives its own paths, so it can be run from anywhere. It sweeps 51 bounds for each of the until, globally and eventually families across four semantics, so a full run takes hours.
+
+**NOTE: The discrete-time monitors from RTAMT run very slowly on until-formulas. You might want to skip these tests by outcommenting the relevant lines in `rtamt_benchmark.py`. This is also the case for RoSI semantics in mstlo.** 
+
+**NOTE: `bench_all.sh` writes into `paper_results/`, overwriting the committed results in place.** Undo with `git checkout -- benchmarks/synthetic_signal/paper_results`.
+
+## Results
+
+Everything is written below `paper_results/`:
+
+```text
+paper_results/
+  signal_generation/signals/signal_20000_chirp.csv
+  outputs/mstlo/                  performance_results_M=50{,_raw}.csv
+                                  python_performance_results_M=50{,_raw}.csv
+                                  cache_size_results_M=1.csv
+  outputs/rtamt/                  rtamt_benchmark_results{,_raw}.csv
+  outputs/data_analysis/
+    regression_fit/               regression_fit_results.csv
+    mwu/                          the three Mann-Whitney tables
+    mstlo_plots/                  performance_comparison_*.pdf
+    rtamt_plots/                  the 11 RTAMT scaling plots
+```
+
+`mstlo_plots/performance_comparison_w_rtamt_all.pdf` is the figure comparing mstlo against RTAMT; the `performance_comparison_{FG,U}_{rosi,nonrosi}.pdf` set covers mstlo's own scaling per operator family and semantics.
+
+Note that `outputs/mstlo/memory_profile_N=20000.csv` and `mstlo_plots/memory_profile.{pdf,png}` are committed but are *not* regenerated by `bench_all.sh`. They come from `cargo bench --bench memory_profile_benchmark` followed by `data_analysis/memory_profile.py`, run by hand.
+
+## Results from the paper
+
+The results from the paper are available in the `paper_results/` directory. You can find the raw benchmark results in CSV format, as well as the generated performance comparison plot. They were run with Python 3.11.15 and rustc 1.95.0 on a MacBook Pro with an Apple M4 Pro chip. The RTAMT version used was 0.4.10.
