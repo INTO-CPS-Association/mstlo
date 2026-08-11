@@ -2,7 +2,7 @@
 mod common;
 mod fixtures;
 
-use mstlo::monitor::{Algorithm, Rosi, StlMonitor};
+use mstlo::monitor::{Algorithm, DelayedQuantitative, EagerQualitative, Rosi, StlMonitor};
 use mstlo::step;
 use mstlo::stl;
 use mstlo::{Step, SynchronizationStrategy};
@@ -60,6 +60,63 @@ fn test_signal_interleaving(
     // feed step 6
     let out6 = monitor.update(&steps[6]);
     assert_eq!(out6.verdicts().len(), 5); // now we have both signals at t=10
+}
+
+#[rstest]
+fn test_until_two_disjoint_signals(
+    #[values(
+        SynchronizationStrategy::ZeroOrderHold,
+        SynchronizationStrategy::Linear
+    )]
+    strategy: SynchronizationStrategy,
+) {
+    let formula = stl! {G[0,2](x > 0) U[0, 5] (y > 5)};
+
+    let x_steps = create_steps("x", vec![5.0, 3.0, 1.0, -7.0, 1.0], vec![0, 3, 4, 5, 7, 8]);
+    let y_steps = create_steps("y", vec![1.0, 8.0, 8.0, 10.0], vec![2, 6, 9, 10]);
+    let signal = combine_and_sort_steps(vec![x_steps, y_steps]);
+
+    // Validate Incremental path (the one affected by eval_buffer changes)
+    let mut incr_f64 = StlMonitor::builder()
+        .formula(formula.clone())
+        .semantics(DelayedQuantitative)
+        .algorithm(Algorithm::Incremental)
+        .synchronization_strategy(strategy)
+        .build()
+        .unwrap();
+
+    let mut incr_bool = StlMonitor::builder()
+        .formula(formula.clone())
+        .semantics(EagerQualitative)
+        .algorithm(Algorithm::Incremental)
+        .synchronization_strategy(strategy)
+        .build()
+        .unwrap();
+
+    let mut f64_per_step: Vec<Vec<Step<f64>>> = Vec::new();
+    let mut bool_per_step: Vec<Vec<Step<bool>>> = Vec::new();
+    for step in &signal {
+        f64_per_step.push(incr_f64.update(step).all_raw_outputs());
+        bool_per_step.push(incr_bool.update(step).all_raw_outputs());
+    }
+
+    eprintln!("=== Disjoint Until: {:?} ===", strategy);
+    eprintln!("Raw signals: {:?}", signal);
+    for (i, (f64_out, bool_out)) in f64_per_step.iter().zip(bool_per_step.iter()).enumerate() {
+        eprintln!("  step {}: f64={:?}  bool={:?}", i, f64_out, bool_out);
+    }
+
+    let f64_outputs: Vec<_> = f64_per_step.into_iter().flatten().collect();
+    let bool_outputs: Vec<_> = bool_per_step.into_iter().flatten().collect();
+
+    assert!(
+        !f64_outputs.is_empty(),
+        "Should produce quantitative outputs for two-disjoint-signal Until"
+    );
+    assert!(
+        !bool_outputs.is_empty(),
+        "Should produce qualitative outputs for two-disjoint-signal Until"
+    );
 }
 
 #[rstest]
