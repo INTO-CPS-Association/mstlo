@@ -10,12 +10,14 @@
 //! timing -- because the point is the shape of the series, not a benchmark
 //! number.
 //!
-//! One pass is not exactly reproducible: `total_size` charges the temporal
-//! operators' `eval_buffer_set` at `HashSet::capacity()`, and a hash set grows
-//! according to where its keys land, which `RandomState` reseeds per instance.
-//! So individual steps can wobble by a slot or two between runs.  That is fine
-//! at this scale -- the tiers being plotted are kilobytes apart -- but it is why
-//! `paper_benchmark_memory` takes a median over passes for its aggregates.
+//! For formulas built only from `F`/`G` the series is now reproducible: those
+//! operators keep a single ordered `VecDeque` of pending evaluation timestamps
+//! and no hash set.  `Until` still holds an `eval_buffer_set`, which `total_size`
+//! charges at `HashSet::capacity()`; a hash set grows according to where its keys
+//! land, which `RandomState` reseeds per instance, so formulas containing `U`
+//! can still wobble by a slot or two between runs.  That is fine at this scale --
+//! the tiers being plotted are kilobytes apart -- but it is why
+//! `incubator_benchmark` takes a median over passes for its aggregates.
 //!
 //! Environment overrides:
 //!   SIGNAL_PATH  the signal to replay

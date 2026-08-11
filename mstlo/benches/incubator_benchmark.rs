@@ -176,25 +176,21 @@ fn build_monitor(formula: &mstlo::FormulaDefinition) -> StlMonitor<f64, f64> {
 
 /// Per-step footprint, as the median over `runs` untimed passes.
 ///
-/// A single pass is not reproducible.  `total_size` charges the temporal
-/// operators' `eval_buffer_set` at `HashSet::capacity()`, and a hash set grows
-/// according to where its keys land, which `RandomState` reseeds for every
-/// instance.  So the same step in two passes can find the set either side of a
-/// capacity tier: most steps wobble by a slot or two (17 B each), and a pass
-/// occasionally lands a whole tier out, in either direction -- peaks of 17.5 kB
-/// and of 22.2 kB have both been seen where the typical value is 17.0 kB.
+/// For the two specs in [`FORMULAS`] a single pass is now exactly reproducible:
+/// `F` and `G` keep their pending evaluation timestamps in one ordered
+/// `VecDeque` and no longer hold a `HashSet`, so nothing in these formulas has a
+/// seed-dependent footprint.  The median over `runs` passes is therefore a
+/// formality here and `runs = 1` would give the same series.
 ///
-/// The median is used rather than the maximum precisely because the outliers go
-/// both ways: a maximum keeps absorbing rare upward spikes, so it drifts upward
-/// with `runs` instead of converging, while the median settles.  Passes are
-/// cheap next to the timed runs, and going from 5 to 21 of them cut the steps
-/// that move by more than 1% between processes from 931/1400 to 351/1400.
-///
-/// It does not converge completely.  A short stretch of the signal leaves the
-/// set sitting exactly on a capacity boundary, so the median there is a coin
-/// flip that more passes cannot settle: those steps still differ by ~25%
-/// between processes.  Sampling cannot fix that -- only a fixed hash seed for
-/// those sets inside the library would make the series exactly reproducible.
+/// It is kept because it is not free elsewhere: `Until` still charges an
+/// `eval_buffer_set` at `HashSet::capacity()`, and a hash set that sees both
+/// inserts and removals grows according to where its keys land -- insertion into
+/// a tombstone does not consume growth headroom -- which `RandomState` reseeds
+/// for every instance.  Add a `U` to [`FORMULAS`] and the wobble is back: the
+/// same step in two passes can land either side of a capacity tier.  The median
+/// is used rather than the maximum precisely because those outliers go both
+/// ways: a maximum keeps absorbing rare upward spikes, so it drifts upward with
+/// `runs` instead of converging, while the median settles.
 ///
 /// `runs == 0` skips the profiling altogether and returns nothing, which is what
 /// the cache-size run wants: it is after the ring buffers, not the footprint,
