@@ -1,3 +1,0 @@
-tool,spec_name,spec,semantics,algorithm,mode,n_samples,m_runs,avg_total_s,std_total_s,avg_per_sample_s,std_per_sample_s,avg_per_sample_us,std_per_sample_us,avg_total_size_bytes,max_total_size_bytes,avg_cache_size,max_cache_size
-mstlo-rust,phi_hi,"G[0,30] ((T >= 39.0) -> F[0,360] (T <= 39.0))",DelayedQuantitative,Incremental,online,989,1,0.000707833000,0.000000000000,0.000000715706,0.000000000000,0.715706,0.000000,,,31.009100,75
-mstlo-rust,phi_lo,"G[0,30] ((T <= 36.0) -> F[0,360] (T >= 36.0))",DelayedQuantitative,Incremental,online,989,1,0.000668459000,0.000000000000,0.000000675894,0.000000000000,0.675894,0.000000,,,28.534884,76

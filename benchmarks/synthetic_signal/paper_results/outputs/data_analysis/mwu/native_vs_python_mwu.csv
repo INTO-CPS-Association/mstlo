@@ -1,5 +1,0 @@
-formula_id,label_a,label_b,n_a,n_b,median_a,median_b,mean_a,mean_b,U_statistic,p_value,effect_size_r,alternative,significant_0.05
-1,native,python,200,200,0.161616,0.242505,0.161844,0.242885,0,4.83065e-67,1,two-sided,True
-2,native,python,200,200,0.289361,0.456289,118.627,123.061,7622,9.55415e-27,0.6189,two-sided,True
-3,native,python,200,200,4.22923,4.22139,676.615,618.032,20822,0.477362,-0.0411,two-sided,False
-4,native,python,200,200,0.285919,0.637351,3.34968,3.56439,8875,6.45132e-22,0.55625,two-sided,True
