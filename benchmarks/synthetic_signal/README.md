@@ -6,6 +6,7 @@
   - [Running the Experiments](#running-the-experiments)
   - [Results](#results)
   - [Results from the paper](#results-from-the-paper)
+    - [Memory profiles](#memory-profiles)
 
 ## Prerequisites
 
@@ -22,11 +23,10 @@ Make also sure that the python bindings for mstlo are installed in your Python e
 
 ### Installing RTAMT
 
-The benchmarks compare against [RTAMT](https://github.com/nickovic/rtamt) at the version the paper used, requires:
+The benchmarks compare against [RTAMT](https://github.com/nickovic/rtamt) at the version the paper used, requires, since **The C++ backend has a bug upstream**: `StlDiscreteTimeOnlineAstVisitorCpp` raises `KeyError` on its first `update()`. RTAMT's own C++ test suite fails **62 of 106** tests at commit `5cb70d1`.
+>[PR209](https://github.com/nickovic/rtamt/pull/209) fixes this.
 
-> **The C++ backend has a bug upstream.** `StlDiscreteTimeOnlineAstVisitorCpp` raises `KeyError` on its first `update()`. RTAMT's own C++ test suite fails **62 of 106** tests at commit `5cb70d1`. [PR209]([rtamt-cpp-visitvariable.patch](https://github.com/nickovic/rtamt/pull/209)) fixes this.
-
-Debian/Ubuntu, into whatever environment the benchmarks will run in:
+Into whatever environment the benchmarks will run in:
 
 ```bash
 sudo apt-get install -y cmake libboost-all-dev python3-dev
@@ -51,7 +51,7 @@ sh benchmarks/synthetic_signal/bench_all.sh
 
 The script derives its own paths, so it can be run from anywhere. It sweeps 51 bounds for each of the until, globally and eventually families across four semantics, so a full run takes hours.
 
-**NOTE: The discrete-time monitors from RTAMT run very slowly on until-formulas. You might want to skip these tests by outcommenting the relevant lines in `rtamt_benchmark.py`. This is also the case for RoSI semantics in mstlo.** 
+**NOTE: The discrete-time monitors from RTAMT run very slowly on until-formulas. You might want to skip these tests by outcommenting the relevant lines in `rtamt_benchmark.py`. This is also the case for RoSI semantics in mstlo.**
 
 **NOTE: `bench_all.sh` writes into `paper_results/`, overwriting the committed results in place.** Undo with `git checkout -- benchmarks/synthetic_signal/paper_results`.
 
@@ -80,3 +80,15 @@ Note that `outputs/mstlo/memory_profile_N=20000.csv` and `mstlo_plots/memory_pro
 ## Results from the paper
 
 The results from the paper are available in the `paper_results/` directory. You can find the raw benchmark results in CSV format, as well as the generated performance comparison plot. They were run with Python 3.11.15 and rustc 1.95.0 on a MacBook Pro with an Apple M4 Pro chip. The RTAMT version used was 0.4.10.
+
+### Memory profiles
+
+These are not automaticaly generated. Run the memory profile benchmark manually and generate plots, executing the following commands:
+
+```bash
+cd mstlo
+SIGNAL_PATH="../benchmarks/synthetic_signal/rv26_results/signal_generation/signals/signal_20000_chirp.csv" \
+cargo bench --bench memory_profile_benchmark
+cd ..
+python benchmarks/synthetic_signal/data_analysis/memory_profile.py --csv mstlo/benches/results/memory_profile_N=20000.csv
+```

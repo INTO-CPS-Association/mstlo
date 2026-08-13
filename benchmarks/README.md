@@ -2,7 +2,7 @@
 
 This folder contains the benchmarks for `mstlo` used to generate the results from the paper *MSTLO: Efficient Online Monitoring of Signal Temporal Logic* at the 26th International Conference on Runtime Verification (RV26).
 
-> For the benchmarks used at the **Tool Showcase Submission**, please refer instead to: [(https://github.com/INTO-CPS-Association/mstlo-benchmarks)](https://github.com/INTO-CPS-Association/mstlo-benchmarks)
+> For the dockerized benchmarks used at the **Tool Showcase Submission**, please refer instead to: [(https://github.com/INTO-CPS-Association/mstlo-benchmarks)](https://github.com/INTO-CPS-Association/mstlo-benchmarks)
 
 Each benchmark is contained in its own subfolder, with a `README.md` file that explains the benchmark and how to run it. Each benchmark has a single `.sh` file that runs the benchmark and generates the results. Note that the Rust benchmarks files are located in the [mstlo/benches](../mstlo/benches/) folder, and the Python benchmarks are located in the benchmark subfolders.
 

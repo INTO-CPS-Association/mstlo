@@ -3,12 +3,12 @@
 - [Incubator](#incubator)
   - [Overview](#overview)
   - [Prerequisites](#prerequisites)
-    - [Generating the data from scratch](#generating-the-data-from-scratch)
-    - [The run](#the-run)
     - [Installations](#installations)
+  - [Overview of data](#overview-of-data)
   - [Running the Experiments](#running-the-experiments)
     - [Memory](#memory)
     - [Cache sizes](#cache-sizes)
+    - [Generating the data from scratch](#generating-the-data-from-scratch)
 
 ## Overview
 
@@ -17,6 +17,58 @@ This benchmark is based on the Incubator Digital Twin course, which simulates a 
 ## Prerequisites
 
 The example here is shipped with data generated from the incubator simulation, which can be found at [https://github.com/clagms/IncubatorDTCourse/tree/main](https://github.com/clagms/IncubatorDTCourse/tree/main).
+
+### Installations
+
+This benchmark covers both `mstlo`, `mstlo-python`, and `RTAMT`. Please follow the [Prerequisites](../synthetic_signal/README.md#prerequisites) of the synthetic-signal benchmark to install the necessary dependencies for these libraries — in particular [Installing RTAMT](../synthetic_signal/README.md#installing-rtamt), which is a source build.
+
+## Overview of data
+
+One continuous session produces the whole dataset, so every phase shares identical conditions. All of it is recorded and tagged in a `phase` column:
+
+1. **pre-heat**: the emulator always starts the box at 30 °C, and climbing into the control band takes ~15 minutes because the heating element has to warm up first. Nothing speeds this up; the climb is simply recorded.
+2. **warm-up**: `--warmup-cycles` complete thermostat cycles under normal room conditions, so the start-up transient is not mistaken for a violation.
+3. **normal**: `--normal-cycles` cycles of undisturbed steady-state operation.
+4. **lid-open**: the lid opens and recording continues for `--lid-duration` seconds.
+
+Only phases 3 and 4 are fed to the monitors, and `replay.py` reproduces exactly that by filtering on `phase`. The earlier phases are on disk for plotting and for sizing the specification windows.
+
+## Running the Experiments
+
+The data for the incubator simulation is already provided in this repository. You can find the data used for the paper in the `rv26_results` directory. The data includes the recorded signals from the incubator simulation, which will be used for benchmarking.
+
+Assuming that the data is available from the incubator simulation, the experiments are run using the provided `run_incubator_bench.sh` script. This script will execute the benchmarks for `mstlo`, `mstlo-python`, and `RTAMT` against the recorded signal data.
+
+```bash
+sh run_incubator_bench.sh
+```
+
+`run_incubator_bench.sh` does everything except gathering the data: it replays, derives, runs all the benchmarks against the recorded signal, and plots.
+
+By default it covers the `normal` and `lid_open` phases (989 samples). `PHASES= sh run_incubator_bench.sh` monitors the whole session (1337 samples) instead, and `M_RUNS=5 sh run_incubator_bench.sh` is a quick pass.
+
+### Memory
+
+The native benchmark also estimates memory usage. It reads `StlMonitor::total_size()` after every `update()` and writes the whole series to `data/benchmark_rust_memory.csv`, which `plot_results.py` draws as `figures/incubator_memory.pdf`. `data/benchmark_rust.csv` carries the per-specification average and peak alongside the timings.
+
+This only exists on the Rust side — `total_size()` is not exposed through `mstlo-python` — so the memory figure is skipped if the native benchmark has not been run.
+
+The profiling passes are separate from the timed runs, so the sampling does not show up in the timings.
+
+Like the Python benchmark, the native one reads only the `normal` and `lid_open` phases of the recording, so both sides monitor the same signal. Override with `PHASES` (`PHASES=` for the whole session).
+
+### Cache sizes
+
+Separately from the footprint in bytes, the native benchmark can report how many steps the ring buffers hold. It is behind the `track-cache-size` feature, exactly as in the synthetic-signal benchmark: with the feature on, `GLOBAL_CACHE_SIZE` is read after every `update()` and `data/benchmark_rust_cache_size_M=1.csv` gains `avg_cache_size` and `max_cache_size` columns.
+
+That read happens *inside* the timed loop, so those timings are not comparable with the ones from the ordinary run. `run_incubator_bench.sh` therefore runs it a second time, as a single pass with its own output files and the memory profiling switched off:
+
+```bash
+M_RUNS=1 WARMUP_RUNS=0 MEMORY_RUNS=0 \
+ OUTPUT_CSV=.../benchmark_rust_cache_size_M=1.csv \
+ cargo bench --bench incubator_benchmark --features track-cache-size
+```
+
 
 ### Generating the data from scratch
 
@@ -55,7 +107,7 @@ benchmarks/
 
 4. **Add lid support to the emulator (exercise 2 of `5-IncubatorPTEmulator`).** Stepping through the notebooks is *not* sufficient. The cell that writes `pt_emulator_service.py` produces an emulator with no lid support at all, because the course leaves that as an exercise:
 
-   > 2. Adjust the incubator emulator service so that one can simulate the opening of the lid, by sending a rabbitmq message to the emulator, much like the heater is turned on. To simulate the opening of the lid, all you need to do is change the `self._G_br` by, e.g., multiplying it by 10. […] To close the lid, revert `self._G_br` to its original value.
+   > 1. Adjust the incubator emulator service so that one can simulate the opening of the lid, by sending a rabbitmq message to the emulator, much like the heater is turned on. To simulate the opening of the lid, all you need to do is change the `self._G_br` by, e.g., multiplying it by 10. […] To close the lid, revert `self._G_br` to its original value.
 
    `run_experiment.py` publishes `{"lid_open": …}` on `routing.key.lid` and reads `fields["lid_open"]` from every state message, so the stock emulator fails on its first sample with `KeyError: 'lid_open'`. Four edits to `pt_emulator_service.py` are needed. Beside the other routing keys near the top of the file:
 
@@ -126,60 +178,3 @@ benchmarks/
 Opening the lid publishes `{"lid_open": true}` on `routing.key.lid`, which the emulator service handles by multiplying the box-to-room conductance `G_br` by 10.
 
 A containerised version of all of the above — course, submodule, broker and services, no notebook stepping — lives in the tool-showcase repository, [mstlo-benchmarks](https://github.com/INTO-CPS-Association/mstlo-benchmarks).
-
-### The run
-
-One continuous session produces the whole dataset, so every phase shares identical conditions. All of it is recorded and tagged in a `phase` column:
-
-1. **pre-heat**: the emulator always starts the box at 30 °C, and climbing into the control band takes ~15 minutes because the heating element has to warm up first. Nothing speeds this up; the climb is simply recorded.
-2. **warm-up**: `--warmup-cycles` complete thermostat cycles under normal room conditions, so the start-up transient is not mistaken for a violation.
-3. **normal**: `--normal-cycles` cycles of undisturbed steady-state operation.
-4. **lid-open**: the lid opens and recording continues for `--lid-duration` seconds.
-
-Only phases 3 and 4 are fed to the monitors, and `replay.py` reproduces exactly that by filtering on `phase`. The earlier phases are on disk for plotting and for sizing the specification windows.
-
-### Installations
-
-This benchmark covers both `mstlo`, `mstlo-python`, and `RTAMT`. Please follow the [Prerequisites](../synthetic_signal/README.md#prerequisites) of the synthetic-signal benchmark to install the necessary dependencies for these libraries — in particular [Installing RTAMT](../synthetic_signal/README.md#installing-rtamt), which is a source build with a patched C++ backend.
-
-## Running the Experiments
-
-The data for the incubator simulation is already provided in this repository. You can find the data in the `data` directory. The data includes the recorded signals from the incubator simulation, which will be used for benchmarking.
-
-Assuming that the data is available from the incubator simulation, the experiments are run using the provided `run_incubator_bench.sh` script. This script will execute the benchmarks for `mstlo`, `mstlo-python`, and `RTAMT` against the recorded signal data.
-
-```bash
-sh run_incubator_bench.sh
-```
-
-`run_incubator_bench.sh` does everything except gathering the data: it replays, derives, runs all the benchmarks against the recorded signal, and plots.
-
-By default it covers the `normal` and `lid_open` phases (989 samples), which is what the committed artefacts in `data/` were produced from. `PHASES= sh run_incubator_bench.sh` monitors the whole session (1337 samples) instead, and `M_RUNS=5 sh run_incubator_bench.sh` is a quick pass.
-
-**NOTE: the script writes into the committed `data/` and `figures/`, overwriting them in place.** Undo with `git checkout -- data figures`.
-
-### Memory
-
-The native benchmark also estimates memory usage. It reads `StlMonitor::total_size()` after every `update()` and writes the whole series to `data/benchmark_rust_memory.csv`, which `plot_results.py` draws as `figures/incubator_memory.pdf`. `data/benchmark_rust.csv` carries the per-specification average and peak alongside the timings.
-
-This only exists on the Rust side — `total_size()` is not exposed through `mstlo-python` — so the memory figure is skipped if the native benchmark has not been run.
-
-The profiling passes are separate from the timed runs, so the sampling does not show up in the timings. Each step is reported as the median over `MEMORY_RUNS` passes (21 by default).
-
-The repetition is needed because a single pass is not reproducible. `total_size()` charges the temporal operators' `eval_buffer_set` at `HashSet::capacity()`, and the standard library reseeds every `HashSet` it builds, so those sets grow differently from run to run: peaks of 17.5 kB and of 22.2 kB have both been observed where the typical value is 17.0 kB. The median settles most of it — going from 5 to 21 passes cut the steps that move by more than 1% between processes from 931/1400 to 351/1400 — but a short stretch of the signal leaves the set exactly on a capacity boundary and still swings ~25%. No amount of sampling fixes that; it would take a fixed hash seed for those sets inside the library.
-
-Like the Python benchmark, the native one reads only the `normal` and `lid_open` phases of the recording, so both sides monitor the same signal. Override with `PHASES` (`PHASES= ` for the whole session).
-
-### Cache sizes
-
-Separately from the footprint in bytes, the native benchmark can report how many steps the ring buffers hold. It is behind the `track-cache-size` feature, exactly as in the synthetic-signal benchmark: with the feature on, `GLOBAL_CACHE_SIZE` is read after every `update()` and `data/benchmark_rust_cache_size_M=1.csv` gains `avg_cache_size` and `max_cache_size` columns.
-
-That read happens *inside* the timed loop, so those timings are not comparable with the ones from the ordinary run. `run_incubator_bench.sh` therefore runs it a second time, as a single pass with its own output files and the memory profiling switched off:
-
-```bash
-M_RUNS=1 WARMUP_RUNS=0 MEMORY_RUNS=0 \
-	OUTPUT_CSV=.../benchmark_rust_cache_size_M=1.csv \
-	cargo bench --bench incubator_benchmark --features track-cache-size
-```
-
-One pass is enough because, unlike the byte footprint, the step counts are deterministic. `MEMORY_RUNS=0` skips the memory passes and writes no memory series; the memory columns of the summary are then left empty rather than zero.

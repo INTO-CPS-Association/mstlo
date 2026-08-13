@@ -7,17 +7,7 @@
 //! This is the per-step counterpart to `paper_benchmark_memory`, which runs the
 //! same measurement over the full formula catalog but only reports the average
 //! and maximum.  It is deliberately narrow -- four formulas, one pass each, no
-//! timing -- because the point is the shape of the series, not a benchmark
-//! number.
-//!
-//! For formulas built only from `F`/`G` the series is now reproducible: those
-//! operators keep a single ordered `VecDeque` of pending evaluation timestamps
-//! and no hash set.  `Until` still holds an `eval_buffer_set`, which `total_size`
-//! charges at `HashSet::capacity()`; a hash set grows according to where its keys
-//! land, which `RandomState` reseeds per instance, so formulas containing `U`
-//! can still wobble by a slot or two between runs.  That is fine at this scale --
-//! the tiers being plotted are kilobytes apart -- but it is why
-//! `incubator_benchmark` takes a median over passes for its aggregates.
+//! timing
 //!
 //! Environment overrides:
 //!   SIGNAL_PATH  the signal to replay
@@ -36,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const DEFAULT_SIGNAL_PATH: &str =
-    "../benchmarks/synthetic_signal/paper_results/signal_generation/signals/signal_20000_chirp.csv";
+    "../benchmarks/synthetic_signal/rv26_results/signal_generation/signals/signal_20000_chirp.csv";
 const DEFAULT_OUTPUT_CSV: &str = "benches/results/memory_profile_N=20000.csv";
 
 /// phi1..phi4 of the paper catalog, matching IDs 1-4 in `paper_benchmark`.
