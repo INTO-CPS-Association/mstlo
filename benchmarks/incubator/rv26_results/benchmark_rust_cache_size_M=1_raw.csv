@@ -1,0 +1,3 @@
+tool,spec_name,run_id,total_s,per_sample_s,per_sample_us
+mstlo-rust,phi_hi,0,0.000381667000,0.000000385912,0.385912
+mstlo-rust,phi_lo,0,0.000347333000,0.000000351196,0.351196
