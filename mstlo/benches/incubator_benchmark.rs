@@ -1,4 +1,4 @@
-//! Native benchmark for the incubator runtime-verification experiment.
+//! Native benchmark for the incubator experiment.
 //!
 //! Feeds the temperature signal recorded from the incubator digital twin
 //! through the two deployed specifications and times every `update()` call,
@@ -174,27 +174,7 @@ fn build_monitor(formula: &mstlo::FormulaDefinition) -> StlMonitor<f64, f64> {
         .unwrap()
 }
 
-/// Per-step footprint, as the median over `runs` untimed passes.
-///
-/// For the two specs in [`FORMULAS`] a single pass is now exactly reproducible:
-/// `F` and `G` keep their pending evaluation timestamps in one ordered
-/// `VecDeque` and no longer hold a `HashSet`, so nothing in these formulas has a
-/// seed-dependent footprint.  The median over `runs` passes is therefore a
-/// formality here and `runs = 1` would give the same series.
-///
-/// It is kept because it is not free elsewhere: `Until` still charges an
-/// `eval_buffer_set` at `HashSet::capacity()`, and a hash set that sees both
-/// inserts and removals grows according to where its keys land -- insertion into
-/// a tombstone does not consume growth headroom -- which `RandomState` reseeds
-/// for every instance.  Add a `U` to [`FORMULAS`] and the wobble is back: the
-/// same step in two passes can land either side of a capacity tier.  The median
-/// is used rather than the maximum precisely because those outliers go both
-/// ways: a maximum keeps absorbing rare upward spikes, so it drifts upward with
-/// `runs` instead of converging, while the median settles.
-///
-/// `runs == 0` skips the profiling altogether and returns nothing, which is what
-/// the cache-size run wants: it is after the ring buffers, not the footprint,
-/// and it would otherwise pay for passes whose output it throws away.
+// Per-step footprint
 fn profile_memory(
     formula: &mstlo::FormulaDefinition,
     signal: &[Step<f64>],

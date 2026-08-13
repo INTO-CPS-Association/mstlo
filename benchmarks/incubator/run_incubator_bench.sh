@@ -20,6 +20,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DATA_DIR="$SCRIPT_DIR/data"
+RESULTS_DIR="$SCRIPT_DIR/results"
 
 MSTLO_DIR="${MSTLO_DIR:-$SCRIPT_DIR/../../mstlo}"
 
@@ -27,8 +28,7 @@ M_RUNS="${M_RUNS:-50}"
 WARMUP_RUNS="${WARMUP_RUNS:-1}"
 SIGNAL="$DATA_DIR/signal.csv"
 
-# Which phases of the recording every stage sees, comma-separated.  The default
-# is what the committed artefacts in data/ cover (989 samples).  Empty is the
+# Which phases of the recording every stage sees, comma-separated. Empty is the
 # whole session (1337 samples): the monitors then get one uninterrupted signal,
 # and the replay, the datasets, both benchmarks and the figures all cover the
 # same samples.
@@ -46,9 +46,7 @@ if [ ! -f "$MSTLO_DIR/Cargo.toml" ]; then
 	exit 1
 fi
 
-# The Python stages take the phases as separate words, the Rust one as the
-# comma-separated string it already parses.  A typo would otherwise leave every
-# stage with an empty signal, so each name is checked against the recording.
+# The Python stages take the phases as separate words
 PHASE_ARGS=""
 if [ -n "$PHASES" ]; then
 	for phase in $(echo "$PHASES" | tr ',' ' '); do
@@ -87,20 +85,17 @@ echo "=== 3/4  native Rust, timings (M = $M_RUNS), memory and cache sizes ==="
 	M_RUNS="$M_RUNS" WARMUP_RUNS="$WARMUP_RUNS" \
 		SIGNAL_PATH="$SIGNAL" \
 		PHASES="$PHASES" \
-		OUTPUT_CSV="$DATA_DIR/benchmark_rust.csv" \
-		OUTPUT_RAW_CSV="$DATA_DIR/benchmark_rust_runs.csv" \
-		OUTPUT_MEMORY_CSV="$DATA_DIR/benchmark_rust_memory.csv" \
+		OUTPUT_CSV="$RESULTS_DIR/benchmark_rust.csv" \
+		OUTPUT_RAW_CSV="$RESULTS_DIR/benchmark_rust_runs.csv" \
+		OUTPUT_MEMORY_CSV="$RESULTS_DIR/benchmark_rust_memory.csv" \
 		cargo bench --bench incubator_benchmark
 
-	# The cache counter is read after every update, inside the timed loop, so
-	# these timings are not the ones above and go to their own file.  One pass
-	# is enough -- the sizes are deterministic -- and the memory profiling is
-	# off here because the run above already did it.
+	# The cache counter is read after every update, inside the timed loop, so these timings are not the ones above and go to their own file.  One pass is enough -- the sizes are deterministic.
 	M_RUNS=1 WARMUP_RUNS=0 MEMORY_RUNS=0 \
 		SIGNAL_PATH="$SIGNAL" \
 		PHASES="$PHASES" \
-		OUTPUT_CSV="$DATA_DIR/benchmark_rust_cache_size_M=1.csv" \
-		OUTPUT_RAW_CSV="$DATA_DIR/benchmark_rust_cache_size_M=1_raw.csv" \
+		OUTPUT_CSV="$RESULTS_DIR/benchmark_rust_cache_size_M=1.csv" \
+		OUTPUT_RAW_CSV="$RESULTS_DIR/benchmark_rust_cache_size_M=1_raw.csv" \
 		cargo bench --bench incubator_benchmark --features track-cache-size
 )
 
@@ -110,7 +105,7 @@ cd "$SCRIPT_DIR"
 python plot_results.py
 
 echo
-echo "done. results in $DATA_DIR:"
+echo "done. results in $RESULTS_DIR:"
 echo "  benchmark.csv                       $TOOLS"
 echo "  benchmark_rust.csv                  native Rust timings and memory summary"
 echo "  benchmark_rust_memory.csv           native Rust footprint after every update"
