@@ -4,7 +4,8 @@ import mstlo_python as mstlo
 phi_batch = mstlo.parse_formula("x > 10.0")
 batch_monitor = mstlo.Monitor(phi_batch, semantics="Rosi")
 
-# Prepare batch data: dict mapping signal names to lists of (value, timestamp) tuples
+# Signal-major form: a dict mapping each signal name to its (value, timestamp)
+# samples. Use this when you have one trace per signal.
 batch_steps = {
     "x": [
         (5.0, 0.0),  # x=5 at t=0 (robustness: 5-10 = -5)
@@ -18,4 +19,19 @@ batch_steps = {
 output = batch_monitor.update_batch(batch_steps)
 
 print("Batch Update Results:")
+print(output)
+
+# Flat form: an iterable of (signal, value, timestamp) tuples. Use this when
+# samples from different signals are interleaved, e.g. read from a log.
+interleaved_monitor = mstlo.Monitor(phi_batch, semantics="Rosi")
+output = interleaved_monitor.update_batch(
+    [
+        ("x", 5.0, 0.0),
+        ("x", 15.0, 1.0),
+        ("x", 8.0, 2.0),
+        ("x", 12.0, 3.0),
+    ]
+)
+
+print("\nSame trace, flat form:")
 print(output)

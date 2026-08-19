@@ -215,31 +215,36 @@ impl PyMonitorOutput {
         })
     }
 
+    /// Signal name of the last input step, or `None` for an empty batch.
     #[getter]
-    fn input_signal(&self) -> &'static str {
+    fn input_signal(&self) -> Option<&'static str> {
         match &self.inner {
-            InnerMonitorOutput::Bool(o) => o.input_signal,
-            InnerMonitorOutput::Float(o) => o.input_signal,
-            InnerMonitorOutput::Interval(o) => o.input_signal,
+            InnerMonitorOutput::Bool(o) => o.input_signal(),
+            InnerMonitorOutput::Float(o) => o.input_signal(),
+            InnerMonitorOutput::Interval(o) => o.input_signal(),
         }
     }
 
+    /// Timestamp of the last input step, or `None` for an empty batch.
     #[getter]
-    fn input_timestamp(&self) -> f64 {
+    fn input_timestamp(&self) -> Option<f64> {
         match &self.inner {
-            InnerMonitorOutput::Bool(o) => o.input_timestamp.as_secs_f64(),
-            InnerMonitorOutput::Float(o) => o.input_timestamp.as_secs_f64(),
-            InnerMonitorOutput::Interval(o) => o.input_timestamp.as_secs_f64(),
+            InnerMonitorOutput::Bool(o) => o.input_timestamp(),
+            InnerMonitorOutput::Float(o) => o.input_timestamp(),
+            InnerMonitorOutput::Interval(o) => o.input_timestamp(),
         }
+        .map(|timestamp| timestamp.as_secs_f64())
     }
 
+    /// Value of the last input step, or `None` for an empty batch.
     #[getter]
-    fn input_value(&self) -> f64 {
+    fn input_value(&self) -> Option<f64> {
         match &self.inner {
-            InnerMonitorOutput::Bool(o) => o.input_value,
-            InnerMonitorOutput::Float(o) => o.input_value,
-            InnerMonitorOutput::Interval(o) => o.input_value,
+            InnerMonitorOutput::Bool(o) => o.input_value(),
+            InnerMonitorOutput::Float(o) => o.input_value(),
+            InnerMonitorOutput::Interval(o) => o.input_value(),
         }
+        .copied()
     }
 
     fn has_verdicts(&self) -> bool {
@@ -660,37 +665,8 @@ impl Monitor {
         duration.as_secs_f64()
     }
 
-    fn update_batch(&mut self, steps: &Bound<'_, PyDict>) -> PyResult<PyMonitorOutput> {
-        // Convert Python dict to Rust HashMap<&'static str, Vec<Step<f64>>>
-        let mut rust_steps: HashMap<&'static str, Vec<Step<f64>>> = HashMap::new();
-
-        for (key, value) in steps.iter() {
-            let signal: String = key.extract()?;
-            let sig_ref: &'static str = Box::leak(signal.into_boxed_str());
-
-            let step_list: Bound<'_, PyList> = value.extract()?;
-            let mut steps_vec = Vec::new();
-
-            for item in step_list.iter() {
-                let tuple: Bound<'_, PyTuple> = item.extract()?;
-                if tuple.len() != 2 {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Each step must be a tuple of (value, timestamp)",
-                    ));
-                }
-                let val: f64 = tuple.get_item(0)?.extract()?;
-                let ts: f64 = tuple.get_item(1)?.extract()?;
-                steps_vec.push(Step::new(sig_ref, val, Duration::from_secs_f64(ts)));
-            }
-
-            rust_steps.insert(sig_ref, steps_vec);
-        }
-
-        if rust_steps.is_empty() || rust_steps.values().all(|v| v.is_empty()) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "update_batch requires at least one step",
-            ));
-        }
+    fn update_batch(&mut self, steps: &Bound<'_, PyAny>) -> PyResult<PyMonitorOutput> {
+        let rust_steps = self.collect_batch_steps(steps)?;
 
         match &mut self.inner {
             InnerMonitor::Robustness(m) => {
@@ -756,6 +732,63 @@ impl Monitor {
 }
 
 impl Monitor {
+    /// Converts either accepted batch form into a flat list of steps.
+    ///
+    /// Accepted forms:
+    /// - signal-major: `{"x": [(value, timestamp), ..], ..}`
+    /// - flat: `[("x", value, timestamp), ..]`
+    fn collect_batch_steps(&mut self, steps: &Bound<'_, PyAny>) -> PyResult<Vec<Step<f64>>> {
+        let mut rust_steps = Vec::new();
+
+        if let Ok(mapping) = steps.cast::<PyDict>() {
+            for (key, samples) in mapping.iter() {
+                let signal: String = key.extract().map_err(|_| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>("Signal names must be strings")
+                })?;
+                let sig_ref = self.intern_signal_name(signal);
+
+                for sample in samples.try_iter()? {
+                    let (value, timestamp) = extract_pair(&sample?, "(value, timestamp)")?;
+                    rust_steps.push(Step::new(
+                        sig_ref,
+                        value,
+                        Duration::from_secs_f64(timestamp),
+                    ));
+                }
+            }
+        } else {
+            for entry in steps.try_iter().map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Batch must be a dict of {signal: [(value, timestamp), ..]} or an iterable of (signal, value, timestamp) tuples",
+                )
+            })? {
+                let entry = entry?;
+                let tuple: Bound<'_, PyTuple> = entry.extract().map_err(|_| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Each step must be a tuple of (signal, value, timestamp)",
+                    )
+                })?;
+                if tuple.len() != 3 {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Each step must be a tuple of (signal, value, timestamp)",
+                    ));
+                }
+
+                let signal: String = tuple.get_item(0)?.extract()?;
+                let sig_ref = self.intern_signal_name(signal);
+                let value: f64 = tuple.get_item(1)?.extract()?;
+                let timestamp: f64 = tuple.get_item(2)?.extract()?;
+                rust_steps.push(Step::new(
+                    sig_ref,
+                    value,
+                    Duration::from_secs_f64(timestamp),
+                ));
+            }
+        }
+
+        Ok(rust_steps)
+    }
+
     /// Return a `&'static str` for `signal`, leaking exactly once per unique name.
     fn intern_signal_name(&mut self, signal: String) -> &'static str {
         if let Some(&cached) = self.signal_name_cache.get(&signal) {
@@ -767,6 +800,20 @@ impl Monitor {
     }
 }
 
+/// Extracts a `(f64, f64)` pair from a Python 2-tuple.
+fn extract_pair(item: &Bound<'_, PyAny>, expected: &str) -> PyResult<(f64, f64)> {
+    let tuple: Bound<'_, PyTuple> = item.extract().map_err(|_| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Each step must be a {expected}"))
+    })?;
+    if tuple.len() != 2 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Each step must be a {expected}"
+        )));
+    }
+
+    Ok((tuple.get_item(0)?.extract()?, tuple.get_item(1)?.extract()?))
+}
+
 fn convert_output_to_dict<Y: Clone, F>(
     py: Python,
     output: MonitorOutput<f64, Y>,
@@ -776,9 +823,12 @@ where
     F: Fn(Y) -> Py<PyAny>,
 {
     let dict = PyDict::new(py);
-    dict.set_item("input_signal", output.input_signal)?;
-    dict.set_item("input_timestamp", output.input_timestamp.as_secs_f64())?;
-    dict.set_item("input_value", output.input_value)?;
+    dict.set_item("input_signal", output.input_signal())?;
+    dict.set_item(
+        "input_timestamp",
+        output.input_timestamp().map(|ts| ts.as_secs_f64()),
+    )?;
+    dict.set_item("input_value", output.input_value().copied())?;
 
     // Preserve the structure of individual evaluations/sync steps
     let mut evaluations_list = Vec::new();

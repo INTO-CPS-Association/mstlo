@@ -522,21 +522,57 @@ class TestBatchUpdate:
         assert verdicts[1][0] == 1.0
         assert verdicts[2][0] == 2.0
 
-    def test_batch_update_empty_raises_error(self):
-        """Test that empty batch raises ValueError."""
+    def test_batch_update_flat_form(self):
+        """Test batch update with a flat list of (signal, value, timestamp)."""
+        f1 = mstlo.Formula.gt("x", 5.0)
+        f2 = mstlo.Formula.lt("y", 10.0)
+        formula = mstlo.Formula.and_(f1, f2)
+        monitor = mstlo.Monitor(formula, semantics="DelayedQualitative")
+
+        output = monitor.update_batch(
+            [("x", 10.0, 0.0), ("y", 5.0, 1.0), ("x", 8.0, 2.0), ("y", 3.0, 3.0)]
+        )
+
+        assert output.input_timestamp == 3.0
+        assert output.input_signal == "y"
+
+    def test_batch_update_forms_agree(self):
+        """Signal-major and flat forms produce the same verdicts."""
+        formula = mstlo.parse_formula("G[0, 2](x > 10)")
+
+        signal_major = mstlo.Monitor(formula).update_batch(
+            {"x": [(15.0, 0.0), (12.0, 1.0), (8.0, 2.0)]}
+        )
+        flat = mstlo.Monitor(formula).update_batch(
+            [("x", 15.0, 0.0), ("x", 12.0, 1.0), ("x", 8.0, 2.0)]
+        )
+
+        assert signal_major.verdicts() == flat.verdicts()
+
+    def test_batch_update_empty_returns_empty_output(self):
+        """Test that an empty batch yields an empty output."""
         formula = mstlo.Formula.gt("x", 10.0)
         monitor = mstlo.Monitor(formula, semantics="DelayedQualitative")
 
-        with pytest.raises(ValueError, match="at least one step"):
-            monitor.update_batch({})
+        for empty in ({}, {"x": []}, []):
+            output = monitor.update_batch(empty)
 
-    def test_batch_update_empty_lists_raises_error(self):
-        """Test that batch with empty lists raises ValueError."""
+            assert output.verdicts() == []
+            assert output.has_verdicts() is False
+            assert output.input_signal is None
+            assert output.input_timestamp is None
+            assert output.input_value is None
+
+    def test_batch_update_invalid_form_raises_error(self):
+        """Test that a malformed batch raises ValueError."""
         formula = mstlo.Formula.gt("x", 10.0)
         monitor = mstlo.Monitor(formula, semantics="DelayedQualitative")
 
-        with pytest.raises(ValueError, match="at least one step"):
-            monitor.update_batch({"x": []})
+        with pytest.raises(ValueError):
+            monitor.update_batch(42)
+
+        with pytest.raises(ValueError):
+            monitor.update_batch([("x", 10.0)])
 
     def test_batch_update_to_dict(self):
         """Test that batch update output can be converted to dict."""
