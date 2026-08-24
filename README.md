@@ -25,6 +25,7 @@ mstlo (*mistletoe*) is a Rust library for online monitoring of Signal Temporal L
   - [Theory](#theory)
     - [Signal Temporal Logic (STL)](#signal-temporal-logic-stl)
     - [Evaluation Semantics](#evaluation-semantics)
+      - [Visual Comparison](#visual-comparison)
       - [Delayed Qualitative](#delayed-qualitative)
       - [Delayed Quantitative](#delayed-quantitative)
       - [Robust Satisfaction Intervals (RoSI)](#robust-satisfaction-intervals-rosi)
@@ -196,6 +197,16 @@ See also [semantics-comparison.ipynb](mstlo-python/examples/semantics-comparison
 An online monitor observes a system's behavior incrementally as discrete samples arrive. mstlo provides a unified interface supporting four distinct monitoring semantics, allowing users to trade off between expressiveness and verdict latency. In the following, we present the four semantics currently supported by mstlo.
 
 For the temporal operators, $I$ is an interval $[a,b]$ with $b>a \geq 0$.
+
+#### Visual Comparison
+
+Consider the evaluation of the formula $\varphi = \Diamond_{[0,5]}(x\geq 0)$ over the signal $x=[-2,-1,0.5,1.5,1.0,-0.5]$ for timestamps $t=[0,1,2,3,4,5]$. The signal has temporal depth $H(\varphi)=5$.
+
+Focusing on the verdict for $\tau=0$, it is clear that we can say that $\varphi$ is satisfied at $t=2s$. The two delayed semantics can, however, only produce a verdict when the temporal depth has elapsed, i.e. at $t=5s$. The eager qualitive semantics is able to report satisfaction already at time $t=2s$. Similarly, RoSI semantics report the interval $[0.5,\infty]$ at time $t=2s$, and since the lower bound is positive and the interval encloses all possible future robustness values, this corresponds to satisfaction as well. RoSI converges at the delayed quantitative verdict $\rho=1.5$ at time $t=5s$.
+
+This is illustrated in the figure below:
+
+![alt text](assets/images/stl_online_semantics_comparison_v8.png)
 
 #### Delayed Qualitative
 
