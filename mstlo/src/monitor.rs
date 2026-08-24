@@ -1345,6 +1345,24 @@ mod tests {
         }
 
         #[test]
+        fn test_monitor_input_fields() {
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step = step!("output", true, Duration::from_secs(1));
+            let sync_result = SyncStepResult::new(sync_step, vec![output_step]);
+            let monitor_output = MonitorOutput {
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
+                evaluations: vec![sync_result],
+            };
+
+            assert_eq!(monitor_output.input_signal(), Some("x"));
+            assert_eq!(
+                monitor_output.input_timestamp(),
+                Some(Duration::from_secs(1))
+            );
+            assert_eq!(monitor_output.input_value(), Some(10.0).as_ref());
+        }
+
+        #[test]
         fn test_monitor_has_outputs() {
             let sync_step = step!("x", 10.0, Duration::from_secs(1));
             let output_step = step!("output", true, Duration::from_secs(1));
