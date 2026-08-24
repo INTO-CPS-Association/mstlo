@@ -9,7 +9,6 @@
 [![PyPI](https://img.shields.io/pypi/v/mstlo-python.svg)](https://pypi.org/project/mstlo-python/)
 [![Python versions](https://img.shields.io/pypi/pyversions/mstlo-python.svg)](https://pypi.org/project/mstlo-python/)
 <!-- [![Crates.io Downloads](https://img.shields.io/crates/d/mstlo)](https://crates.io/crates/mstlo)
-[![Docs Status](https://img.shields.io/badge/docs-latest-brightgreen)](https://INTO-CPS-Association.github.io/mstlo/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/mstlo-python.svg?label=PyPI%20downloads)](https://pypi.org/project/mstlo-python/) -->
 
 mstlo (*mistletoe*) is a Rust library for online monitoring of Signal Temporal Logic (STL) specifications. It is designed for high performance and low memory usage, making it suitable for real-time applications. The Python bindings are published as `mstlo-python`.
@@ -62,7 +61,7 @@ Add mstlo to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mstlo = "0.1.0"
+mstlo = "0.1.1"
 ```
 
 ### Python
@@ -166,7 +165,7 @@ print(f"Verdicts: {output.verdicts()}")
 
 Signal Temporal Logic (STL) [3] is a formalism for specifying properties of real-valued signals that evolve over time, providing a compact language to describe the desired behaviors of dynamic systems. STL evaluates properties over signals, which are defined as functions mapping a time domain (such as nonnegative real numbers, $\mathbb{R}_{\ge0}$) to a value domain.
 
-mstlo focuses on bounded STL, meaning all temporal operators are constrained by finite time intervals of the form $[a, b]$, where $0 \le a < t$.
+mstlo focuses on bounded STL, meaning all temporal operators are constrained by finite time intervals of the form $[a, b]$, where $0 \le a < b$.
 
 The core syntax of STL is built from a minimal set of primitive operators:
 
@@ -174,27 +173,29 @@ The core syntax of STL is built from a minimal set of primitive operators:
 
 - **Atomic Predicates ($\mu(x) < c$)**: Evaluates to True if the function over the signal is less than a constant $c$.
 
-- **Negation ($\neg\phi$)**: The logical NOT of a formula.
+- **Negation ($\neg\varphi$)**: The logical NOT of a formula.
 
-- **Conjunction ($\phi \wedge \psi$)**: The logical AND of two formulas.
+- **Conjunction ($\varphi \wedge \psi$)**: The logical AND of two formulas.
 
-- **Until ($\phi \mathcal{U}_{[a,b]} \psi$)**: States that $\phi$ must hold continuously until $\psi$ becomes true within the time interval $[a, b]$.
+- **Until ($\varphi \mathcal{U}_{[a,b]} \psi$)**: States that $\varphi$ must hold continuously until $\psi$ becomes true within the time interval $[a, b]$.
 
 From these primitives, the library derives other highly useful operators to simplify specifications:
 
-- **Disjunction (OR)**: $\phi \vee \psi$
+- **Disjunction (OR)**: $\varphi \vee \psi$
 
-- **Implication**: $\phi \rightarrow \psi$
+- **Implication**: $\varphi \rightarrow \psi$
 
-- **Eventually**: $\diamondsuit_{[a,b]}\phi$
+- **Eventually**: $\diamondsuit_{[a,b]}\varphi$
 
-- **Globally**: $\Box_{[a,b]}\phi$
+- **Globally**: $\Box_{[a,b]}\varphi$
 
 ### Evaluation Semantics
 
 See also [semantics-comparison.ipynb](mstlo-python/examples/semantics-comparison.ipynb) for an interactive demonstration of the different semantics.
 
-An online monitor observes a system's behavior incrementally as discrete samples arrive. mstlo provides a unified interface supporting four distinct monitoring semantics, allowing users to trade off between expressiveness and verdict latency:
+An online monitor observes a system's behavior incrementally as discrete samples arrive. mstlo provides a unified interface supporting four distinct monitoring semantics, allowing users to trade off between expressiveness and verdict latency. In the following, we present the four semantics currently supported by mstlo.
+
+For the temporal operators, $I$ is an interval $[a,b]$ with $b>a \geq 0$.
 
 #### Delayed Qualitative
 
@@ -223,12 +224,12 @@ $$
 $$
 
 $$
-⟦  \mathbf{G}_I \varphi ⟧(s,t) =
+⟦  \Box_I \varphi ⟧(s,t) =
 \forall t' \in t + I.\ ⟦ \varphi ⟧(s,t')
 $$
 
 $$
-⟦ \mathbf{F}_I \varphi ⟧(s,t) =
+⟦ \Diamond_I \varphi ⟧(s,t) =
 \exists t' \in t + I.\ ⟦ \varphi ⟧(s,t')
 $$
 
@@ -251,32 +252,32 @@ $$
 $$
 
 $$
-\rho(s_t, \neg\phi)                 = -\rho(s_t, \phi)
+\rho(s_t, \neg\varphi)                 = -\rho(s_t, \varphi)
 $$
 
 $$
-\rho(s_t, \phi \wedge \psi)         = \min\left(\rho(s_t, \phi), \rho(s_t, \psi)\right)  
+\rho(s_t, \varphi \wedge \psi)         = \min\left(\rho(s_t, \varphi), \rho(s_t, \psi)\right)  
 $$
 
 $$
-\rho(s_t, \phi \vee \psi)           = \max\left(\rho(s_t, \phi), \rho(s_t, \psi)\right)  
+\rho(s_t, \varphi \vee \psi)           = \max\left(\rho(s_t, \varphi), \rho(s_t, \psi)\right)  
 $$
 
 $$
-\rho(s_t, \phi \rightarrow \psi)    = \max\left(-\rho(s_t, \phi), \rho(s_t, \psi)\right)
+\rho(s_t, \varphi \rightarrow \psi)    = \max\left(-\rho(s_t, \varphi), \rho(s_t, \psi)\right)
 $$
 
 $$
-\rho(s_t, \Diamond_{[a,b]}\phi)     = \max_{t' \in t+[a,b]} \rho(s_{t'}, \phi)
+\rho(s_t, \Diamond_{I}\varphi)     = \max_{t' \in t+I} \rho(s_{t'}, \varphi)
 $$
 
 $$
-\rho(s_t, \Box_{[a,b]}\phi)         = \min_{t' \in t+[a,b]} \rho(s_{t'}, \phi)
+\rho(s_t, \Box_{I}\varphi)         = \min_{t' \in t+I} \rho(s_{t'}, \varphi)
 $$
 
 $$
 \rho(s_t, \varphi \ \mathbf{U}_I\ \psi) =
-\max_{t' \in t+[a,b]} \left(\min\left(\rho(s_{t'},\psi), \max_{t'' \in [t, t']} \rho(s_{t''},\phi)\right)\right)
+\max_{t' \in t+I} \left(\min\left(\rho(s_{t'},\psi), \max_{t'' \in [t, t']} \rho(s_{t''},\varphi)\right)\right)
 $$
 
 #### Robust Satisfaction Intervals (RoSI)
@@ -296,32 +297,32 @@ $$
 $$
 
 $$
-[\rho](x_{[0,i]}, \tau, \neg\phi)                 = -[\rho](x_{[0,i]}, \tau, \phi)
+[\rho](x_{[0,i]}, \tau, \neg\varphi)                 = -[\rho](x_{[0,i]}, \tau, \varphi)
 $$
 
 $$
-[\rho](x_{[0,i]}, \tau, \phi \wedge \psi)         = \min([\rho](x_{[0,i]}, \tau, \phi), [\rho](x_{[0,i]}, \tau, \psi))  
+[\rho](x_{[0,i]}, \tau, \varphi \wedge \psi)         = \min([\rho](x_{[0,i]}, \tau, \varphi), [\rho](x_{[0,i]}, \tau, \psi))  
 $$
 
 $$
-[\rho](x_{[0,i]}, \tau, \phi \vee \psi)           = \max([\rho](x_{[0,i]}, \tau, \phi), [\rho](x_{[0,i]}, \tau, \psi))  
+[\rho](x_{[0,i]}, \tau, \varphi \vee \psi)           = \max([\rho](x_{[0,i]}, \tau, \varphi), [\rho](x_{[0,i]}, \tau, \psi))  
 $$
 
 $$
-[\rho](x_{[0,i]}, \tau, \phi \rightarrow \psi)    = \max(-[\rho](x_{[0,i]}, \tau, \phi), [\rho](x_{[0,i]}, \tau, \psi))
+[\rho](x_{[0,i]}, \tau, \varphi \rightarrow \psi)    = \max(-[\rho](x_{[0,i]}, \tau, \varphi), [\rho](x_{[0,i]}, \tau, \psi))
 $$
 
 $$
-[\rho](x_{[0,i]}, \tau, \Diamond_{[a,b]}\phi)     = \sup_{t' \in \tau + [a,b]} \left([\rho](x_{[0,i]}, t', \phi)\right)
+[\rho](x_{[0,i]}, \tau, \Diamond_{I}\varphi)     = \sup_{t' \in \tau + I} \left([\rho](x_{[0,i]}, t', \varphi)\right)
 $$
 
 $$
-[\rho](x_{[0,i]}, \tau, \Box_{[a,b]}\phi)         = \inf_{t' \in \tau + [a,b]} \left([\rho](x_{[0,i]}, t', \phi)\right)
+[\rho](x_{[0,i]}, \tau, \Box_{I}\varphi)         = \inf_{t' \in \tau + I} \left([\rho](x_{[0,i]}, t', \varphi)\right)
 $$
 
 $$
 [\rho](x_{[0,i]}, \tau, \varphi \ \mathbf{U}_I\ \psi )  =
-\sup_{t' \in \tau + [a,b]} \min\left( [\rho](x_{[0,i]}, t', \psi), \inf_{t'' \in [\tau, t']} [\rho](x_{[0,i]}, t'', \phi) \right)
+\sup_{t' \in \tau + I} \min\left( [\rho](x_{[0,i]}, t', \psi), \inf_{t'' \in [\tau, t']} [\rho](x_{[0,i]}, t'', \varphi) \right)
 $$
 
 Where $x_{[0,i]}$ is the signal prefix observed up to time $t_i$, $\tau$ is the timestamp of interest, and $\mathcal{I}(\mathbb{R})$ denotes the set of all intervals over the reals.
