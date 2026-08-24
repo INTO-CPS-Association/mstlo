@@ -4,7 +4,7 @@ use mstlo::monitor::{
 };
 use mstlo::parse_stl;
 use mstlo::{FormulaDefinition, RobustnessInterval, TimeInterval, Variables};
-use mstlo::{Step, SynchronizationStrategy};
+use mstlo::{Step, SynchronizationStrategy, intern};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyList, PyTuple};
 use std::collections::{HashMap, HashSet};
@@ -29,19 +29,18 @@ impl Formula {
     #[staticmethod]
     // #[pyo3(text_signature = "(signal, value)")]
     fn gt(signal: String, value: f64) -> Self {
-        // Leak the string to get &'static str required by mstlo
-        let sig_ref = Box::leak(signal.into_boxed_str());
+        // Intern the name to get the `&'static str` mstlo stores: allocated
+        // once per distinct name rather than on every call.
         Formula {
-            inner: FormulaDefinition::GreaterThan(sig_ref, value),
+            inner: FormulaDefinition::GreaterThan(intern(&signal), value),
         }
     }
 
     #[staticmethod]
     #[pyo3(text_signature = "(signal, value)")]
     fn lt(signal: String, value: f64) -> Self {
-        let sig_ref = Box::leak(signal.into_boxed_str());
         Formula {
-            inner: FormulaDefinition::LessThan(sig_ref, value),
+            inner: FormulaDefinition::LessThan(intern(&signal), value),
         }
     }
 
@@ -64,20 +63,16 @@ impl Formula {
     #[staticmethod]
     #[pyo3(text_signature = "(signal, variable)")]
     fn gt_var(signal: String, variable: String) -> Self {
-        let sig_ref = Box::leak(signal.into_boxed_str());
-        let var_ref = Box::leak(variable.into_boxed_str());
         Formula {
-            inner: FormulaDefinition::GreaterThanVar(sig_ref, var_ref),
+            inner: FormulaDefinition::GreaterThanVar(intern(&signal), intern(&variable)),
         }
     }
 
     #[staticmethod]
     #[pyo3(text_signature = "(signal, variable)")]
     fn lt_var(signal: String, variable: String) -> Self {
-        let sig_ref = Box::leak(signal.into_boxed_str());
-        let var_ref = Box::leak(variable.into_boxed_str());
         Formula {
-            inner: FormulaDefinition::LessThanVar(sig_ref, var_ref),
+            inner: FormulaDefinition::LessThanVar(intern(&signal), intern(&variable)),
         }
     }
 
@@ -404,18 +399,15 @@ impl PyVariables {
     }
 
     fn set(&self, name: String, value: f64) {
-        let name_ref = Box::leak(name.into_boxed_str());
-        self.inner.set(name_ref, value);
+        self.inner.set(&name, value);
     }
 
     fn get(&self, name: String) -> Option<f64> {
-        let name_ref: &'static str = Box::leak(name.into_boxed_str());
-        self.inner.get(name_ref)
+        self.inner.get(&name)
     }
 
     fn contains(&self, name: String) -> bool {
-        let name_ref: &'static str = Box::leak(name.into_boxed_str());
-        self.inner.contains(name_ref)
+        self.inner.contains(&name)
     }
 
     fn names(&self) -> Vec<String> {
@@ -423,8 +415,7 @@ impl PyVariables {
     }
 
     fn remove(&self, name: String) -> Option<f64> {
-        let name_ref: &'static str = Box::leak(name.into_boxed_str());
-        self.inner.remove(name_ref)
+        self.inner.remove(&name)
     }
 
     fn clear(&self) {
@@ -474,8 +465,9 @@ struct Monitor {
     algorithm: String,
     synchronization: String,
     variables: PyVariables,
-    /// Cache mapping signal name → leaked `&'static str`, so we leak at most
-    /// once per unique signal name per monitor rather than on every update call.
+    /// Cache mapping signal name → the interned `&'static str`, so the global
+    /// interner is consulted at most once per unique signal name per monitor
+    /// rather than on every update call.
     signal_name_cache: HashMap<String, &'static str>,
 }
 
@@ -789,14 +781,18 @@ impl Monitor {
         Ok(rust_steps)
     }
 
-    /// Return a `&'static str` for `signal`, leaking exactly once per unique name.
+    /// Returns the `&'static str` mstlo stores for `signal`.
+    ///
+    /// `update` is called once per streamed sample, so the per-monitor cache is
+    /// consulted first to keep the hot path off the global interner's lock; the
+    /// interner is only reached the first time a monitor sees a given name.
     fn intern_signal_name(&mut self, signal: String) -> &'static str {
         if let Some(&cached) = self.signal_name_cache.get(&signal) {
             return cached;
         }
-        let leaked: &'static str = Box::leak(signal.clone().into_boxed_str());
-        self.signal_name_cache.insert(signal, leaked);
-        leaked
+        let interned = intern(&signal);
+        self.signal_name_cache.insert(signal, interned);
+        interned
     }
 }
 

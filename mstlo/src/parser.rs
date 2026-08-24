@@ -46,6 +46,7 @@
 
 use crate::core::TimeInterval;
 use crate::formula_definition::FormulaDefinition;
+use crate::intern;
 use std::time::Duration;
 
 /// Error type for STL formula parsing.
@@ -463,9 +464,10 @@ impl<'a> Parser<'a> {
                         return self.parse_primary();
                     };
 
-                    // Convert signal to FormulaDefinition
-                    // We need to leak the string to get 'static lifetime
-                    let signal_static: &'static str = Box::leak(signal.into_boxed_str());
+                    // `FormulaDefinition` stores names as `&'static str`, so the
+                    // parsed name is interned: allocated once per distinct name
+                    // rather than on every parse.
+                    let signal_static: &'static str = intern(&signal);
 
                     // Try to parse the threshold - either a number or a variable (identifier)
                     self.skip_whitespace();
@@ -504,7 +506,7 @@ impl<'a> Parser<'a> {
 
                     // Parse as variable identifier
                     let var_name = self.parse_identifier()?;
-                    let var_static: &'static str = Box::leak(var_name.into_boxed_str());
+                    let var_static: &'static str = intern(&var_name);
 
                     match op {
                         ">" => Ok(FormulaDefinition::GreaterThanVar(signal_static, var_static)),
@@ -1129,5 +1131,26 @@ mod tests {
         // Starting with a digit is not a valid identifier
         let result = parse_stl("123abc > 5");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parsing_twice_reuses_interned_names() {
+        fn names_of(formula: &FormulaDefinition) -> (&'static str, &'static str) {
+            match formula {
+                FormulaDefinition::GreaterThanVar(signal, variable) => (signal, variable),
+                other => panic!("expected a variable predicate, got {other:?}"),
+            }
+        }
+
+        // Parsing is not a one-off: bindings re-parse formulas, so repeated
+        // parses must reuse the interned names rather than allocate new ones.
+        let first = parse_stl("parser_intern_probe > $parser_intern_limit").unwrap();
+        let second = parse_stl("parser_intern_probe > $parser_intern_limit").unwrap();
+
+        let (first_signal, first_variable) = names_of(&first);
+        let (second_signal, second_variable) = names_of(&second);
+
+        assert!(std::ptr::eq(first_signal, second_signal));
+        assert!(std::ptr::eq(first_variable, second_variable));
     }
 }

@@ -6,6 +6,7 @@
 //! - robustness domains ([`RobustnessSemantics`], [`RobustnessInterval`]), and
 //! - runtime variable bindings ([`Variables`]).
 
+use crate::intern;
 use crate::ring_buffer::Step;
 use dyn_clone::{DynClone, clone_trait_object};
 use std::collections::HashSet;
@@ -587,22 +588,33 @@ impl Variables {
 
     /// Set (or update) a variable's value.
     ///
+    /// Updating an already-defined variable neither allocates nor interns, so
+    /// this is cheap to call on every iteration of a monitoring loop. A name
+    /// seen for the first time is interned (see [`intern`]).
+    ///
     /// # Arguments
-    /// * `name` - The variable name (must be a static string)
+    /// * `name` - The variable name
     /// * `value` - The variable's value
-    pub fn set(&self, name: &'static str, value: f64) {
-        self.inner.borrow_mut().insert(name, value);
+    pub fn set(&self, name: &str, value: f64) {
+        let mut variables = self.inner.borrow_mut();
+
+        if let Some(slot) = variables.get_mut(name) {
+            *slot = value;
+            return;
+        }
+
+        variables.insert(intern(name), value);
     }
 
     /// Get a variable's current value.
     ///
     /// Returns `None` if the variable has not been set.
-    pub fn get(&self, name: &'static str) -> Option<f64> {
+    pub fn get(&self, name: &str) -> Option<f64> {
         self.inner.borrow().get(name).copied()
     }
 
     /// Returns whether a variable is currently defined.
-    pub fn contains(&self, name: &'static str) -> bool {
+    pub fn contains(&self, name: &str) -> bool {
         self.inner.borrow().contains_key(name)
     }
 
@@ -614,7 +626,7 @@ impl Variables {
     }
 
     /// Removes a variable and returns its previous value, if any.
-    pub fn remove(&self, name: &'static str) -> Option<f64> {
+    pub fn remove(&self, name: &str) -> Option<f64> {
         self.inner.borrow_mut().remove(name)
     }
 
