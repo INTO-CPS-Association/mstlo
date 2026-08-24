@@ -1,68 +1,50 @@
-//! Monitor a trace loaded from a CSV file against a property loaded from a file.
-//!
-//! Nothing about the signals is hard-coded: the CSV header names them, and the
-//! property refers to them by those names.
-//!
-//! ```text
-//! data/trace.csv          data/property.stl
-//! time,temperature,...    G[0, 1](temperature < 30.0) && (pressure > 99.0)
-//! 0.0,21.4,101.1
-//! ...
-//! ```
+//! Monitor a trace from `data/trace.csv` against the property in
+//! `data/property.stl`.
 //!
 //! Run with: `cargo run --example csv_example`
 
 use mstlo::monitor::*;
-use mstlo::{Step, intern, parse_stl};
+use mstlo::{Step, intern, parse_stl, step};
 use std::fs;
 use std::time::Duration;
 
-/// Resolves a path next to this example, so it runs from any directory.
-macro_rules! data_path {
-    ($name:literal) => {
-        concat!(env!("CARGO_MANIFEST_DIR"), "/examples/data/", $name)
-    };
-}
+const DATA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/data/");
 
 /// Parses a `time,<signal>,..` CSV into one [`Step`] per cell.
-fn read_trace(csv: &str) -> Vec<Step<f64>> {
-    let mut lines = csv.lines().filter(|line| !line.trim().is_empty());
+fn read_trace(path: String) -> Vec<Step<f64>> {
+    let mut reader = csv::Reader::from_path(path).expect("Cannot read trace");
 
     // The header names the signals. `Step` stores `&'static str`, so the names
-    // are interned: allocated once each, and reused on every later run.
-    let header = lines.next().expect("CSV must have a header row");
-    let signals: Vec<&'static str> = header
-        .split(',')
-        .skip(1) // column 0 is the timestamp
-        .map(|name| intern(name.trim()))
+    // are interned. Column 0 is the timestamp.
+    let signals: Vec<&'static str> = reader
+        .headers()
+        .expect("CSV must have a header row")
+        .iter()
+        .skip(1)
+        .map(intern)
         .collect();
 
-    lines
-        .flat_map(|line| {
-            let mut cells = line.split(',').map(|cell| cell.trim());
-            let time: f64 = cells.next().expect("missing timestamp").parse().unwrap();
+    let mut trace = Vec::new();
+    for record in reader.records() {
+        let record = record.expect("Malformed CSV row");
+        let mut cells = record.iter();
+        let time: f64 = cells.next().expect("missing timestamp").parse().unwrap();
 
-            signals
-                .iter()
-                .zip(cells)
-                .map(move |(&signal, cell)| {
-                    Step::new(signal, cell.parse().unwrap(), Duration::from_secs_f64(time))
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
+        for (&signal, cell) in signals.iter().zip(cells) {
+            let value: f64 = cell.parse().expect("value must be a number");
+            trace.push(step!(signal, value, Duration::from_secs_f64(time)));
+        }
+    }
+    trace
 }
 
 fn main() {
-    let csv = fs::read_to_string(data_path!("trace.csv")).expect("Cannot read trace.csv");
-    let trace = read_trace(&csv);
+    let trace = read_trace(format!("{DATA}trace.csv"));
     println!("Read {} steps from CSV", trace.len());
 
-    // The property is text too, so it is parsed at runtime rather than by the
-    // `stl!` macro: "the temperature stays below 30 while the pressure holds
-    // above 99."
-    let property =
-        fs::read_to_string(data_path!("property.stl")).expect("Cannot read property.stl");
+    // The property is text, so it is parsed at runtime rather than by the
+    // `stl!` macro.
+    let property = fs::read_to_string(format!("{DATA}property.stl")).expect("Cannot read property");
     let formula = parse_stl(property.trim()).expect("Invalid property");
     println!("Monitoring: {formula}");
 
@@ -74,18 +56,35 @@ fn main() {
 
     // Feed the parsed steps to the monitor in order.
     for step in &trace {
-        println!(
-            "t={:>4.1}s, {}={} ",
-            step.timestamp.as_secs_f64(),
-            step.signal,
-            step.value,
-        );
         for verdict in monitor.update(step).verdicts() {
             println!(
-                "VERDICTS: \n \t t={:>4.1}s: {:>6.2}",
+                "t={:>4.1}s: {:>6.2}",
                 verdict.timestamp.as_secs_f64(),
                 verdict.value
             );
         }
     }
+
+    // The whole trace can also go in as one batch. `update_batch` takes any
+    // iterable of steps, so the parsed `Vec` goes straight in — there is no
+    // need to group it by signal first — and it sorts by timestamp, so a trace
+    // read out of order still evaluates chronologically.
+    //
+    // For this property the two forms produce identical verdicts. They can
+    // differ under `Rosi`, where a batch collapses the refinements of one
+    // timestamp into its final value, whereas the loop above reports each
+    // refinement as it happens.
+    //
+    // The `reset()` is only needed to run this *after* the loop above, which
+    // has already advanced the monitor past the end of the trace; replacing the
+    // loop outright needs only the two lines that follow it.
+    //
+    // monitor.reset();
+    // for verdict in monitor.update_batch(&trace).verdicts() {
+    //     println!(
+    //         "t={:>4.1}s: {:>6.2}",
+    //         verdict.timestamp.as_secs_f64(),
+    //         verdict.value
+    //     );
+    // }
 }
