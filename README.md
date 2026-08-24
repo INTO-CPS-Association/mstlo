@@ -63,6 +63,7 @@ Add mstlo to your `Cargo.toml`:
 ```toml
 [dependencies]
 mstlo = "0.1.1"
+mstlo = "0.1.1"
 ```
 
 ### Python
@@ -167,6 +168,7 @@ print(f"Verdicts: {output.verdicts()}")
 Signal Temporal Logic (STL) [3] is a formalism for specifying properties of real-valued signals that evolve over time, providing a compact language to describe the desired behaviors of dynamic systems. STL evaluates properties over signals, which are defined as functions mapping a time domain (such as nonnegative real numbers, $\mathbb{R}_{\ge0}$) to a value domain.
 
 mstlo focuses on bounded STL, meaning all temporal operators are constrained by finite time intervals of the form $[a, b]$, where $0 \le a < b$.
+mstlo focuses on bounded STL, meaning all temporal operators are constrained by finite time intervals of the form $[a, b]$, where $0 \le a < b$.
 
 The core syntax of STL is built from a minimal set of primitive operators:
 
@@ -175,19 +177,26 @@ The core syntax of STL is built from a minimal set of primitive operators:
 - **Atomic Predicates ($\mu(x) < c$)**: Evaluates to True if the function over the signal is less than a constant $c$.
 
 - **Negation ($\neg\varphi$)**: The logical NOT of a formula.
+- **Negation ($\neg\varphi$)**: The logical NOT of a formula.
 
 - **Conjunction ($\varphi \wedge \psi$)**: The logical AND of two formulas.
+- **Conjunction ($\varphi \wedge \psi$)**: The logical AND of two formulas.
 
+- **Until ($\varphi \mathcal{U}_{[a,b]} \psi$)**: States that $\varphi$ must hold continuously until $\psi$ becomes true within the time interval $[a, b]$.
 - **Until ($\varphi \mathcal{U}_{[a,b]} \psi$)**: States that $\varphi$ must hold continuously until $\psi$ becomes true within the time interval $[a, b]$.
 
 From these primitives, the library derives other highly useful operators to simplify specifications:
 
 - **Disjunction (OR)**: $\varphi \vee \psi$
+- **Disjunction (OR)**: $\varphi \vee \psi$
 
+- **Implication**: $\varphi \rightarrow \psi$
 - **Implication**: $\varphi \rightarrow \psi$
 
 - **Eventually**: $\diamondsuit_{[a,b]}\varphi$
+- **Eventually**: $\diamondsuit_{[a,b]}\varphi$
 
+- **Globally**: $\Box_{[a,b]}\varphi$
 - **Globally**: $\Box_{[a,b]}\varphi$
 
 ### Evaluation Semantics
@@ -236,10 +245,12 @@ $$
 
 $$
 ⟦  \Box_I \varphi ⟧(s,t) =
+⟦  \Box_I \varphi ⟧(s,t) =
 \forall t' \in t + I.\ ⟦ \varphi ⟧(s,t')
 $$
 
 $$
+⟦ \Diamond_I \varphi ⟧(s,t) =
 ⟦ \Diamond_I \varphi ⟧(s,t) =
 \exists t' \in t + I.\ ⟦ \varphi ⟧(s,t')
 $$
@@ -264,30 +275,37 @@ $$
 
 $$
 \rho(s_t, \neg\varphi)                 = -\rho(s_t, \varphi)
+\rho(s_t, \neg\varphi)                 = -\rho(s_t, \varphi)
 $$
 
 $$
+\rho(s_t, \varphi \wedge \psi)         = \min\left(\rho(s_t, \varphi), \rho(s_t, \psi)\right)  
 \rho(s_t, \varphi \wedge \psi)         = \min\left(\rho(s_t, \varphi), \rho(s_t, \psi)\right)  
 $$
 
 $$
 \rho(s_t, \varphi \vee \psi)           = \max\left(\rho(s_t, \varphi), \rho(s_t, \psi)\right)  
+\rho(s_t, \varphi \vee \psi)           = \max\left(\rho(s_t, \varphi), \rho(s_t, \psi)\right)  
 $$
 
 $$
+\rho(s_t, \varphi \rightarrow \psi)    = \max\left(-\rho(s_t, \varphi), \rho(s_t, \psi)\right)
 \rho(s_t, \varphi \rightarrow \psi)    = \max\left(-\rho(s_t, \varphi), \rho(s_t, \psi)\right)
 $$
 
 $$
 \rho(s_t, \Diamond_{I}\varphi)     = \max_{t' \in t+I} \rho(s_{t'}, \varphi)
+\rho(s_t, \Diamond_{I}\varphi)     = \max_{t' \in t+I} \rho(s_{t'}, \varphi)
 $$
 
 $$
+\rho(s_t, \Box_{I}\varphi)         = \min_{t' \in t+I} \rho(s_{t'}, \varphi)
 \rho(s_t, \Box_{I}\varphi)         = \min_{t' \in t+I} \rho(s_{t'}, \varphi)
 $$
 
 $$
 \rho(s_t, \varphi \ \mathbf{U}_I\ \psi) =
+\max_{t' \in t+I} \left(\min\left(\rho(s_{t'},\psi), \max_{t'' \in [t, t']} \rho(s_{t''},\varphi)\right)\right)
 \max_{t' \in t+I} \left(\min\left(\rho(s_{t'},\psi), \max_{t'' \in [t, t']} \rho(s_{t''},\varphi)\right)\right)
 $$
 
@@ -309,30 +327,37 @@ $$
 
 $$
 [\rho](x_{[0,i]}, \tau, \neg\varphi)                 = -[\rho](x_{[0,i]}, \tau, \varphi)
+[\rho](x_{[0,i]}, \tau, \neg\varphi)                 = -[\rho](x_{[0,i]}, \tau, \varphi)
 $$
 
 $$
+[\rho](x_{[0,i]}, \tau, \varphi \wedge \psi)         = \min([\rho](x_{[0,i]}, \tau, \varphi), [\rho](x_{[0,i]}, \tau, \psi))  
 [\rho](x_{[0,i]}, \tau, \varphi \wedge \psi)         = \min([\rho](x_{[0,i]}, \tau, \varphi), [\rho](x_{[0,i]}, \tau, \psi))  
 $$
 
 $$
 [\rho](x_{[0,i]}, \tau, \varphi \vee \psi)           = \max([\rho](x_{[0,i]}, \tau, \varphi), [\rho](x_{[0,i]}, \tau, \psi))  
+[\rho](x_{[0,i]}, \tau, \varphi \vee \psi)           = \max([\rho](x_{[0,i]}, \tau, \varphi), [\rho](x_{[0,i]}, \tau, \psi))  
 $$
 
 $$
+[\rho](x_{[0,i]}, \tau, \varphi \rightarrow \psi)    = \max(-[\rho](x_{[0,i]}, \tau, \varphi), [\rho](x_{[0,i]}, \tau, \psi))
 [\rho](x_{[0,i]}, \tau, \varphi \rightarrow \psi)    = \max(-[\rho](x_{[0,i]}, \tau, \varphi), [\rho](x_{[0,i]}, \tau, \psi))
 $$
 
 $$
 [\rho](x_{[0,i]}, \tau, \Diamond_{I}\varphi)     = \sup_{t' \in \tau + I} \left([\rho](x_{[0,i]}, t', \varphi)\right)
+[\rho](x_{[0,i]}, \tau, \Diamond_{I}\varphi)     = \sup_{t' \in \tau + I} \left([\rho](x_{[0,i]}, t', \varphi)\right)
 $$
 
 $$
+[\rho](x_{[0,i]}, \tau, \Box_{I}\varphi)         = \inf_{t' \in \tau + I} \left([\rho](x_{[0,i]}, t', \varphi)\right)
 [\rho](x_{[0,i]}, \tau, \Box_{I}\varphi)         = \inf_{t' \in \tau + I} \left([\rho](x_{[0,i]}, t', \varphi)\right)
 $$
 
 $$
 [\rho](x_{[0,i]}, \tau, \varphi \ \mathbf{U}_I\ \psi )  =
+\sup_{t' \in \tau + I} \min\left( [\rho](x_{[0,i]}, t', \psi), \inf_{t'' \in [\tau, t']} [\rho](x_{[0,i]}, t'', \varphi) \right)
 \sup_{t' \in \tau + I} \min\left( [\rho](x_{[0,i]}, t', \psi), \inf_{t'' \in [\tau, t']} [\rho](x_{[0,i]}, t'', \varphi) \right)
 $$
 
