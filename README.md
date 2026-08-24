@@ -21,6 +21,7 @@ mstlo (*mistletoe*) is a Rust library for online monitoring of Signal Temporal L
     - [Python](#python)
   - [Usage](#usage)
     - [Rust Usage](#rust-usage)
+      - [Batch updates](#batch-updates)
     - [Python Usage](#python-usage)
   - [Theory](#theory)
     - [Signal Temporal Logic (STL)](#signal-temporal-logic-stl)
@@ -106,6 +107,33 @@ fn main() {
     // Output after second update: [Step { signal: "x", value: RobustnessInterval(-inf, -1.0), timestamp: 0ns }, Step { signal: "x", value: RobustnessInterval(-inf, -1.0), timestamp: 1s }] // early violation detection for times 0 and 1
 }
 ```
+
+#### Batch updates
+
+Whole traces can be fed at once with `update_batch`, which accepts any iterable of steps. The `steps!` macro builds one,  either signal-major (one trace per signal) or flat (interleaved samples):
+
+```rust
+use mstlo::monitor::{Rosi, StlMonitor};
+use mstlo::{steps, stl};
+
+let mut monitor = StlMonitor::builder()
+    .formula(stl! {G[0, 2](x > 5.0) && (y < 10.0)})
+    .semantics(Rosi)
+    .build()
+    .expect("Failed to build monitor");
+
+// Signal-major: the signal name is written once per trace.
+let out = monitor.update_batch(&steps! {
+    "x": [(7.0, 0s), (4.0, 1s), (6.0, 2s)],
+    "y": [(3.0, 0s), (12.0, 2s)],
+});
+println!("{}", out); // all finalized verdicts
+
+// Flat: each entry is exactly a `step!` argument list.
+let out = monitor.update_batch(&steps![("x", 8.0, 3s), ("y", 1.0, 3s)]);
+```
+
+Steps are sorted by timestamp before evaluation, so a batch may be given in any order; the sort is stable, so the result is fully determined by the input sequence.
 
 ### Python Usage
 

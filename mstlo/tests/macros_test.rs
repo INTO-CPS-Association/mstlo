@@ -1,5 +1,5 @@
 #[cfg(test)]
-use mstlo::{FormulaDefinition, Step, step, stl};
+use mstlo::{FormulaDefinition, Step, step, steps, stl};
 
 use std::time::Duration;
 
@@ -318,4 +318,62 @@ fn test_step_macro_with_duration_expr() {
     assert_eq!(step.signal, "y");
     assert_eq!(step.value, 42);
     assert_eq!(step.timestamp, Duration::from_secs(2));
+}
+
+#[test]
+fn test_steps_macro_signal_major() {
+    let steps: Vec<Step<f64>> = steps! {
+        "x": [(5.0, 0s), (15.0, 2000ms)],
+        "y": [(25.0, Duration::from_secs(1))],
+    };
+
+    assert_eq!(
+        steps,
+        vec![
+            Step::new("x", 5.0, Duration::from_secs(0)),
+            Step::new("x", 15.0, Duration::from_secs(2)),
+            Step::new("y", 25.0, Duration::from_secs(1)),
+        ]
+    );
+}
+
+#[test]
+fn test_steps_macro_flat() {
+    let steps: Vec<Step<f64>> = steps![
+        ("x", 5.0, 0s),
+        ("y", 25.0, 0s),
+        ("x", 15.0, Duration::from_secs(2)),
+    ];
+
+    assert_eq!(
+        steps,
+        vec![
+            Step::new("x", 5.0, Duration::from_secs(0)),
+            Step::new("y", 25.0, Duration::from_secs(0)),
+            Step::new("x", 15.0, Duration::from_secs(2)),
+        ]
+    );
+}
+
+#[test]
+fn test_steps_macro_forms_agree() {
+    let signal_major: Vec<Step<f64>> = steps! { "x": [(5.0, 0s), (15.0, 2s)] };
+    let flat: Vec<Step<f64>> = steps![("x", 5.0, 0s), ("x", 15.0, 2s)];
+
+    assert_eq!(signal_major, flat);
+}
+
+#[test]
+fn test_steps_macro_accepts_expressions() {
+    let signal = "x";
+    let offset = Duration::from_millis(500);
+    let steps: Vec<Step<f64>> = steps! { signal: [(1.0 + 2.0, offset)] };
+
+    assert_eq!(steps, vec![Step::new("x", 3.0, Duration::from_millis(500))]);
+}
+
+#[test]
+fn test_steps_macro_empty() {
+    let steps: Vec<Step<f64>> = steps![];
+    assert!(steps.is_empty());
 }

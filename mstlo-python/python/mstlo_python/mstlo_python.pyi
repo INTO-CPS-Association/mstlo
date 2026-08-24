@@ -38,7 +38,7 @@ Examples using Formula builder methods:
     >>> print(repr(output))  # Debug format
 """
 
-from typing import Literal, TypedDict, Union, List, Tuple
+from typing import Iterable, Literal, Mapping, Optional, TypedDict, Union, List, Tuple
 
 __version__: str
 
@@ -135,10 +135,10 @@ class EvaluationDict(TypedDict):
 class MonitorOutputDict(TypedDict):
     """Output from a monitor update operation."""
 
-    input_signal: str
-    """The signal name that was updated."""
-    input_timestamp: float
-    """The timestamp of the input that triggered this update."""
+    input_signal: Optional[str]
+    """The signal name that was updated. None for an empty batch."""
+    input_timestamp: Optional[float]
+    """The timestamp of the input that triggered this update. None for an empty batch."""
     evaluations: List[EvaluationDict]
     """List of evaluations, one for each synchronized step. May be empty if data is buffered."""
 
@@ -588,18 +588,30 @@ class MonitorOutput:
     """
 
     @property
-    def input_signal(self) -> str:
-        """The name of the signal that was updated."""
+    def input_signal(self) -> Optional[str]:
+        """
+        The name of the last input step.
+
+        None only for the output of an empty batch, which has no verdicts either.
+        """
         ...
 
     @property
-    def input_timestamp(self) -> float:
-        """The timestamp (in seconds) of the input that triggered this update."""
+    def input_timestamp(self) -> Optional[float]:
+        """
+        The timestamp (in seconds) of the last input step.
+
+        None only for the output of an empty batch.
+        """
         ...
 
     @property
-    def input_value(self) -> float:
-        """The value of the input signal."""
+    def input_value(self) -> Optional[float]:
+        """
+        The value of the last input step.
+
+        None only for the output of an empty batch.
+        """
         ...
 
     def has_verdicts(self) -> bool:
@@ -966,30 +978,40 @@ class Monitor:
         ...
 
     def update_batch(
-        self, steps: dict[str, List[Tuple[float, float]]]
+        self,
+        steps: Union[
+            Mapping[str, Iterable[Tuple[float, float]]],
+            Iterable[Tuple[str, float, float]],
+        ],
     ) -> MonitorOutput:
         """
-        Update the monitor with multiple signal values in batch.
+        Update the monitor with a batch of steps.
 
-        This method processes multiple data points at once. Steps are automatically
-        sorted by timestamp in chronological order before processing, which is
-        optimal for the Incremental algorithm.
+        The batch may be given in either of two forms:
+
+        * **signal-major** - a mapping from each signal name to its
+          `(value, timestamp)` samples, when you have one trace per signal;
+        * **flat** - an iterable of `(signal, value, timestamp)` tuples, when
+          your samples are interleaved.
 
         Args:
-            steps: A dictionary mapping signal names to lists of (value, timestamp)
-                tuples. Examples: `{"x": [(1.0, 0.0), (2.0, 1.0)], "y": [(5.0, 0.5)]}`
+            steps: The batch, in either form. Examples:
+                `{"x": [(1.0, 0.0), (2.0, 1.0)], "y": [(5.0, 0.5)]}` or
+                `[("x", 1.0, 0.0), ("y", 5.0, 0.5), ("x", 2.0, 1.0)]`
 
         Returns:
-            A single MonitorOutput containing all evaluation results from processing
-            the batch. The input metadata reflects the last step processed.
+            A single MonitorOutput holding every evaluation produced by the
+            batch. Its input metadata is the last step processed, or None if
+            the batch was empty.
 
         Raises:
-            ValueError: If the steps dictionary is empty or contains no steps.
+            ValueError: If the batch is not one of the two accepted forms.
 
         Note:
-            Steps are processed in chronological order (sorted by timestamp) regardless
-            of the order in which signals appear in the dictionary. If you need a
-            specific processing order, use `update()` directly.
+            Steps are sorted by timestamp before evaluation, because the
+            Incremental algorithm expects a chronological stream. The sort is
+            stable, so steps sharing a timestamp are processed in the order
+            given: the result of a batch is fully determined by its input.
 
         Examples:
             >>> steps = {
@@ -998,6 +1020,12 @@ class Monitor:
             ... }
             >>> output = monitor.update_batch(steps)
             >>> print(output)  # Display all finalized verdicts
+
+            >>> output = monitor.update_batch([
+            ...     ("temperature", 25.0, 1.0),
+            ...     ("pressure", 101.3, 1.5),
+            ...     ("temperature", 26.0, 2.0),
+            ... ])
         """
         ...
 

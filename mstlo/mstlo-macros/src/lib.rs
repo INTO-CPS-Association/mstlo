@@ -1,6 +1,9 @@
-//! Procedural macro for STL (Signal Temporal Logic) formula definitions.
+//! Procedural macros for STL (Signal Temporal Logic) monitoring.
 //!
-//! This crate provides the `stl!` macro for defining STL formulas with a DSL syntax.
+//! This crate provides:
+//! - `stl!` for defining STL formulas with a DSL syntax,
+//! - `step!` for constructing a single input step, and
+//! - `steps!` for constructing a batch of input steps.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -24,19 +27,58 @@ use syn::{Expr, Ident, LitBool, LitInt, Result, Token, bracketed, parenthesized}
 pub fn step(input: TokenStream) -> TokenStream {
     let parsed = syn::parse_macro_input!(input as StepMacroInput);
 
-    let signal = parsed.signal;
-    let value = parsed.value;
+    match parsed.into_step_expr() {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
 
-    let ts_tokens = match parsed.timestamp {
-        StepTimestamp::Suffixed(lit) => match duration_expr_from_lit(&lit) {
-            Ok(tokens) => tokens,
+/// Convenience macro to construct a `::std::vec::Vec` of `::mstlo::Step`s,
+/// ready to hand to `StlMonitor::update_batch`.
+///
+/// # Syntax
+///
+/// Signal-major, when you have one trace per signal — the signal name is
+/// written once:
+///
+/// ```ignore
+/// steps! {
+///     "x": [(5.0, 0s), (15.0, 2s), (8.0, 4s)],
+///     "y": [(25.0, 0s), (15.0, 3s)],
+/// };
+/// ```
+///
+/// Flat, when your samples are interleaved — each entry is exactly a
+/// [`step!`] argument list:
+///
+/// ```ignore
+/// steps![
+///     ("x", 5.0, 0s),
+///     ("y", 25.0, 0s),
+///     ("x", 15.0, 2s),
+/// ];
+/// ```
+///
+/// Timestamps accept the same forms as [`step!`]: an integer with an `ns`,
+/// `us`, `ms`, or `s` suffix, or any expression evaluating to a
+/// `std::time::Duration`.
+///
+/// The two forms cannot be mixed in one invocation. Steps are emitted in the
+/// order written; `update_batch` sorts them by timestamp.
+#[proc_macro]
+pub fn steps(input: TokenStream) -> TokenStream {
+    let parsed = syn::parse_macro_input!(input as StepsMacroInput);
+
+    let mut elements = Vec::with_capacity(parsed.steps.len());
+    for step in parsed.steps {
+        match step.into_step_expr() {
+            Ok(tokens) => elements.push(tokens),
             Err(err) => return err.to_compile_error().into(),
-        },
-        StepTimestamp::Expr(expr) => quote! { #expr },
-    };
+        }
+    }
 
     quote! {
-        ::mstlo::Step::new(#signal, #value, #ts_tokens)
+        ::std::vec![#(#elements),*]
     }
     .into()
 }
@@ -47,9 +89,45 @@ struct StepMacroInput {
     timestamp: StepTimestamp,
 }
 
+impl StepMacroInput {
+    /// Expands to a `::mstlo::Step::new(..)` expression.
+    fn into_step_expr(self) -> Result<TokenStream2> {
+        let Self {
+            signal,
+            value,
+            timestamp,
+        } = self;
+        let timestamp = timestamp.into_duration_expr()?;
+
+        Ok(quote! {
+            ::mstlo::Step::new(#signal, #value, #timestamp)
+        })
+    }
+}
+
 enum StepTimestamp {
     Suffixed(LitInt),
     Expr(Expr),
+}
+
+impl StepTimestamp {
+    /// Expands to an expression of type `::std::time::Duration`.
+    fn into_duration_expr(self) -> Result<TokenStream2> {
+        match self {
+            StepTimestamp::Suffixed(lit) => duration_expr_from_lit(&lit),
+            StepTimestamp::Expr(expr) => Ok(quote! { #expr }),
+        }
+    }
+}
+
+impl Parse for StepTimestamp {
+    fn parse(input: ParseStream) -> Result<Self> {
+        if input.peek(LitInt) {
+            Ok(StepTimestamp::Suffixed(input.parse::<LitInt>()?))
+        } else {
+            Ok(StepTimestamp::Expr(input.parse::<Expr>()?))
+        }
+    }
 }
 
 impl Parse for StepMacroInput {
@@ -58,12 +136,7 @@ impl Parse for StepMacroInput {
         input.parse::<Token![,]>()?;
         let value = input.parse::<Expr>()?;
         input.parse::<Token![,]>()?;
-
-        let timestamp = if input.peek(LitInt) {
-            StepTimestamp::Suffixed(input.parse::<LitInt>()?)
-        } else {
-            StepTimestamp::Expr(input.parse::<Expr>()?)
-        };
+        let timestamp = input.parse::<StepTimestamp>()?;
 
         if !input.is_empty() {
             return Err(input.error("unexpected tokens after timestamp argument"));
@@ -74,6 +147,78 @@ impl Parse for StepMacroInput {
             value,
             timestamp,
         })
+    }
+}
+
+/// Input of the `steps!` macro, flattened to individual steps at parse time.
+struct StepsMacroInput {
+    steps: Vec<StepMacroInput>,
+}
+
+const STEPS_FORM_HINT: &str = concat!(
+    "expected `:` after the signal name. `steps!` takes either the ",
+    "signal-major form `\"x\": [(value, timestamp), ..], ..` or the flat form ",
+    "`(\"x\", value, timestamp), ..`, but not both in one invocation"
+);
+
+impl Parse for StepsMacroInput {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let mut steps = Vec::new();
+
+        // The flat form starts with a parenthesized step; anything else is
+        // read as the signal-major form.
+        if input.peek(syn::token::Paren) {
+            while !input.is_empty() {
+                let entry;
+                parenthesized!(entry in input);
+                steps.push(entry.parse::<StepMacroInput>()?);
+
+                if input.is_empty() {
+                    break;
+                }
+                input.parse::<Token![,]>()?;
+            }
+        } else {
+            while !input.is_empty() {
+                let signal = input.parse::<Expr>()?;
+
+                if !input.peek(Token![:]) {
+                    return Err(input.error(STEPS_FORM_HINT));
+                }
+                input.parse::<Token![:]>()?;
+
+                let samples;
+                bracketed!(samples in input);
+                while !samples.is_empty() {
+                    let sample;
+                    parenthesized!(sample in samples);
+                    let value = sample.parse::<Expr>()?;
+                    sample.parse::<Token![,]>()?;
+                    let timestamp = sample.parse::<StepTimestamp>()?;
+                    if !sample.is_empty() {
+                        return Err(sample.error("expected `(value, timestamp)`"));
+                    }
+
+                    steps.push(StepMacroInput {
+                        signal: signal.clone(),
+                        value,
+                        timestamp,
+                    });
+
+                    if samples.is_empty() {
+                        break;
+                    }
+                    samples.parse::<Token![,]>()?;
+                }
+
+                if input.is_empty() {
+                    break;
+                }
+                input.parse::<Token![,]>()?;
+            }
+        }
+
+        Ok(Self { steps })
     }
 }
 

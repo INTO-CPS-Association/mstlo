@@ -7,7 +7,6 @@
 //! - runtime variable bindings ([`Variables`]).
 
 use crate::ring_buffer::Step;
-use core::f64;
 use dyn_clone::{DynClone, clone_trait_object};
 use std::collections::HashSet;
 use std::fmt::Display;

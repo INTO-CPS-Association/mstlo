@@ -36,6 +36,30 @@
 //!    assert_eq!(out4.verdicts(), vec![step!("x", -1.0, 2s)]);
 //! ```
 //!
+//! ## Batch usage
+//!
+//! Whole traces can be fed at once with [`StlMonitor::update_batch`], which takes
+//! any iterable of steps. The [`steps!`] macro builds one, either signal-major
+//! (one trace per signal) or flat (interleaved samples):
+//!
+//! ```
+//!    use mstlo::monitor::*;
+//!    use mstlo::{steps, stl};
+//!
+//!    let formula = stl!(G[0, 1](x > 5.0));
+//!    let mut monitor = StlMonitor::builder()
+//!        .formula(formula)
+//!        .semantics(DelayedQuantitative)
+//!        .build()
+//!        .unwrap();
+//!
+//!    let out = monitor.update_batch(&steps! {
+//!        "x": [(7.0, 0s), (6.0, 1s), (4.0, 2s), (7.0, 3s)],
+//!    });
+//!
+//!    assert_eq!(out.verdicts().len(), 3);
+//! ```
+//!
 
 // Enable use of ::mstlo:: paths within this crate for the proc-macro
 extern crate self as mstlo;
@@ -67,4 +91,4 @@ pub use ring_buffer::GLOBAL_CACHE_SIZE;
 pub use ring_buffer::{RingBuffer, RingBufferTrait, Step};
 pub use synchronizer::{Interpolatable, SynchronizationStrategy, Synchronizer};
 
-pub use mstlo_macros::{step, stl};
+pub use mstlo_macros::{step, steps, stl};

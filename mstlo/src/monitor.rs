@@ -109,7 +109,10 @@ pub mod semantic_markers {
 // Re-export markers for easier access like `monitor::DelayedQualitative`
 pub use semantic_markers::{DelayedQualitative, DelayedQuantitative, EagerQualitative, Rosi};
 
-/// Represents the output of a single monitor update operation.
+/// Represents the output of a monitor update.
+///
+/// Produced by both [`StlMonitor::update`] (one input step) and
+/// [`StlMonitor::update_batch`] (many input steps aggregated into one output).
 ///
 /// # Accessing results
 ///
@@ -124,12 +127,11 @@ pub use semantic_markers::{DelayedQualitative, DelayedQuantitative, EagerQualita
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct MonitorOutput<T, Y> {
-    /// Signal name of the original input step that triggered this output object.
-    pub input_signal: &'static str,
-    /// Timestamp of the original input step.
-    pub input_timestamp: Duration,
-    /// Value of the original input step.
-    pub input_value: T,
+    /// The last input step that contributed to this output, if any.
+    ///
+    /// This is `None` only for an output produced from an empty batch
+    /// (see [`StlMonitor::update_batch`]), which never carries evaluations either.
+    pub input: Option<Step<T>>,
     /// Internal per-synchronized-step evaluations (synchronization detail).
     evaluations: Vec<SyncStepResult<T, Y>>,
 }
@@ -183,11 +185,43 @@ impl<T, Y> MonitorOutput<T, Y> {
         T: Clone,
     {
         MonitorOutput {
-            input_signal: input.signal,
-            input_timestamp: input.timestamp,
-            input_value: input.value.clone(),
+            input: Some(input.clone()),
             evaluations,
         }
+    }
+
+    /// Creates an output that carries neither an input step nor any evaluations.
+    ///
+    /// Returned by [`StlMonitor::update_batch`] for an empty batch.
+    pub fn empty() -> Self {
+        MonitorOutput {
+            input: None,
+            evaluations: Vec::new(),
+        }
+    }
+
+    /// Returns the signal name of the last input step, or `None` for an empty output.
+    pub fn input_signal(&self) -> Option<&'static str> {
+        self.input.as_ref().map(|step| step.signal)
+    }
+
+    /// Returns the timestamp of the last input step, or `None` for an empty output.
+    pub fn input_timestamp(&self) -> Option<Duration> {
+        self.input.as_ref().map(|step| step.timestamp)
+    }
+
+    /// Returns the value of the last input step, or `None` for an empty output.
+    pub fn input_value(&self) -> Option<&T> {
+        self.input.as_ref().map(|step| &step.value)
+    }
+
+    /// Signal name stamped onto verdict steps.
+    ///
+    /// Verdicts describe the formula, not a single input signal, but [`Step`]
+    /// requires a name; the triggering input's name is used. An output without
+    /// an input step never has verdicts, so the fallback is never observable.
+    fn verdict_signal(&self) -> &'static str {
+        self.input.as_ref().map_or("", |step| step.signal)
     }
 
     // ── Primary API (what most users need) ──────────────────────────
@@ -218,14 +252,14 @@ impl<T, Y> MonitorOutput<T, Y> {
         }
         latest_map
             .into_iter()
-            .map(|(ts, val)| Step::new(self.input_signal, val, ts))
+            .map(|(ts, val)| Step::new(self.verdict_signal(), val, ts))
             .collect()
     }
 
     /// Consuming version of [`verdicts()`](Self::verdicts) — avoids cloning
     /// when you own the output.
     pub fn into_verdicts(self) -> Vec<Step<Y>> {
-        let signal = self.input_signal;
+        let signal = self.verdict_signal();
         let mut latest_map = std::collections::BTreeMap::new();
         for eval in self.evaluations {
             for output in eval.outputs {
@@ -434,79 +468,82 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
         self.process_step(step)
     }
 
-    /// Updates the monitor with multiple input steps organized by signal name.
+    /// Updates the monitor with a batch of input steps.
     ///
-    /// This method processes each step sequentially through the monitor and
-    /// aggregates all evaluations into a single [`MonitorOutput`]. This is useful
-    /// when you have batched data from multiple signals that need to be evaluated
-    /// together and you want a unified result.
+    /// Each step already names its own signal, so the batch is simply a flat
+    /// sequence: slices, `Vec`s, arrays and iterators all work. Steps are
+    /// processed in chronological order (see below) and every evaluation is
+    /// aggregated into a single [`MonitorOutput`], as if [`update`](Self::update)
+    /// had been called once per step.
     ///
     /// # Arguments
     ///
-    /// * `steps` - A map from signal names to vectors of steps for that signal.
+    /// * `steps` - Anything yielding `&Step<T>`, e.g. `&steps![..]`, `&my_vec`,
+    ///   or `trace.iter().filter(..)`.
     ///
     /// # Returns
     ///
-    /// A single [`MonitorOutput`] containing all evaluation results from processing
-    /// the batch. The input metadata reflects the last step processed.
+    /// A single [`MonitorOutput`] holding every evaluation produced by the batch.
+    /// [`MonitorOutput::input`] is the last step processed, or `None` if the
+    /// batch was empty.
     ///
-    /// # Panics
+    /// # Ordering
     ///
-    /// Panics if `steps` is empty (no steps to process).
-    ///
-    /// # Note
-    ///
-    /// Steps are processed in chronological order to optimize performance for Incremental algorithms.
-    /// If another ordering is required, consider updating steps individually.
+    /// Steps are sorted by timestamp before evaluation, because the incremental
+    /// algorithm expects a chronological stream. The sort is stable, so steps
+    /// sharing a timestamp are processed in the order given — the result of a
+    /// batch is fully determined by its input sequence.
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// let mut steps = HashMap::new();
-    /// steps.insert("temperature", vec![
-    ///     Step::new("temperature", 25.0, Duration::from_secs(1)),
-    ///     Step::new("temperature", 26.0, Duration::from_secs(2)),
-    /// ]);
-    /// steps.insert("pressure", vec![
-    ///     Step::new("pressure", 101.3, Duration::from_secs(1)),
-    /// ]);
-    /// let output = monitor.update_batch(&steps);
-    /// println!("{}", output); // Display all finalized verdicts
     /// ```
-    pub fn update_batch(
-        &mut self,
-        steps: &std::collections::HashMap<&'static str, Vec<Step<T>>>,
-    ) -> MonitorOutput<T, Y>
+    /// use mstlo::monitor::*;
+    /// use mstlo::{steps, stl};
+    ///
+    /// let mut monitor = StlMonitor::builder()
+    ///     .formula(stl!(G[0, 1](temperature < 30.0) && (pressure > 100.0)))
+    ///     .semantics(DelayedQuantitative)
+    ///     .build()
+    ///     .unwrap();
+    ///
+    /// // Signal-major: one trace per signal, name written once.
+    /// let output = monitor.update_batch(&steps! {
+    ///     "temperature": [(25.0, 1s), (26.0, 2s)],
+    ///     "pressure": [(101.3, 1s)],
+    /// });
+    /// println!("{}", output); // Display all finalized verdicts
+    ///
+    /// // Flat: interleaved samples, each entry is a `step!` argument list.
+    /// let output = monitor.update_batch(&steps![
+    ///     ("temperature", 24.0, 3s),
+    ///     ("pressure", 99.0, 3s),
+    /// ]);
+    /// assert!(output.has_verdicts());
+    ///
+    /// // An empty batch yields an empty output rather than panicking.
+    /// assert_eq!(monitor.update_batch(&steps![]).verdicts(), vec![]);
+    /// ```
+    pub fn update_batch<'a, I>(&mut self, steps: I) -> MonitorOutput<T, Y>
     where
+        I: IntoIterator<Item = &'a Step<T>>,
+        T: 'a,
         Y: RobustnessSemantics + Debug,
     {
-        let mut all_steps: Vec<_> = steps
-            .values()
-            .flat_map(|step_list| step_list.iter())
-            .collect();
-
+        let mut all_steps: Vec<&Step<T>> = steps.into_iter().collect();
         all_steps.sort_by_key(|step| step.timestamp);
 
-        assert!(
-            !all_steps.is_empty(),
-            "update_batch requires at least one step"
-        );
+        let Some(last_step) = all_steps.last().copied() else {
+            return MonitorOutput::empty();
+        };
 
-        let mut all_evaluations = Vec::new();
-        let first_step = all_steps[0];
-        let mut last_step = first_step;
-
-        for step in all_steps {
-            let output = self.process_step(step);
-            all_evaluations.extend(output.evaluations);
-            last_step = step;
-        }
+        let evaluations = all_steps
+            .into_iter()
+            .flat_map(|step| self.process_step(step).evaluations)
+            .collect();
 
         MonitorOutput {
-            input_signal: last_step.signal,
-            input_timestamp: last_step.timestamp,
-            input_value: last_step.value,
-            evaluations: all_evaluations,
+            input: Some(last_step.clone()),
+            evaluations,
         }
     }
 
@@ -904,7 +941,7 @@ mod tests {
     use super::*;
     use crate::core::TimeInterval;
     use crate::monitor::{Algorithm, StlMonitor};
-    use crate::{step, stl};
+    use crate::{step, steps, stl};
     use std::time::Duration;
 
     #[test]
@@ -926,7 +963,7 @@ mod tests {
         let output = monitor.update(&step);
 
         // We can assert types in the test
-        assert_eq!(output.input_value, 10.0); // T=f64
+        assert_eq!(output.input_value(), Some(&10.0)); // T=f64
         // output.latest_verdict_at(...) returns Option<&Step<Option<bool>>>
     }
 
@@ -1101,23 +1138,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let mut steps = std::collections::HashMap::new();
-        steps.insert(
-            "x",
-            vec![
-                step!("x", 5.0, Duration::from_secs(0)),
-                step!("x", 15.0, Duration::from_secs(2)),
-                step!("x", 8.0, Duration::from_secs(4)),
-            ],
-        );
-        steps.insert(
-            "y",
-            vec![
-                step!("y", 25.0, Duration::from_secs(0)),
-                step!("y", 15.0, Duration::from_secs(3)),
-                step!("y", 30.0, Duration::from_secs(5)),
-            ],
-        );
+        let steps = steps! {
+            "x": [(5.0, 0s), (15.0, 2s), (8.0, 4s)],
+            "y": [(25.0, 0s), (15.0, 3s), (30.0, 5s)],
+        };
 
         let output = monitor.update_batch(&steps);
         let verdicts = output.verdicts();
@@ -1134,13 +1158,89 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "update_batch requires at least one step")]
     fn test_batch_update_empty() {
         let formula = stl!(G[0,2] (x > 10.0));
         let mut monitor = StlMonitor::builder().formula(formula).build().unwrap();
-        let steps: std::collections::HashMap<&'static str, Vec<Step<f64>>> =
-            std::collections::HashMap::new();
-        monitor.update_batch(&steps);
+
+        let output = monitor.update_batch(&steps![]);
+
+        assert_eq!(output.input, None);
+        assert!(output.verdicts().is_empty());
+    }
+
+    #[test]
+    fn test_batch_update_flat_form_matches_signal_major_form() {
+        let build = || {
+            StlMonitor::builder()
+                .formula(stl!(G[0,2] (x > 10.0) && F[0,3] (y < 20.0)))
+                .semantics(Rosi)
+                .build()
+                .unwrap()
+        };
+
+        let signal_major = build().update_batch(&steps! {
+            "x": [(5.0, 0s), (15.0, 2s), (8.0, 4s)],
+            "y": [(25.0, 0s), (15.0, 3s), (30.0, 5s)],
+        });
+        let flat = build().update_batch(&steps![
+            ("x", 5.0, 0s),
+            ("y", 25.0, 0s),
+            ("x", 15.0, 2s),
+            ("y", 15.0, 3s),
+            ("x", 8.0, 4s),
+            ("y", 30.0, 5s),
+        ]);
+
+        assert_eq!(signal_major.verdicts(), flat.verdicts());
+    }
+
+    #[test]
+    fn test_batch_update_matches_sequential_updates() {
+        let build = || {
+            StlMonitor::builder()
+                .formula(stl!(G[0,2] (x > 10.0)))
+                .semantics(Rosi)
+                .build()
+                .unwrap()
+        };
+
+        // A batch given out of order is sorted, so it must agree with feeding
+        // the same steps chronologically one at a time.
+        let batched = build().update_batch(&steps! {
+            "x": [(8.0, 4s), (5.0, 0s), (15.0, 2s)],
+        });
+
+        // A batch collapses refinements of the same timestamp the same way a
+        // sequence of single updates does when their verdicts are merged.
+        let mut sequential_monitor = build();
+        let mut latest = std::collections::BTreeMap::new();
+        for step in steps! { "x": [(5.0, 0s), (15.0, 2s), (8.0, 4s)] } {
+            for verdict in sequential_monitor.update(&step).verdicts() {
+                latest.insert(verdict.timestamp, verdict.value);
+            }
+        }
+        let sequential: Vec<_> = latest
+            .into_iter()
+            .map(|(timestamp, value)| Step::new("x", value, timestamp))
+            .collect();
+
+        assert_eq!(batched.verdicts(), sequential);
+        assert_eq!(batched.input, Some(step!("x", 8.0, 4s)));
+    }
+
+    #[test]
+    fn test_batch_update_accepts_any_iterator() {
+        let formula = stl!(G[0,2] (x > 10.0));
+        let mut monitor = StlMonitor::builder()
+            .formula(formula)
+            .semantics(Rosi)
+            .build()
+            .unwrap();
+
+        let trace = steps! { "x": [(5.0, 0s), (15.0, 2s), (8.0, 4s), (12.0, 6s)] };
+        let output = monitor.update_batch(trace.iter().filter(|step| step.value > 10.0));
+
+        assert_eq!(output.input, Some(step!("x", 12.0, 6s)));
     }
 
     #[test]
@@ -1228,15 +1328,11 @@ mod tests {
             let sync_result =
                 SyncStepResult::new(sync_step.clone(), vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![sync_result],
             };
             let monitor_output_empty: MonitorOutput<f64, bool> = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![],
             };
 
@@ -1249,14 +1345,30 @@ mod tests {
         }
 
         #[test]
+        fn test_monitor_input_fields() {
+            let sync_step = step!("x", 10.0, Duration::from_secs(1));
+            let output_step = step!("output", true, Duration::from_secs(1));
+            let sync_result = SyncStepResult::new(sync_step, vec![output_step]);
+            let monitor_output = MonitorOutput {
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
+                evaluations: vec![sync_result],
+            };
+
+            assert_eq!(monitor_output.input_signal(), Some("x"));
+            assert_eq!(
+                monitor_output.input_timestamp(),
+                Some(Duration::from_secs(1))
+            );
+            assert_eq!(monitor_output.input_value(), Some(10.0).as_ref());
+        }
+
+        #[test]
         fn test_monitor_has_outputs() {
             let sync_step = step!("x", 10.0, Duration::from_secs(1));
             let output_step = step!("output", true, Duration::from_secs(1));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step]);
             let monitor_output = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![sync_result],
             };
 
@@ -1270,9 +1382,7 @@ mod tests {
             let output_step2 = step!("output", false, Duration::from_secs(2));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![sync_result],
             };
 
@@ -1284,9 +1394,7 @@ mod tests {
             let sync_step = step!("x", 10.0, Duration::from_secs(1));
             let sync_result: SyncStepResult<f64, bool> = SyncStepResult::new(sync_step, vec![]);
             let monitor_output = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![sync_result],
             };
 
@@ -1306,9 +1414,7 @@ mod tests {
             let sync_result =
                 SyncStepResult::new(sync_step, vec![output_step1, output_step2, output_step2_]);
             let monitor_output = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![sync_result],
             };
 
@@ -1331,9 +1437,7 @@ mod tests {
             let output_step2 = step!("output", false, Duration::from_secs(2));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![sync_result],
             };
 
@@ -1350,9 +1454,7 @@ mod tests {
             let output_step2 = step!("output", false, Duration::from_secs(2));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![sync_result],
             };
 
@@ -1364,9 +1466,7 @@ mod tests {
         #[test]
         fn test_latest_verdict_empty() {
             let monitor_output: MonitorOutput<f64, bool> = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![],
             };
             assert!(monitor_output.latest_verdict().is_none());
@@ -1378,9 +1478,7 @@ mod tests {
             let output_step = step!("output", true, Duration::from_secs(1));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step]);
             let monitor_output = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![sync_result],
             };
 
@@ -1396,9 +1494,7 @@ mod tests {
             let output_step2 = step!("output", false, Duration::from_secs(2));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![sync_result],
             };
 
@@ -1415,9 +1511,7 @@ mod tests {
             let output_step2 = step!("output", false, Duration::from_secs(2));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![sync_result],
             };
 
@@ -1430,9 +1524,7 @@ mod tests {
         #[test]
         fn test_is_pending_true() {
             let monitor_output: MonitorOutput<f64, bool> = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![],
             };
             assert!(monitor_output.is_pending());
@@ -1445,9 +1537,7 @@ mod tests {
             let output_step2 = step!("output", -3.0_f64, Duration::from_secs(2));
             let sync_result = SyncStepResult::new(sync_step, vec![output_step1, output_step2]);
             let monitor_output = MonitorOutput {
-                input_signal: "x",
-                input_timestamp: Duration::from_secs(1),
-                input_value: 10.0,
+                input: Some(Step::new("x", 10.0, Duration::from_secs(1))),
                 evaluations: vec![sync_result],
             };
 
