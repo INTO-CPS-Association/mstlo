@@ -101,9 +101,17 @@ where
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let value = step.value.clone().into();
 
-        // filter by signal if this operator has specific signals (True/False have none)
-        let signals = self.get_signal_identifiers();
-        if !signals.is_empty() && !signals.contains(step.signal) {
+        // Filter by signal. `True`/`False` reference no signal and accept any
+        // step. Compared directly rather than via `get_signal_identifiers()`,
+        // which would allocate a `HashSet` on every step.
+        let accepts_step = match self {
+            Atomic::True(_) | Atomic::False(_) => true,
+            Atomic::LessThan(signal_name, _, _)
+            | Atomic::GreaterThan(signal_name, _, _)
+            | Atomic::LessThanVar(signal_name, _, _, _)
+            | Atomic::GreaterThanVar(signal_name, _, _, _) => *signal_name == step.signal,
+        };
+        if !accepts_step {
             return vec![];
         }
 

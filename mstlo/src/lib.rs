@@ -60,6 +60,26 @@
 //!    assert_eq!(out.verdicts().len(), 3);
 //! ```
 //!
+//! ## Signal names known only at runtime
+//!
+//! [`Step`] stores its signal name as a `&'static str`, which keeps the
+//! per-step name comparisons cheap. Names read at runtime — from a CSV header,
+//! a config file, or a language binding — are not `'static`, so pass them
+//! through [`intern`], which allocates each distinct name once and reuses it
+//! thereafter:
+//!
+//! ```
+//!    use mstlo::{Step, intern};
+//!    use std::time::Duration;
+//!
+//!    let header = String::from("temperature");
+//!    let step = Step::new(intern(&header), 21.4, Duration::from_secs(0));
+//!
+//!    assert_eq!(step.signal, "temperature");
+//! ```
+//!
+//! See [`interner`] for the memory characteristics.
+//!
 
 // Enable use of ::mstlo:: paths within this crate for the proc-macro
 extern crate self as mstlo;
@@ -67,6 +87,7 @@ extern crate self as mstlo;
 mod core;
 mod formula_definition;
 mod formulas;
+pub mod interner;
 pub mod monitor;
 mod naive_operators;
 mod operators;
@@ -79,6 +100,7 @@ pub use core::{
 };
 pub use formula_definition::FormulaDefinition;
 pub use formulas::get_formulas;
+pub use interner::{intern, interned_count};
 pub use monitor::semantic_markers::{
     DelayedQualitative, DelayedQuantitative, EagerQualitative, Rosi, SemanticType,
 };
