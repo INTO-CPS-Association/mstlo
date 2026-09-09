@@ -268,7 +268,7 @@ fn duration_expr_from_lit(lit: &LitInt) -> Result<TokenStream2> {
 ///
 /// ## Binary Operators (parentheses optional for simple operands)
 /// - `left && right` or `left and right` - Conjunction
-/// - `left || right` or `left or right` - Disjunction  
+/// - `left || right` or `left or right` - Disjunction
 /// - `left -> right` or `left implies right` - Implication
 /// - `left U[start, end] right` or `left until[start, end] right` - Until
 ///
@@ -415,8 +415,8 @@ impl StlFormula {
                 quote! {
                     ::mstlo::FormulaDefinition::Globally(
                         ::mstlo::TimeInterval {
-                            start: ::std::time::Duration::from_secs(#start as u64),
-                            end: ::std::time::Duration::from_secs(#end as u64),
+                            start: ::std::time::Duration::from_secs_f64(#start as f64),
+                            end: ::std::time::Duration::from_secs_f64(#end as f64),
                         },
                         Box::new(#sub_tokens)
                     )
@@ -427,8 +427,8 @@ impl StlFormula {
                 quote! {
                     ::mstlo::FormulaDefinition::Eventually(
                         ::mstlo::TimeInterval {
-                            start: ::std::time::Duration::from_secs(#start as u64),
-                            end: ::std::time::Duration::from_secs(#end as u64),
+                            start: ::std::time::Duration::from_secs_f64(#start as f64),
+                            end: ::std::time::Duration::from_secs_f64(#end as f64),
                         },
                         Box::new(#sub_tokens)
                     )
@@ -440,8 +440,8 @@ impl StlFormula {
                 quote! {
                     ::mstlo::FormulaDefinition::Until(
                         ::mstlo::TimeInterval {
-                            start: ::std::time::Duration::from_secs(#start as u64),
-                            end: ::std::time::Duration::from_secs(#end as u64),
+                            start: ::std::time::Duration::from_secs_f64(#start as f64),
+                            end: ::std::time::Duration::from_secs_f64(#end as f64),
                         },
                         Box::new(#left_tokens),
                         Box::new(#right_tokens)
@@ -924,7 +924,7 @@ fn parse_globally(input: ParseStream) -> Result<StlFormula> {
     Ok(StlFormula::Globally(start, end, Box::new(sub)))
 }
 
-/// Parse eventually: F[start, end]\(sub\) or F[start, end] sub  
+/// Parse eventually: F[start, end]\(sub\) or F[start, end] sub
 fn parse_eventually(input: ParseStream) -> Result<StlFormula> {
     let ident: Ident = input.parse()?;
     let ident_str = ident.to_string();
