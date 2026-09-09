@@ -93,12 +93,12 @@ fn test_parity_globally() {
 
 #[test]
 fn test_parity_globally_keyword() {
-    assert_parser_parity!("globally[0, 10](x > 5)", globally[0, 10](x > 5));
+    assert_parser_parity!("globally[1.5, 10](x > 5)", globally[1.5, 10](x > 5));
 }
 
 #[test]
 fn test_parity_eventually() {
-    assert_parser_parity!("F[0, 5](y < 3)", F[0, 5](y < 3));
+    assert_parser_parity!("F[1.5, 5](y < 3)", F[1.5, 5](y < 3));
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn test_parity_until_symbol() {
 
 #[test]
 fn test_parity_until_keyword() {
-    assert_parser_parity!("x > 5 until[0, 10] y < 3", x > 5 until[0, 10] y < 3);
+    assert_parser_parity!("x > 5 until[0.8, 10] y < 3", x > 5 until[0.8, 10] y < 3);
 }
 
 // =========================================================================
