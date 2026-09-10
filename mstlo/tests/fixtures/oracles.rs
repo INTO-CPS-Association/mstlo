@@ -297,8 +297,8 @@ pub fn exp_f11_s3_bool_eager() -> Vec<Vec<Step<bool>>> {
         vec![],
         vec![],
         vec![
-            step!("output", false, Duration::from_secs(2)),
-            step!("output", false, Duration::from_secs(3)),
+            step!("output", true, Duration::from_secs(2)),
+            step!("output", true, Duration::from_secs(3)),
             step!("output", false, Duration::from_secs(4)),
         ],
         vec![],

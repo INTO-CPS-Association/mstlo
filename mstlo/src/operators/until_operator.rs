@@ -242,41 +242,70 @@ where
             let left_cache_vec: Vec<_> = self.left_cache.iter().collect();
             let right_cache_vec: Vec<_> = self.right_cache.iter().collect();
 
-            // Find how many elements to skip based on t_eval position
-            let skip_count = left_cache_vec
+            // phi (left operand) must hold on [t_eval, t'), so its running min
+            // starts at the first sample with timestamp >= t_eval.
+            let left_skip_count = left_cache_vec
                 .iter()
                 .take_while(|entry| entry.timestamp < t_eval)
                 .count();
 
-            let mut left_cache_iter = left_cache_vec.iter().skip(skip_count);
-            let mut right_cache_iter = right_cache_vec.iter().skip(skip_count);
+            // psi (right operand) is sampled at t' ∈ [window_start_t_eval, ...].
+            let right_skip_count = right_cache_vec
+                .iter()
+                .take_while(|entry| entry.timestamp < window_start_t_eval)
+                .count();
 
-            for _ in t_prime_iter {
-                // 1. Get cumulative min of phi (left operand) up to t'
-                let left_step = match left_cache_iter.next() {
-                    Some(step) => step,
-                    None => break,
-                };
-                left_cache_t_prime_min = Y::and(left_cache_t_prime_min, left_step.value.clone());
-                let robustness_phi_left = left_cache_t_prime_min.clone();
+            let mut left_cache_iter = left_cache_vec
+                .iter()
+                .skip(left_skip_count)
+                .peekable();
+            let mut right_cache_iter = right_cache_vec.iter().skip(right_skip_count);
 
-                // 2. Get rho_psi(t') - the right operand at t'
-                let robustness_psi_right = match right_cache_iter.next() {
-                    Some(val) => val.value.clone(),
-                    None => Y::unknown(),
-                };
-
-                // 3. Eager falsification check: if phi has become false, short-circuit
-                if IS_EAGER && robustness_phi_left == Y::atomic_false() && t_max_combined >= t_eval
-                {
-                    falsified = true;
-                    max_robustness_vec.push(Y::atomic_false());
-                    break;
+            // phi must hold "from now" at t_eval, so fold the sample at t_eval
+            // into the running min before iterating t'. This is required even
+            // when the first t' coincides with t_eval (i.e. interval.start == 0).
+            // If phi(t_eval) is not available yet, this t_eval cannot be
+            // evaluated; leave max_robustness_vec empty to make the outer loop wait.
+            let phi_ready = match left_cache_iter.peek() {
+                Some(first) if first.timestamp == t_eval => {
+                    left_cache_t_prime_min =
+                        Y::and(left_cache_t_prime_min, first.value.clone());
+                    left_cache_iter.next();
+                    true
                 }
+                _ => false,
+            };
 
-                // 4. Combine: min(rho_psi(t'), robustness_phi_left)
-                let robustness_t_prime = Y::and(robustness_psi_right, robustness_phi_left);
-                max_robustness_vec.push(robustness_t_prime);
+            if phi_ready {
+                for t_prime in t_prime_iter {
+                    // 1. Fold phi samples in [t_eval, t') into the cumulative min,
+                    //    so phi(t') itself is excluded (until semantics).
+                    while let Some(left_step) = left_cache_iter.next_if(|s| s.timestamp < t_prime) {
+                        left_cache_t_prime_min =
+                            Y::and(left_cache_t_prime_min, left_step.value.clone());
+                    }
+                    let robustness_phi_left = left_cache_t_prime_min.clone();
+
+                    // 2. Get rho_psi(t') - the right operand at t'
+                    let robustness_psi_right = match right_cache_iter.next() {
+                        Some(val) => val.value.clone(),
+                        None => Y::unknown(),
+                    };
+
+                    // 3. Eager falsification check: if phi has become false, short-circuit
+                    if IS_EAGER
+                        && robustness_phi_left == Y::atomic_false()
+                        && t_max_combined >= t_eval
+                    {
+                        falsified = true;
+                        max_robustness_vec.push(Y::atomic_false());
+                        break;
+                    }
+
+                    // 4. Combine: min(rho_psi(t'), robustness_phi_left)
+                    let robustness_t_prime = Y::and(robustness_psi_right, robustness_phi_left);
+                    max_robustness_vec.push(robustness_t_prime);
+                }
             }
 
             let max_robustness = if max_robustness_vec.is_empty() {
