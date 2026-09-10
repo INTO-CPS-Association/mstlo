@@ -16,8 +16,17 @@ use std::time::Duration;
 /// Time-window parameters passed to [`process_eval_buffer`].
 struct WindowParams<'a> {
     interval: &'a TimeInterval,
-    max_lookahead: Duration,
-    current_time: Duration,
+    /// Newest timestamp the operand has produced a value for. The operand's signal is
+    /// known up to here and no further, which is what decides whether a window is
+    /// closed -- not the input clock, which runs ahead of any operand that has to wait
+    /// for a second signal or for a window of its own.
+    frontier: Duration,
+    /// How far past a window's end the frontier must reach before the values inside it
+    /// stop moving. Zero in the delayed and eager modes, where the operand emits a value
+    /// only once it is final. Under RoSI the operand keeps refining timestamps it has
+    /// already emitted, and it is done doing so one operand lookahead later, so a window
+    /// finalized as soon as the frontier covers it would freeze an intermediate value.
+    settle: Duration,
     upper_bound: Option<Duration>,
 }
 
@@ -64,15 +73,15 @@ where
             break;
         }
 
-        // the window and every operand lookahead behind it have elapsed
-        let is_closed = window.current_time >= t_eval + window.max_lookahead;
+        let window_start = t_eval + window.interval.start;
+        let window_end = t_eval + window.interval.end;
+
+        // the operand has produced every value the window covers, and settled on them
+        let is_closed = window.frontier >= window_end + window.settle;
 
         if !is_closed && !IS_EAGER && !IS_ROSI {
             break;
         }
-
-        let window_start = t_eval + window.interval.start;
-        let window_end = t_eval + window.interval.end;
 
         // Obtain the windowed value for this eval timestamp.  Behavior differs by mode:
         //
@@ -124,6 +133,89 @@ where
     output_robustness
 }
 
+/// Newest timestamp the cache holds a value for, i.e. how far the operand's signal is
+/// known. `Duration::ZERO` before the operand has produced anything, which is only
+/// reached with an empty `eval_buffer` and therefore never used.
+fn cache_frontier<C, Y>(cache: &C) -> Duration
+where
+    C: RingBufferTrait<Value = Y>,
+{
+    cache
+        .get_back()
+        .map(|step| step.timestamp)
+        .unwrap_or(Duration::ZERO)
+}
+
+/// Signal tag for cache entries that carry the operand's *held* value rather than a
+/// value the operand emitted. Only used to make cache dumps readable; the emitted
+/// verdicts are re-tagged `"output"` by [`process_eval_buffer`].
+const HELD: &str = "hold";
+
+/// Materializes the operand's held value at the window starts inside a newly closed
+/// constant segment.
+///
+/// The operand's signal is piecewise constant between the steps it emits, so a step
+/// arriving at `upto` closes the segment `[back.timestamp, upto)` at the value of the
+/// current back. A pending evaluation `t_eval` whose window opens inside that segment
+/// has no cache entry at `t_eval + interval_start`, and the window scan would either
+/// find nothing at all (returning the operator's `identity()`) or start at the next
+/// operand step, in both cases reading a value the signal does not take there.
+///
+/// One entry is added per such pending evaluation, at the exact window start. Window
+/// starts are ascending in `t_eval`, so the ones falling in the segment are a slice of
+/// `eval_buffer` and the entries are appended in order. They are genuine samples of the
+/// operand's signal, so they take part in every later window scan like any other entry.
+///
+/// Two properties keep the insertion contained:
+///
+/// * The entries are never queued in `eval_buffer`, so the operator's own output
+///   breakpoints stay exactly the operand's. Without that, each inserted entry would
+///   become an evaluation timestamp of its own, needing a further entry one
+///   `interval_start` later, and so on without end.
+/// * Nothing is evicted. The entries repeat the value of the current back, so the
+///   cache stays monotone for the Lemire scan without any pruning, and the windows
+///   that [`process_eval_buffer`] is about to finalize against the pre-registration
+///   cache keep every entry they had.
+///
+/// With `interval_start == 0` the window opens on `t_eval` itself, which is always an
+/// operand step, so that case is rejected before any work is done.
+fn insert_hold_entries<C, Y>(
+    cache: &mut C,
+    eval_buffer: &VecDeque<Duration>,
+    interval_start: Duration,
+    upto: Duration,
+) where
+    C: RingBufferTrait<Value = Y>,
+    Y: RobustnessSemantics,
+{
+    // A zero lower bound never holds a window open, and this runs on every step of
+    // every temporal node, so it is worth rejecting before touching the cache.
+    if interval_start.is_zero() {
+        return;
+    }
+    let Some(back) = cache.get_back() else { return };
+    let segment_start = back.timestamp;
+    // Nothing to hold over, or no window opens before `upto` at all: `eval_buffer` is
+    // ascending, so its front bounds every window start behind it.
+    if segment_start >= upto
+        || eval_buffer
+            .front()
+            .is_none_or(|&t| t + interval_start >= upto)
+    {
+        return;
+    }
+    let held_value = back.value.clone();
+
+    let first_pending = eval_buffer.partition_point(|&t| t + interval_start <= segment_start);
+    for &t_eval in eval_buffer.range(first_pending..) {
+        let window_start = t_eval + interval_start;
+        if window_start >= upto {
+            break;
+        }
+        cache.add_step(Step::new(HELD, held_value.clone(), window_start));
+    }
+}
+
 /// Registers the operand's output steps into the evaluation buffer and the Lemire cache.
 ///
 /// `eval_buffer` holds the pending evaluation timestamps: strictly ascending and unique.
@@ -136,12 +228,16 @@ where
 /// upserted into the cache in place and must not be re-queued. `update_step` returning
 /// `false` means the entry was already evicted by domination, so the refinement is
 /// subsumed by the surviving value and can be dropped.
+///
+/// Every new step also closes a constant segment of the operand, handled by
+/// [`insert_hold_entries`] before the step itself is admitted.
 fn register_sub_steps<C, Y, const IS_ROSI: bool>(
     cache: &mut C,
     eval_buffer: &mut VecDeque<Duration>,
     sub_steps: Vec<Step<Y>>,
     is_max: bool,
     window_length: Duration,
+    interval_start: Duration,
 ) where
     C: RingBufferTrait<Value = Y>,
     Y: RobustnessSemantics + Debug,
@@ -151,6 +247,9 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
             .get_back()
             .is_none_or(|back| sub_step.timestamp > back.timestamp)
         {
+            // The step closes a constant segment of the operand, so the value held
+            // over it is now known at every window start it covers.
+            insert_hold_entries(cache, eval_buffer, interval_start, sub_step.timestamp);
             eval_buffer.push_back(sub_step.timestamp);
             pop_dominated_values(cache, &sub_step, is_max, window_length);
             cache.add_step(sub_step);
@@ -195,6 +294,7 @@ pub struct Eventually<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     cache: C,
     eval_buffer: VecDeque<Duration>,
     max_lookahead: Duration,
+    operand_lookahead: Duration,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -213,7 +313,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
         C: RingBufferTrait<Value = Y> + Clone + 'static,
         Y: RobustnessSemantics + 'static,
     {
-        let max_lookahead = interval.end + operand.get_max_lookahead();
+        let operand_lookahead = operand.get_max_lookahead();
+        let max_lookahead = interval.end + operand_lookahead;
         let eval_buffer = eval_buffer.unwrap_or_default();
         #[cfg(feature = "track-cache-size")]
         {
@@ -225,6 +326,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 cache: c,
                 eval_buffer,
                 max_lookahead,
+                operand_lookahead,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -236,6 +338,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 cache: c,
                 eval_buffer,
                 max_lookahead,
+                operand_lookahead,
             }
         }
     }
@@ -276,7 +379,24 @@ where
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let sub_robustness_vec = self.operand.update(step);
         let mut output_robustness = Vec::new();
-        let current_time = step.timestamp;
+        // See [`WindowParams::settle`].
+        let settle = if IS_ROSI {
+            self.operand_lookahead
+        } else {
+            Duration::ZERO
+        };
+
+        // Phase 0: the first new sub-step closes a constant segment of the operand.
+        // Materialize the held value at the window starts it covers before Phase A
+        // finalizes anything against the cache.
+        if let Some(first) = sub_robustness_vec.first() {
+            insert_hold_entries(
+                &mut self.cache,
+                &self.eval_buffer,
+                self.interval.start,
+                first.timestamp,
+            );
+        }
 
         // Phase A: finalize windows that close strictly before the
         // first new sub-step, against the current (pre-Phase-B) cache.
@@ -288,8 +408,10 @@ where
                 &self.cache,
                 WindowParams {
                     interval: &self.interval,
-                    max_lookahead: self.max_lookahead,
-                    current_time: first.timestamp,
+                    // The operand has just reported at `first.timestamp`, so its signal
+                    // is known up to there even though the step is not registered yet.
+                    frontier: first.timestamp,
+                    settle,
                     upper_bound: Some(split_key),
                 },
                 OpParams {
@@ -307,24 +429,17 @@ where
             sub_robustness_vec,
             true,
             self.interval.window_length(),
+            self.interval.start,
         );
 
         // Phase C: process remaining eval_buffer entries with the updated cache.
-        let phase_c_time = if IS_ROSI {
-            self.cache
-                .get_back()
-                .map(|s| s.timestamp)
-                .unwrap_or(Duration::ZERO)
-        } else {
-            current_time
-        };
         output_robustness.extend(process_eval_buffer::<_, _, _, _, IS_EAGER, IS_ROSI>(
             &mut self.eval_buffer,
             &self.cache,
             WindowParams {
                 interval: &self.interval,
-                max_lookahead: self.max_lookahead,
-                current_time: phase_c_time,
+                frontier: cache_frontier(&self.cache),
+                settle,
                 upper_bound: None,
             },
             OpParams {
@@ -362,6 +477,7 @@ pub struct Globally<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     cache: C,
     eval_buffer: VecDeque<Duration>,
     max_lookahead: Duration,
+    operand_lookahead: Duration,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -380,7 +496,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
         C: RingBufferTrait<Value = Y> + Clone + 'static,
         Y: RobustnessSemantics + 'static,
     {
-        let max_lookahead = interval.end + operand.get_max_lookahead();
+        let operand_lookahead = operand.get_max_lookahead();
+        let max_lookahead = interval.end + operand_lookahead;
         let eval_buffer = eval_buffer.unwrap_or_default();
         #[cfg(feature = "track-cache-size")]
         {
@@ -392,6 +509,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 cache: c,
                 eval_buffer,
                 max_lookahead,
+                operand_lookahead,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -403,6 +521,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 cache: c,
                 eval_buffer,
                 max_lookahead,
+                operand_lookahead,
             }
         }
     }
@@ -443,7 +562,24 @@ where
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let sub_robustness_vec = self.operand.update(step);
         let mut output_robustness = Vec::new();
-        let current_time = step.timestamp;
+        // See [`WindowParams::settle`].
+        let settle = if IS_ROSI {
+            self.operand_lookahead
+        } else {
+            Duration::ZERO
+        };
+
+        // Phase 0: the first new sub-step closes a constant segment of the operand.
+        // Materialize the held value at the window starts it covers before Phase A
+        // finalizes anything against the cache.
+        if let Some(first) = sub_robustness_vec.first() {
+            insert_hold_entries(
+                &mut self.cache,
+                &self.eval_buffer,
+                self.interval.start,
+                first.timestamp,
+            );
+        }
 
         // Phase A: finalize windows that close strictly before the
         // first new sub-step, against the current (pre-Phase-B) cache.
@@ -455,8 +591,10 @@ where
                 &self.cache,
                 WindowParams {
                     interval: &self.interval,
-                    max_lookahead: self.max_lookahead,
-                    current_time: first.timestamp,
+                    // The operand has just reported at `first.timestamp`, so its signal
+                    // is known up to there even though the step is not registered yet.
+                    frontier: first.timestamp,
+                    settle,
                     upper_bound: Some(split_key),
                 },
                 OpParams {
@@ -474,24 +612,17 @@ where
             sub_robustness_vec,
             false,
             self.interval.window_length(),
+            self.interval.start,
         );
 
         // Phase C: process remaining eval_buffer entries with the updated cache.
-        let phase_c_time = if IS_ROSI {
-            self.cache
-                .get_back()
-                .map(|s| s.timestamp)
-                .unwrap_or(Duration::ZERO)
-        } else {
-            current_time
-        };
         output_robustness.extend(process_eval_buffer::<_, _, _, _, IS_EAGER, IS_ROSI>(
             &mut self.eval_buffer,
             &self.cache,
             WindowParams {
                 interval: &self.interval,
-                max_lookahead: self.max_lookahead,
-                current_time: phase_c_time,
+                frontier: cache_frontier(&self.cache),
+                settle,
                 upper_bound: None,
             },
             OpParams {

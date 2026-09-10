@@ -28,6 +28,10 @@ criterion = "0.8.2"
 csv = "1.4.0"
 
 [[bench]]
+name = "ab_benchmark"
+harness = false
+
+[[bench]]
 name = "monitor_benchmark"
 harness = false
 

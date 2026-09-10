@@ -216,7 +216,8 @@ where
 
         // 2. Process the evaluation buffer for tasks
         for &t_eval in self.eval_buffer.iter() {
-            let window_start_t_eval = t_eval;
+            let window_start_t_eval = t_eval + self.interval.start;
+            // let window_start_t_eval = t_eval;
             let window_end_t_eval = t_eval + self.interval.end;
 
             // This is the outer `max` (Eventually)
@@ -627,6 +628,59 @@ mod tests {
         for (output, expected) in all_outputs.iter().zip(expected_outputs.iter()) {
             assert_eq!(output.timestamp, expected.timestamp);
             assert_eq!(output.value, expected.value);
+        }
+    }
+    #[test]
+    fn until_operator_robustness_nonzero_lowbound() {
+        let interval = TimeInterval {
+            start: Duration::from_secs(3),
+            end: Duration::from_secs(4),
+        };
+        let atomic_left = Atomic::<bool>::new_less_than("x", 10.0);
+        let atomic_right = Atomic::<bool>::new_greater_than("x", 5.0);
+        let mut until = Until::<f64, RingBuffer<bool>, bool, false, false>::new(
+            interval,
+            Box::new(atomic_left),
+            Box::new(atomic_right),
+            None,
+            None,
+        );
+        until.get_signal_identifiers();
+        let signal_values = vec![2.0, 6.0, 2.0, 2.0, 6.0, 12.0];
+        let signal_timestamps = vec![0, 2, 3, 4, 6, 8];
+
+        let signal: Vec<_> = signal_values
+            .into_iter()
+            .zip(signal_timestamps)
+            .map(|(val, ts)| step!("x", val, Duration::from_secs(ts)))
+            .collect();
+
+        let expected_outputs = [
+            step!("output", false, Duration::from_secs(0)), // x>5 inbetween [3,4], which it isn't
+            step!("output", true, Duration::from_secs(2)),
+            step!("output", true, Duration::from_secs(3)),
+            step!("output", true, Duration::from_secs(4)),
+        ];
+
+        let mut all_outputs = Vec::new();
+        for s in &signal {
+            let up = until.update(s);
+            println!("Updates at t={:?}: {:?}", s.timestamp, up);
+            all_outputs.extend(up);
+        }
+
+        assert_eq!(all_outputs.len(), expected_outputs.len());
+        for (output, expected) in all_outputs.iter().zip(expected_outputs.iter()) {
+            assert_eq!(
+                output.timestamp, expected.timestamp,
+                "output timestamp: {:?} != expected timestamp: {:?}",
+                output.timestamp, expected.timestamp
+            );
+            assert_eq!(
+                output.value, expected.value,
+                "output value: {:?} != expected value: {:?}",
+                output.value, expected.value
+            );
         }
     }
 
