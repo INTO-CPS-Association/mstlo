@@ -51,6 +51,7 @@ fn main() {
     let mut monitor = StlMonitor::builder()
         .formula(formula)
         .semantics(DelayedQuantitative)
+        .initialize_signals([("temperature", 21.4), ("pressure", 101.1)])
         .build()
         .expect("Failed to build monitor");
 

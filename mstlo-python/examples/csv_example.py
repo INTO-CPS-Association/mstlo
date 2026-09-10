@@ -45,7 +45,16 @@ print(f"Read {len(trace)} steps from CSV")
 formula = mstlo.parse_formula((DATA / "property.stl").read_text().strip())
 print(f"Monitoring: {formula}")
 
-monitor = mstlo.Monitor(formula, semantics="DelayedQuantitative")
+# Multi-signal formulas need each signal to have an initial value, which the
+# monitor holds from t=0 until the signal's first real sample arrives. Derive
+# those from the trace itself so nothing has to be hard-coded.
+init_signals = {}
+for signal, value, _timestamp in trace:
+    init_signals.setdefault(signal, value)
+
+monitor = mstlo.Monitor(
+    formula, semantics="DelayedQuantitative", init_signals=init_signals
+)
 
 # Feed the parsed steps to the monitor in order.
 for signal, value, timestamp in trace:

@@ -63,6 +63,20 @@ The library supports four types of monitoring semantics:
 - **Linear** (`synchronization="Linear"`): Linear interpolation
 - **None** (`synchronization="None"`): No interpolation
 
+For multi-signal formulas, every signal needs an initial value so the monitor
+is defined from `t=0` until each signal's first sample arrives. Pass a mapping
+of signal name to initial value via `init_signals`:
+
+```python
+monitor = mstlo.Monitor(
+    mstlo.parse_formula("G[0,2](temperature < 30) && (pressure > 99)"),
+    init_signals={"temperature": 21.4, "pressure": 101.1},
+)
+```
+
+If `init_signals` is omitted, every signal is zero-initialized. A real sample
+at `t=0` overrides the initial value.
+
 ## Constructing STL Formulas
 
 You can construct STL formulas using the provided API. For example:

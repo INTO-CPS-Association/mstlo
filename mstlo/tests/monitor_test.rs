@@ -33,6 +33,7 @@ fn run_monitor_test<Y, S>(
             .formula(formula.clone())
             .algorithm(strategy)
             .semantics(semantics)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 

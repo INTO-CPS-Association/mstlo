@@ -21,6 +21,7 @@ use crate::operators::unary_temporal_operators::{Eventually, Globally};
 use crate::operators::until_operator::Until;
 use crate::ring_buffer::{RingBuffer, Step};
 use crate::synchronizer::{Interpolatable, SynchronizationStrategy, Synchronizer};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::time::Duration;
@@ -407,6 +408,8 @@ impl StlMonitor<f64, f64> {
             semantics: Semantics::DelayedQuantitative, // Default, but will be overwritten if semantics() is called
             synchronization_strategy: SynchronizationStrategy::default(),
             variables: Variables::new(),
+            init_values: HashMap::new(),
+            init_all_to_zero: false,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -503,6 +506,7 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
     /// let mut monitor = StlMonitor::builder()
     ///     .formula(stl!(G[0, 1](temperature < 30.0) && (pressure > 100.0)))
     ///     .semantics(DelayedQuantitative)
+    ///     .initialize_signals([("temperature", 25.0), ("pressure", 101.3)])
     ///     .build()
     ///     .unwrap();
     ///
@@ -665,6 +669,10 @@ pub struct StlMonitorBuilder<T, Y> {
     semantics: Semantics,
     synchronization_strategy: SynchronizationStrategy,
     variables: Variables,
+    /// Explicit per-signal initial values for signal synchronization.
+    init_values: HashMap<&'static str, T>,
+    /// Fill any signal without an explicit init value with `T::zero()`.
+    init_all_to_zero: bool,
     _phantom: std::marker::PhantomData<(T, Y)>,
 }
 
@@ -708,6 +716,38 @@ impl<T, Y> StlMonitorBuilder<T, Y> {
         self
     }
 
+    /// Sets the initial value of a single signal.
+    ///
+    /// For multi-signal formulas the synchronizer uses these values as the
+    /// signal's value at `t=0` (held/interpolated forward) until the signal's
+    /// first real sample arrives. Every signal must be initialized, either
+    /// explicitly or via [`initialize_signals_to_zero`](Self::initialize_signals_to_zero).
+    ///
+    /// A real sample at `t=0` overrides the initial value.
+    pub fn initialize_signal(mut self, signal: &'static str, value: T) -> Self {
+        self.init_values.insert(signal, value);
+        self
+    }
+
+    /// Sets initial values for multiple signals at once.
+    pub fn initialize_signals<I>(mut self, signals: I) -> Self
+    where
+        I: IntoIterator<Item = (&'static str, T)>,
+    {
+        self.init_values.extend(signals);
+        self
+    }
+
+    /// Convenience to initialize every signal that lacks an explicit init value
+    /// to the additive identity (`T::zero()`, i.e. `0.0` for `f64`).
+    pub fn initialize_signals_to_zero(mut self) -> Self
+    where
+        T: Interpolatable,
+    {
+        self.init_all_to_zero = true;
+        self
+    }
+
     /// Applies the semantics, switching the Builder's generic type `Y` to match the semantics.
     /// This allows inference of the output type (bool, f64, RobustnessInterval).
     ///
@@ -729,6 +769,8 @@ impl<T, Y> StlMonitorBuilder<T, Y> {
             semantics: S::as_enum(),
             synchronization_strategy: self.synchronization_strategy,
             variables: self.variables,
+            init_values: self.init_values,
+            init_all_to_zero: self.init_all_to_zero,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -778,11 +820,33 @@ where
             }
         };
 
-        let synchronizer = if formula_def.get_signal_identifiers().len() <= 1 {
-            Synchronizer::new(SynchronizationStrategy::None)
+        let signals: std::collections::HashSet<&'static str> =
+            formula_def.get_signal_identifiers();
+        let is_multi_signal = signals.len() > 1;
+
+        let mut synchronizer = Synchronizer::new(if is_multi_signal {
+            self.synchronization_strategy
         } else {
-            Synchronizer::new(self.synchronization_strategy)
-        };
+            SynchronizationStrategy::None
+        });
+
+        if is_multi_signal {
+            let mut init_values = self.init_values;
+            if self.init_all_to_zero {
+                for &signal in &signals {
+                    init_values.entry(signal).or_insert_with(T::zero);
+                }
+            }
+            for &signal in &signals {
+                if !init_values.contains_key(signal) {
+                    return Err(
+                        "All signals in a multi-signal formula must be initialized. Use \
+                         initialize_signal / initialize_signals, or initialize_signals_to_zero.",
+                    );
+                }
+            }
+            synchronizer.set_initial_values(init_values);
+        }
 
         Ok(StlMonitor {
             root_operator,
@@ -985,6 +1049,7 @@ mod tests {
             .formula(formula.clone())
             .algorithm(Algorithm::Incremental)
             .semantics(DelayedQuantitative)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -992,6 +1057,7 @@ mod tests {
             .formula(formula)
             .algorithm(Algorithm::Naive)
             .semantics(DelayedQuantitative)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -1098,6 +1164,7 @@ mod tests {
             .semantics(DelayedQualitative)
             .algorithm(Algorithm::Incremental)
             .variables(variables)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -1135,6 +1202,7 @@ mod tests {
             .formula(formula)
             .semantics(Rosi)
             .algorithm(Algorithm::Incremental)
+            .initialize_signals([("x", 5.0), ("y", 25.0)])
             .build()
             .unwrap();
 
@@ -1174,6 +1242,7 @@ mod tests {
             StlMonitor::builder()
                 .formula(stl!(G[0,2] (x > 10.0) && F[0,3] (y < 20.0)))
                 .semantics(Rosi)
+                .initialize_signals([("x", 5.0), ("y", 25.0)])
                 .build()
                 .unwrap()
         };
@@ -1258,6 +1327,7 @@ mod tests {
             .algorithm(Algorithm::Incremental)
             .synchronization_strategy(SynchronizationStrategy::Linear)
             .variables(variables)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -1781,6 +1851,7 @@ mod tests {
                 .semantics(DelayedQuantitative)
                 .algorithm(Algorithm::Incremental)
                 .synchronization_strategy(SynchronizationStrategy::ZeroOrderHold)
+                .initialize_signals([("x", 10.0), ("y", 15.0)])
                 .build()
                 .unwrap();
 
@@ -1881,6 +1952,7 @@ mod tests {
             .semantics(DelayedQuantitative)
             .algorithm(Algorithm::Incremental)
             .synchronization_strategy(SynchronizationStrategy::ZeroOrderHold)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
         let before = monitor.total_size();
@@ -1897,5 +1969,45 @@ mod tests {
             .build()
             .unwrap();
         assert!(monitor.total_size() >= std::mem::size_of_val(&monitor));
+    }
+
+    #[test]
+    fn test_initial_values_anchor_t0() {
+        let formula = stl!(x > 5.0 && y < 20.0);
+        let mut monitor = StlMonitor::builder()
+            .formula(formula)
+            .semantics(DelayedQuantitative)
+            .initialize_signals([("x", 10.0), ("y", 15.0)])
+            .build()
+            .unwrap();
+
+        // x@0 (real) overrides its init; y holds its init value at t=0. The
+        // conjunction is defined from t=0: min(10-5, 20-15) = 5.0.
+        let out = monitor.update(&step!("x", 10.0, Duration::from_secs(0)));
+        let verdicts = out.verdicts();
+        assert_eq!(verdicts.len(), 1);
+        assert_eq!(verdicts[0].timestamp, Duration::from_secs(0));
+        assert_eq!(verdicts[0].value, 5.0);
+    }
+
+    #[test]
+    fn test_multi_signal_requires_initialization() {
+        let formula = stl!(x > 5.0 && y < 20.0);
+        let result = StlMonitor::builder()
+            .formula(formula)
+            .semantics(DelayedQuantitative)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_zero_initialization_satisfies_requirement() {
+        let formula = stl!(x > 5.0 && y < 20.0);
+        let monitor = StlMonitor::builder()
+            .formula(formula)
+            .semantics(DelayedQuantitative)
+            .initialize_signals_to_zero()
+            .build();
+        assert!(monitor.is_ok());
     }
 }

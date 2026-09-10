@@ -36,15 +36,16 @@ fn test_signal_interleaving(
         .semantics(Rosi)
         .algorithm(Algorithm::Incremental)
         .synchronization_strategy(interpolation_strategy)
+        .initialize_signals_to_zero()
         .build()
         .unwrap();
 
     // feed step 0
     let out0 = monitor.update(&steps[0]);
-    assert_eq!(out0.verdicts().len(), 0); // not enough data yet
+    assert_eq!(out0.verdicts().len(), 1); // x@0 combines with y's init value at t=0
     // feed step 1
     let out1 = monitor.update(&steps[1]);
-    assert_eq!(out1.verdicts().len(), 1); // now we have both signals at t=0
+    assert_eq!(out1.verdicts().len(), 1); // y@0 refines the t=0 verdict
     // feed step 2
     let out2 = monitor.update(&steps[2]);
     assert_eq!(out2.verdicts().len(), 1); // not enough data yet
@@ -82,6 +83,7 @@ fn test_until_two_disjoint_signals(
         .semantics(DelayedQuantitative)
         .algorithm(Algorithm::Incremental)
         .synchronization_strategy(strategy)
+        .initialize_signals_to_zero()
         .build()
         .unwrap();
 
@@ -90,6 +92,7 @@ fn test_until_two_disjoint_signals(
         .semantics(EagerQualitative)
         .algorithm(Algorithm::Incremental)
         .synchronization_strategy(strategy)
+        .initialize_signals_to_zero()
         .build()
         .unwrap();
 
@@ -143,6 +146,7 @@ fn test_synchronization(
         .semantics(Rosi)
         .algorithm(Algorithm::Incremental)
         .synchronization_strategy(interpolation_strategy)
+        .initialize_signals_to_zero()
         .build()
         .unwrap();
 
