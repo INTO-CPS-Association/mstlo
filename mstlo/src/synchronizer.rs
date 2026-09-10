@@ -524,7 +524,7 @@ mod tests {
     fn test_initial_values_hold_forward() {
         let mut sync = Synchronizer::new(SynchronizationStrategy::ZeroOrderHold);
         sync.set_initial_values([("x", 0.0), ("y", 10.0)]);
-        while let Some(_) = sync.pending.pop_front() {}
+        while sync.pending.pop_front().is_some() {}
 
         sync.evaluate(Step {
             signal: "x",
