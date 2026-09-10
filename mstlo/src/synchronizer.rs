@@ -143,8 +143,7 @@ where
         self.pending.capacity() * std::mem::size_of::<Step<T>>()
             + self.last_steps.capacity()
                 * (std::mem::size_of::<&str>() + std::mem::size_of::<LastValue<T>>() + 1)
-            + self.init_values.len()
-                * (std::mem::size_of::<&str>() + std::mem::size_of::<T>() + 1)
+            + self.init_values.len() * (std::mem::size_of::<&str>() + std::mem::size_of::<T>() + 1)
             + self.timeline.len()
                 * (std::mem::size_of::<Duration>() + 2 * std::mem::size_of::<usize>())
     }
@@ -507,9 +506,11 @@ mod tests {
         }
 
         // y's init step still flows (t=0, value 10.0).
-        assert!(result.iter().any(
-            |s| s.signal == "y" && s.timestamp == Duration::ZERO && s.value == 10.0
-        ));
+        assert!(
+            result
+                .iter()
+                .any(|s| s.signal == "y" && s.timestamp == Duration::ZERO && s.value == 10.0)
+        );
         // x has exactly one t=0 step and it carries the real value, not the init.
         let x_steps: Vec<_> = result
             .iter()
@@ -547,11 +548,15 @@ mod tests {
         }
 
         // y holds its init value (10.0) at the intermediate timestamp t=1.
-        assert!(out.iter().any(
-            |s| s.signal == "y" && s.timestamp == Duration::from_secs(1) && s.value == 10.0
-        ));
-        assert!(out.iter().any(
-            |s| s.signal == "y" && s.timestamp == Duration::from_secs(5) && s.value == 20.0
-        ));
+        assert!(
+            out.iter().any(|s| s.signal == "y"
+                && s.timestamp == Duration::from_secs(1)
+                && s.value == 10.0)
+        );
+        assert!(
+            out.iter().any(|s| s.signal == "y"
+                && s.timestamp == Duration::from_secs(5)
+                && s.value == 20.0)
+        );
     }
 }

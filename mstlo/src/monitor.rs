@@ -820,8 +820,7 @@ where
             }
         };
 
-        let signals: std::collections::HashSet<&'static str> =
-            formula_def.get_signal_identifiers();
+        let signals: std::collections::HashSet<&'static str> = formula_def.get_signal_identifiers();
         let is_multi_signal = signals.len() > 1;
 
         let mut synchronizer = Synchronizer::new(if is_multi_signal {
