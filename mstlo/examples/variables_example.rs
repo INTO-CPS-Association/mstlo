@@ -20,6 +20,7 @@ fn main() {
         .algorithm(Algorithm::Incremental)
         .synchronization_strategy(SynchronizationStrategy::ZeroOrderHold)
         .variables(vars.clone())
+        .initialize_signals([("temp", 125.5), ("pressure", 15.0), ("valve_open", 1.0)])
         .build()
         .expect("Failed to build STL monitor");
 

@@ -21,6 +21,7 @@ fn run_final_rosi_verdicts_check(formulas: Vec<FormulaDefinition>, signal: Vec<S
                     .formula(formula.clone())
                     .semantics(Rosi)
                     .algorithm(Algorithm::Incremental)
+                    .initialize_signals_to_zero()
                     .build()
                     .unwrap();
 
@@ -29,6 +30,7 @@ fn run_final_rosi_verdicts_check(formulas: Vec<FormulaDefinition>, signal: Vec<S
                     .formula(formula.clone())
                     .semantics(DelayedQuantitative)
                     .algorithm(Algorithm::Incremental)
+                    .initialize_signals_to_zero()
                     .build()
                     .unwrap();
 
@@ -88,6 +90,7 @@ fn run_rosi_interval_bounds_check(formulas: Vec<FormulaDefinition>, signal: Vec<
                 .formula(formula)
                 .semantics(Rosi)
                 .algorithm(Algorithm::Incremental)
+                .initialize_signals_to_zero()
                 .build()
                 .unwrap();
 

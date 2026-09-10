@@ -1,6 +1,6 @@
 use mstlo::monitor::{
     Algorithm, DelayedQualitative, DelayedQuantitative, EagerQualitative, MonitorOutput, Rosi,
-    StlMonitor,
+    StlMonitor, StlMonitorBuilder,
 };
 use mstlo::parse_stl;
 use mstlo::{FormulaDefinition, RobustnessInterval, TimeInterval, Variables};
@@ -16,6 +16,20 @@ fn py_parse_formula(formula_str: &str) -> PyResult<Formula> {
     let formula = parse_stl(formula_str)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{}", e)))?;
     Ok(Formula { inner: formula })
+}
+
+/// Applies initial-signal configuration to a monitor builder.
+///
+/// If explicit init values are given they are used; otherwise every signal is
+/// zero-initialized so multi-signal formulas are well-defined from `t=0`.
+fn apply_init<Y>(
+    builder: StlMonitorBuilder<f64, Y>,
+    init_values: &Option<Vec<(&'static str, f64)>>,
+) -> StlMonitorBuilder<f64, Y> {
+    match init_values {
+        Some(values) => builder.initialize_signals(values.clone()),
+        None => builder.initialize_signals_to_zero(),
+    }
 }
 #[pyclass(name = "Formula", module = "mstlo_python.mstlo_python", from_py_object)]
 #[derive(Clone)]
@@ -474,13 +488,14 @@ struct Monitor {
 #[pymethods]
 impl Monitor {
     #[new]
-    #[pyo3(signature = (formula, semantics="DelayedQuantitative", algorithm="Incremental", synchronization="ZeroOrderHold", variables=None))]
+    #[pyo3(signature = (formula, semantics="DelayedQuantitative", algorithm="Incremental", synchronization="ZeroOrderHold", variables=None, init_signals=None))]
     fn new(
         formula: &Formula,
         semantics: &str,
         algorithm: &str,
         synchronization: &str,
         variables: Option<&PyVariables>,
+        init_signals: Option<HashMap<String, f64>>,
     ) -> PyResult<Self> {
         // Parse algorithm
         let algo = match algorithm {
@@ -507,15 +522,25 @@ impl Monitor {
         // Get or create variables
         let vars = variables.cloned().unwrap_or_else(PyVariables::new);
 
+        // Resolve explicit per-signal initial values. `None` falls back to
+        // zero-initializing every signal so multi-signal formulas are defined
+        // from t=0.
+        let init_values: Option<Vec<(&'static str, f64)>> = init_signals.map(|m| {
+            m.into_iter()
+                .map(|(name, value)| (intern(&name), value))
+                .collect()
+        });
+
         // Build monitor based on semantics
         match semantics {
             "DelayedQualitative" => {
-                let m = StlMonitor::builder()
+                let builder = StlMonitor::builder()
                     .formula(formula.inner.clone())
                     .algorithm(algo)
                     .semantics(DelayedQualitative)
                     .synchronization_strategy(synchronization_strategy)
-                    .variables(vars.inner.clone())
+                    .variables(vars.inner.clone());
+                let m = apply_init(builder, &init_values)
                     .build()
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 Ok(Monitor {
@@ -528,12 +553,13 @@ impl Monitor {
                 })
             }
             "EagerQualitative" => {
-                let m = StlMonitor::builder()
+                let builder = StlMonitor::builder()
                     .formula(formula.inner.clone())
                     .algorithm(algo)
                     .semantics(EagerQualitative)
                     .synchronization_strategy(synchronization_strategy)
-                    .variables(vars.inner.clone())
+                    .variables(vars.inner.clone());
+                let m = apply_init(builder, &init_values)
                     .build()
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 Ok(Monitor {
@@ -546,12 +572,13 @@ impl Monitor {
                 })
             }
             "DelayedQuantitative" => {
-                let m = StlMonitor::builder()
+                let builder = StlMonitor::builder()
                     .formula(formula.inner.clone())
                     .algorithm(algo)
                     .semantics(DelayedQuantitative)
                     .synchronization_strategy(synchronization_strategy)
-                    .variables(vars.inner.clone())
+                    .variables(vars.inner.clone());
+                let m = apply_init(builder, &init_values)
                     .build()
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 Ok(Monitor {
@@ -564,12 +591,13 @@ impl Monitor {
                 })
             }
             "Rosi" => {
-                let m = StlMonitor::builder()
+                let builder = StlMonitor::builder()
                     .formula(formula.inner.clone())
                     .algorithm(algo)
                     .semantics(Rosi)
                     .synchronization_strategy(synchronization_strategy)
-                    .variables(vars.inner.clone())
+                    .variables(vars.inner.clone());
+                let m = apply_init(builder, &init_values)
                     .build()
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 Ok(Monitor {

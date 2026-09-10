@@ -754,6 +754,7 @@ class Monitor:
         algorithm: AlgorithmType = "Incremental",
         synchronization: SynchronizationType = "ZeroOrderHold",
         variables: Union[Variables, None] = None,
+        init_signals: Union[Mapping[str, float], None] = None,
     ) -> None:
         """
         Create a new STL monitor.
@@ -782,6 +783,11 @@ class Monitor:
                 Required if the formula contains variable predicates (e.g., `x > $threshold`).
                 Note: Variable predicates require the Incremental algorithm.
 
+            init_signals: Optional mapping of signal name -> initial value used to
+                define each signal at t=0 until its first real sample arrives. If
+                omitted, every signal is zero-initialized. A real sample at t=0
+                overrides the initial value.
+
         Raises:
             ValueError: If invalid semantics, algorithm, or synchronization is specified
             ValueError: If Naive algorithm is used with EagerQualitative (not supported)
@@ -806,6 +812,9 @@ class Monitor:
             >>> vars.set("threshold", 5.0)
             >>> phi = parse_formula("G[0, 5](x > $threshold)")
             >>> m4 = Monitor(phi, variables=vars)
+            >>>
+            >>> # Explicit initial values for a multi-signal formula
+            >>> m5 = Monitor(phi, init_signals={"x": 0.0, "y": 10.0})
         """
         ...
 

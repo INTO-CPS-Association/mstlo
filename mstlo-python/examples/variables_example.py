@@ -8,7 +8,11 @@ print(f"Monitoring Formula: {phi}")
 
 # 2. Create the Monitor (using Robustness Semantics)
 monitor = mstlo.Monitor(
-    phi, semantics="Rosi", synchronization="ZeroOrderHold", variables=vars
+    phi,
+    semantics="Rosi",
+    synchronization="ZeroOrderHold",
+    variables=vars,
+    init_signals={"x": 0.0, "y": 0.0},
 )
 
 print(monitor)

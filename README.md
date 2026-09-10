@@ -120,6 +120,7 @@ use mstlo::{steps, stl};
 let mut monitor = StlMonitor::builder()
     .formula(stl! {G[0, 2](x > 5.0) && (y < 10.0)})
     .semantics(Rosi)
+    .initialize_signals([("x", 7.0), ("y", 3.0)])
     .build()
     .expect("Failed to build monitor");
 
