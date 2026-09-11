@@ -301,7 +301,6 @@ fn pulse_signal() -> Vec<Step<f64>> {
 /// zero-order-hold read tested above; it is prototyped in `finding_1_optionc.patch`, with
 /// which this test passes. `mstlo/examples/nesting_breakpoint_gap.rs` walks through the case.
 #[test]
-#[ignore = "fixed only by finding_1_optionc.patch, not by P1/P2; see finding_1.md §5 Option C"]
 fn n4_satisfaction_between_breakpoints() {
     let verdict0 = last_verdict_at(
         stl!(F[0, 1](G[0.4, 1](x > 3.0))),
@@ -313,6 +312,46 @@ fn n4_satisfaction_between_breakpoints() {
     assert_eq!(verdict0, Some(false));
     let verdict1 = last_verdict_at(
         stl!(F[0, 1](G[0.4, 1](x > 3.0))),
+        pulse_signal(),
+        DelayedQualitative,
+        Duration::from_secs(1),
+    )
+    .map(|(_, value)| value);
+    assert_eq!(verdict1, Some(true));
+}
+
+// -----------------------------------------------------------------------------
+// N5: the same gap under `Until`
+// -----------------------------------------------------------------------------
+
+/// The `Until` counterpart of N4, on the same pulse signal.
+///
+/// ```text
+/// (x < 8) U[0, 1] (G[0.4, 1](x > 5))
+/// ```
+///
+/// Read at t = 1s. The left operand is true everywhere on this signal, so the formula
+/// reduces to: is there a `t'` in `[1, 2]` at which the right operand holds? The right
+/// operand `G[0.4, 1](x > 5)` is true at `s` exactly when `[s + 0.4, s + 1]` lies inside
+/// `[2s, 3s)`, the one segment where `x > 5`, i.e. for `s` in `[1.6, 2)`. That is a
+/// non-empty sub-interval of `[1, 2]`, so the formula is true at t = 1s.
+///
+/// None of the operand's own samples lies in `[1.6, 2)`: reading `t'` only at the
+/// timestamps that were submitted, or pairing the two operands by equal timestamps, misses
+/// the satisfaction interval entirely and answers false.
+#[test]
+fn n5_until_satisfaction_between_breakpoints() {
+    let verdict0 = last_verdict_at(
+        stl!((x < 8.0) U[0, 1](G[0.4, 1.0](x > 5.0))),
+        pulse_signal(),
+        DelayedQualitative,
+        Duration::from_secs(0),
+    )
+    .map(|(_, value)| value);
+    assert_eq!(verdict0, Some(false));
+
+    let verdict1 = last_verdict_at(
+        stl!((x < 8.0) U[0, 1](G[0.4, 1.0](x > 5.0))),
         pulse_signal(),
         DelayedQualitative,
         Duration::from_secs(1),
