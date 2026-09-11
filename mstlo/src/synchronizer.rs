@@ -148,11 +148,7 @@ where
                         }
                     };
 
-                    self.pending.push_back(Step {
-                        signal: signal_id,
-                        timestamp: t,
-                        value: interp_val,
-                    });
+                    self.pending.push_back(Step::new(signal_id, interp_val, t));
                 }
             }
         }
@@ -189,31 +185,11 @@ mod tests {
     #[test]
     fn test_synchronizer_zero_order_hold() {
         let steps = vec![
-            Step {
-                signal: "B",
-                value: 0.0,
-                timestamp: Duration::from_secs(0),
-            },
-            Step {
-                signal: "A",
-                value: 1.0,
-                timestamp: Duration::from_secs(1),
-            },
-            Step {
-                signal: "A",
-                value: 10.0,
-                timestamp: Duration::from_secs(2),
-            },
-            Step {
-                signal: "A",
-                value: 3.0,
-                timestamp: Duration::from_secs(4),
-            },
-            Step {
-                signal: "B",
-                value: 30.0,
-                timestamp: Duration::from_secs(5),
-            },
+            Step::new("B", 0.0, Duration::from_secs(0)),
+            Step::new("A", 1.0, Duration::from_secs(1)),
+            Step::new("A", 10.0, Duration::from_secs(2)),
+            Step::new("A", 3.0, Duration::from_secs(4)),
+            Step::new("B", 30.0, Duration::from_secs(5)),
         ];
         let mut sync = Synchronizer::new(SynchronizationStrategy::ZeroOrderHold);
         let mut result = Vec::new();
@@ -236,26 +212,10 @@ mod tests {
     #[test]
     fn test_synchronizer_linear() {
         let steps = vec![
-            Step {
-                signal: "A",
-                value: 0.0,
-                timestamp: Duration::from_secs(0),
-            },
-            Step {
-                signal: "B",
-                value: 0.0,
-                timestamp: Duration::from_secs(0),
-            },
-            Step {
-                signal: "A",
-                value: 10.0,
-                timestamp: Duration::from_secs(2),
-            },
-            Step {
-                signal: "B",
-                value: 20.0,
-                timestamp: Duration::from_secs(4),
-            },
+            Step::new("A", 0.0, Duration::from_secs(0)),
+            Step::new("B", 0.0, Duration::from_secs(0)),
+            Step::new("A", 10.0, Duration::from_secs(2)),
+            Step::new("B", 20.0, Duration::from_secs(4)),
         ];
         let mut sync = Synchronizer::new(SynchronizationStrategy::Linear);
         let mut result = Vec::new();
@@ -277,37 +237,21 @@ mod tests {
         let mut sync = Synchronizer::new(SynchronizationStrategy::ZeroOrderHold);
 
         // First step at t=2
-        sync.evaluate(Step {
-            signal: "A",
-            value: 10.0,
-            timestamp: Duration::from_secs(2),
-        });
+        sync.evaluate(Step::new("A", 10.0, Duration::from_secs(2)));
         assert_eq!(sync.pending.len(), 1);
         sync.pending.clear();
 
         // Valid step at t=3 (strictly increasing)
-        sync.evaluate(Step {
-            signal: "A",
-            value: 15.0,
-            timestamp: Duration::from_secs(3),
-        });
+        sync.evaluate(Step::new("A", 15.0, Duration::from_secs(3)));
         assert_eq!(sync.pending.len(), 1);
         sync.pending.clear();
 
         // Invalid step at t=3 (equal, should be ignored)
-        sync.evaluate(Step {
-            signal: "A",
-            value: 20.0,
-            timestamp: Duration::from_secs(3),
-        });
+        sync.evaluate(Step::new("A", 20.0, Duration::from_secs(3)));
         assert_eq!(sync.pending.len(), 0, "Equal timestamp should be ignored");
 
         // Invalid step at t=1 (decreasing, should be ignored)
-        sync.evaluate(Step {
-            signal: "A",
-            value: 25.0,
-            timestamp: Duration::from_secs(1),
-        });
+        sync.evaluate(Step::new("A", 25.0, Duration::from_secs(1)));
         assert_eq!(
             sync.pending.len(),
             0,
@@ -315,11 +259,7 @@ mod tests {
         );
 
         // Valid step at t=5 (strictly increasing again)
-        sync.evaluate(Step {
-            signal: "A",
-            value: 30.0,
-            timestamp: Duration::from_secs(5),
-        });
+        sync.evaluate(Step::new("A", 30.0, Duration::from_secs(5)));
         assert_eq!(sync.pending.len(), 1);
     }
 
@@ -328,37 +268,21 @@ mod tests {
         let mut sync = Synchronizer::new(SynchronizationStrategy::None);
 
         // Signal A at t=5
-        sync.evaluate(Step {
-            signal: "A",
-            value: 10.0,
-            timestamp: Duration::from_secs(5),
-        });
+        sync.evaluate(Step::new("A", 10.0, Duration::from_secs(5)));
         assert_eq!(sync.pending.len(), 1);
         sync.pending.clear();
 
         // Signal B at t=2 is valid (different signal)
-        sync.evaluate(Step {
-            signal: "B",
-            value: 20.0,
-            timestamp: Duration::from_secs(2),
-        });
+        sync.evaluate(Step::new("B", 20.0, Duration::from_secs(2)));
         assert_eq!(sync.pending.len(), 1);
         sync.pending.clear();
 
         // Signal A at t=3 is invalid (less than previous A timestamp)
-        sync.evaluate(Step {
-            signal: "A",
-            value: 15.0,
-            timestamp: Duration::from_secs(3),
-        });
+        sync.evaluate(Step::new("A", 15.0, Duration::from_secs(3)));
         assert_eq!(sync.pending.len(), 0, "Signal A timestamp must be > 5");
 
         // Signal B at t=3 is valid (greater than previous B timestamp)
-        sync.evaluate(Step {
-            signal: "B",
-            value: 25.0,
-            timestamp: Duration::from_secs(3),
-        });
+        sync.evaluate(Step::new("B", 25.0, Duration::from_secs(3)));
         assert_eq!(sync.pending.len(), 1);
     }
 
@@ -371,11 +295,7 @@ mod tests {
     #[test]
     fn heap_size_after_evaluate() {
         let mut sync = Synchronizer::new(SynchronizationStrategy::None);
-        sync.evaluate(Step {
-            signal: "A",
-            value: 1.0,
-            timestamp: Duration::from_secs(1),
-        });
+        sync.evaluate(Step::new("A", 1.0, Duration::from_secs(1)));
         // pending queue holds at least one Step
         assert!(sync.heap_size() >= std::mem::size_of::<Step<f64>>());
     }
@@ -383,11 +303,7 @@ mod tests {
     #[test]
     fn heap_size_after_reset() {
         let mut sync = Synchronizer::new(SynchronizationStrategy::ZeroOrderHold);
-        sync.evaluate(Step {
-            signal: "A",
-            value: 1.0,
-            timestamp: Duration::from_secs(1),
-        });
+        sync.evaluate(Step::new("A", 1.0, Duration::from_secs(1)));
         let before = sync.heap_size();
         assert!(before > 0);
         sync.reset();

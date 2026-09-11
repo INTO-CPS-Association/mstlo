@@ -62,11 +62,7 @@ where
             .into_iter()
             .map(|step| {
                 let negated_value = Y::not(step.value);
-                Step {
-                    signal: "output",
-                    value: negated_value,
-                    timestamp: step.timestamp,
-                }
+                Step::new("output", negated_value, step.timestamp)
             })
             .collect();
 

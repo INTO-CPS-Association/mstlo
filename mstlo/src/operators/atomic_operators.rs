@@ -134,11 +134,7 @@ where
             }
         };
 
-        vec![Step {
-            signal: "output",
-            value: result,
-            timestamp: step.timestamp,
-        }]
+        vec![Step::new("output", result, step.timestamp)]
     }
 
     fn get_max_lookahead(&self) -> Duration {

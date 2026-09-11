@@ -1146,15 +1146,21 @@ mod tests {
         let output = monitor.update_batch(&steps);
         let verdicts = output.verdicts();
 
-        assert_eq!(verdicts.len(), 4);
+        // Verdicts land on the union of both conjuncts' breakpoints, which includes the
+        // window boundaries shifted onto the samples: `G[0,2]` contributes 3 - 2 = 1 and
+        // 4 - 2 = 2. Those are timestamps at which the conjunction genuinely changes under
+        // zero-order hold, not artefacts of the sampling.
+        assert_eq!(verdicts.len(), 5);
         assert!(verdicts[0].timestamp == Duration::from_secs(0));
         assert!(verdicts[0].value.0 == verdicts[0].value.1); // final
-        assert!(verdicts[1].timestamp == Duration::from_secs(2));
+        assert!(verdicts[1].timestamp == Duration::from_secs(1));
         assert!(verdicts[1].value.0 == verdicts[1].value.1); // final
-        assert!(verdicts[2].timestamp == Duration::from_secs(3));
-        assert!(verdicts[2].value.0 != verdicts[2].value.1); // non-final
-        assert!(verdicts[3].timestamp == Duration::from_secs(4));
+        assert!(verdicts[2].timestamp == Duration::from_secs(2));
+        assert!(verdicts[2].value.0 == verdicts[2].value.1); // final
+        assert!(verdicts[3].timestamp == Duration::from_secs(3));
         assert!(verdicts[3].value.0 != verdicts[3].value.1); // non-final
+        assert!(verdicts[4].timestamp == Duration::from_secs(4));
+        assert!(verdicts[4].value.0 != verdicts[4].value.1); // non-final
     }
 
     #[test]

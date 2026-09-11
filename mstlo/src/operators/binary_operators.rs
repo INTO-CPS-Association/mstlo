@@ -14,15 +14,35 @@ use std::collections::HashSet;
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
+/// The timestamp up to which both operands have reported, if they both have.
+///
+/// `None` for an operand that has produced nothing yet is what separates it from one that
+/// has reported at time zero: the first cannot answer anywhere, the second answers there.
+fn joint_frontier(left: Option<Duration>, right: Option<Duration>) -> Option<Duration> {
+    Some(left?.min(right?))
+}
+
 /// A unified binary processor that handles Delayed, Eager, and Refinable (RoSI) semantics correctly.
 ///
-/// This helper consumes cached outputs from left/right sub-operators and emits
-/// timestamp-aligned combined outputs using `combine_op`.
+/// Both operands are piecewise constant between the steps they emit, so the combination is
+/// piecewise constant too and its breakpoints are the union of theirs. Each operand is
+/// therefore read at the breakpoints of the *other* under zero-order hold. That is what lets
+/// two operands with unrelated breakpoint sets be combined at all: a temporal operand
+/// answers at its own window boundaries, which are generally not timestamps the other one
+/// ever reports, so matching the streams on equal timestamps would leave both sides unread.
+///
+/// A timestamp is answered once both operands are known there, i.e. up to the older of the
+/// two frontiers. Eager mode may decide a timestamp from one operand alone, but only while
+/// the other has reported nothing at all: once both are running, answers are emitted in
+/// timestamp order like in every other mode. Short-circuiting a later timestamp ahead of an
+/// earlier one that is merely still pending would push the watermark past that earlier
+/// timestamp and strand its answer.
 fn process_binary<C, Y, F, const IS_EAGER: bool, const IS_ROSI: bool>(
-    left_cache: &mut C,
-    right_cache: &mut C,
-    left_last_known: &mut Step<Y>,
-    right_last_known: &mut Step<Y>,
+    left_cache: &C,
+    right_cache: &C,
+    left_frontier: Option<Duration>,
+    right_frontier: Option<Duration>,
+    start_after: Option<Duration>,
     combine_op: F,
     short_circuit_val: Option<Y>,
 ) -> Vec<Step<Y>>
@@ -32,95 +52,78 @@ where
     F: Fn(Y, Y) -> Y,
 {
     let mut output_robustness = Vec::new();
+    let joint = joint_frontier(left_frontier, right_frontier);
+    // `None` orders below every `Some`, so the maximum is the operand that has reported the
+    // furthest, and is `None` only while neither has reported at all.
+    let horizon = if IS_EAGER && !IS_ROSI {
+        left_frontier.max(right_frontier)
+    } else {
+        joint
+    };
+    let Some(horizon) = horizon else {
+        return output_robustness;
+    };
 
-    // CASE 1: Refinable Semantics (i.e., RoSI)
-    if IS_ROSI {
-        let mut l_iter = left_cache.iter();
-        let mut r_iter = right_cache.iter();
+    // Breakpoints at or before `start_after` have been answered already, and outside RoSI
+    // an operand never revises them, so the walk can start past them and cost only what is
+    // new. RoSI passes `None`: a refinement rewrites timestamps that were already emitted.
+    let l_skip =
+        start_after.map_or(0, |ts| left_cache.partition_point(|entry| entry.timestamp <= ts));
+    let r_skip =
+        start_after.map_or(0, |ts| right_cache.partition_point(|entry| entry.timestamp <= ts));
+    let mut l_iter = left_cache.iter().skip(l_skip).peekable();
+    let mut r_iter = right_cache.iter().skip(r_skip).peekable();
 
-        let mut l_curr = l_iter.next();
-        let mut r_curr = r_iter.next();
-
-        while let (Some(l), Some(r)) = (l_curr, r_curr) {
-            if l.timestamp == r.timestamp {
-                let combined = combine_op(l.value, r.value);
-                output_robustness.push(Step::new("output", combined, l.timestamp));
-
-                l_curr = l_iter.next();
-                r_curr = r_iter.next();
-                *left_last_known = Step::new(l.signal, l.value, l.timestamp);
-                *right_last_known = Step::new(r.signal, r.value, r.timestamp);
-            } else if l.timestamp < r.timestamp {
-                l_curr = l_iter.next();
-                *left_last_known = Step::new(l.signal, l.value, l.timestamp);
-            } else {
-                r_curr = r_iter.next();
-                *right_last_known = Step::new(r.signal, r.value, r.timestamp);
-            }
+    loop {
+        // Walk the union of the two breakpoint sets, consuming both when they coincide.
+        let l_ts = l_iter.peek().map(|entry| entry.timestamp);
+        let r_ts = r_iter.peek().map(|entry| entry.timestamp);
+        let ts = match (l_ts, r_ts) {
+            (Some(l), Some(r)) => l.min(r),
+            (Some(l), None) => l,
+            (None, Some(r)) => r,
+            (None, None) => break,
+        };
+        if l_ts == Some(ts) {
+            l_iter.next();
+        }
+        if r_ts == Some(ts) {
+            r_iter.next();
+        }
+        if ts > horizon {
+            break;
         }
 
-        return output_robustness;
-    }
+        let left_value = left_frontier
+            .is_some_and(|frontier| ts <= frontier)
+            .then(|| left_cache.zoh_at(ts))
+            .flatten()
+            .map(|entry| entry.value);
+        let right_value = right_frontier
+            .is_some_and(|frontier| ts <= frontier)
+            .then(|| right_cache.zoh_at(ts))
+            .flatten()
+            .map(|entry| entry.value);
 
-    // CASE 2: Non-Refinable Semantics (f64, bool)
-    loop {
-        let l_head = left_cache.get_front();
-        let r_head = right_cache.get_front();
-
-        match (l_head, r_head) {
-            // Both caches have data
+        match (left_value, right_value) {
             (Some(l), Some(r)) => {
-                if l.timestamp == r.timestamp {
-                    // 1. Timestamps align
-                    let val = combine_op(l.value, r.value);
-                    let ts = l.timestamp;
-
-                    *left_last_known = Step::new(l.signal, l.value, ts);
-                    *right_last_known = Step::new(r.signal, r.value, ts);
-
-                    output_robustness.push(Step::new("output", val, ts));
-
-                    left_cache.pop_front();
-                    right_cache.pop_front();
-                } else if l.timestamp < r.timestamp {
-                    // Left is earlier - skip it and wait for matching right
-                    *left_last_known = left_cache.pop_front().unwrap();
-                } else {
-                    // Right is earlier - skip it and wait for matching left
-                    *right_last_known = right_cache.pop_front().unwrap();
-                }
+                output_robustness.push(Step::new("output", combine_op(l, r), ts));
             }
-            // Only Left has data - we must wait for Right to potentially match or exceed Left's timestamp
-            (Some(l), None) => {
-                if IS_EAGER {
-                    let l_ts = l.timestamp;
-                    let l_val = l.value;
-                    if let Some(sc) = short_circuit_val
-                        && l_val == sc
-                    {
-                        output_robustness.push(Step::new("output", sc, l_ts));
-                        *left_last_known = left_cache.pop_front().unwrap();
-                        continue;
-                    }
+            // Both operands have reported at `ts`, but one cache no longer holds the value
+            // in force there: it was pruned, which happens only once `ts` was answered.
+            (Some(_), None) | (None, Some(_)) if joint.is_some_and(|frontier| ts <= frontier) => {}
+            // Past the joint frontier, so this is eager mode running ahead on one operand.
+            // A conjunction is already false, and a disjunction already true, if that
+            // operand is; the one still missing cannot change it. Otherwise the answer has
+            // to wait -- and so does every later one, which would otherwise be reported
+            // ahead of it.
+            (Some(value), None) | (None, Some(value)) => {
+                if short_circuit_val != Some(value) {
+                    break;
                 }
-                break;
+                output_robustness.push(Step::new("output", value, ts));
             }
-            // Only Right has data - we must wait for Left
-            (None, Some(r)) => {
-                if IS_EAGER {
-                    let r_ts = r.timestamp;
-                    let r_val = r.value;
-                    if let Some(sc) = short_circuit_val
-                        && r_val == sc
-                    {
-                        output_robustness.push(Step::new("output", sc, r_ts));
-                        *right_last_known = right_cache.pop_front().unwrap();
-                        continue;
-                    }
-                }
-                break;
-            }
-            (None, None) => break,
+            (None, None) => {}
         }
     }
 
@@ -137,8 +140,10 @@ pub struct And<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_cache: C,
     right_cache: C,
     last_eval_time: Option<Duration>,
-    left_last_known: Step<Y>,
-    right_last_known: Step<Y>,
+    /// Newest timestamp each operand has produced a value for. Its signal is known up to
+    /// here and no further, which is what decides how far the combination can be answered.
+    left_frontier: Option<Duration>,
+    right_frontier: Option<Duration>,
     left_signals_set: HashSet<&'static str>,
     right_signals_set: HashSet<&'static str>,
     max_lookahead: Duration,
@@ -166,8 +171,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> And<T, C, Y, IS_EAGER, 
             left_cache: left_cache.unwrap_or_else(|| C::new()),
             right_cache: right_cache.unwrap_or_else(|| C::new()),
             last_eval_time: None,
-            left_last_known: Step::new("", Y::unknown(), Duration::ZERO),
-            right_last_known: Step::new("", Y::unknown(), Duration::ZERO),
+            left_frontier: None,
+            right_frontier: None,
             left_signals_set: HashSet::new(),
             right_signals_set: HashSet::new(),
             max_lookahead,
@@ -202,8 +207,8 @@ where
         self.left_cache.clear();
         self.right_cache.clear();
         self.last_eval_time = None;
-        self.left_last_known = Step::new("", Y::unknown(), Duration::ZERO);
-        self.right_last_known = Step::new("", Y::unknown(), Duration::ZERO);
+        self.left_frontier = None;
+        self.right_frontier = None;
         self.left.reset();
         self.right.reset();
     }
@@ -235,6 +240,9 @@ where
                 Vec::new()
             };
 
+        if let Some(last) = left_updates.last() {
+            self.left_frontier = self.left_frontier.max(Some(last.timestamp));
+        }
         for update in &left_updates {
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.left_cache.update_step(update.clone())
@@ -250,6 +258,9 @@ where
                 Vec::new()
             };
 
+        if let Some(last) = right_updates.last() {
+            self.right_frontier = self.right_frontier.max(Some(last.timestamp));
+        }
         for update in &right_updates {
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.right_cache.update_step(update.clone())
@@ -259,10 +270,11 @@ where
         }
 
         let mut output = process_binary::<C, Y, _, IS_EAGER, IS_ROSI>(
-            &mut self.left_cache,
-            &mut self.right_cache,
-            &mut self.left_last_known,
-            &mut self.right_last_known,
+            &self.left_cache,
+            &self.right_cache,
+            self.left_frontier,
+            self.right_frontier,
+            if IS_ROSI { None } else { self.last_eval_time },
             Y::and,
             Some(Y::atomic_false()),
         );
@@ -276,10 +288,8 @@ where
 
         // we protect up to the minimum of the last known timestamps minus lookahead
         // we can safely prune it if both sides have verdict and are beyond lookahead
-        let protected_ts = self
-            .left_last_known
-            .timestamp
-            .min(self.right_last_known.timestamp)
+        let protected_ts = joint_frontier(self.left_frontier, self.right_frontier)
+            .unwrap_or_default()
             .saturating_sub(lookahead);
 
         guarded_prune(&mut self.left_cache, lookahead, protected_ts);
@@ -326,8 +336,10 @@ pub struct Or<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_cache: C,
     right_cache: C,
     last_eval_time: Option<Duration>,
-    left_last_known: Step<Y>,
-    right_last_known: Step<Y>,
+    /// Newest timestamp each operand has produced a value for. Its signal is known up to
+    /// here and no further, which is what decides how far the combination can be answered.
+    left_frontier: Option<Duration>,
+    right_frontier: Option<Duration>,
     left_signals_set: HashSet<&'static str>,
     right_signals_set: HashSet<&'static str>,
     max_lookahead: Duration,
@@ -355,16 +367,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Or<T, C, Y, IS_EAGER, I
             left_cache: left_cache.unwrap_or_else(|| C::new()),
             right_cache: right_cache.unwrap_or_else(|| C::new()),
             last_eval_time: None,
-            left_last_known: Step {
-                signal: "",
-                value: Y::unknown(),
-                timestamp: Duration::ZERO,
-            },
-            right_last_known: Step {
-                signal: "",
-                value: Y::unknown(),
-                timestamp: Duration::ZERO,
-            },
+            left_frontier: None,
+            right_frontier: None,
             left_signals_set: HashSet::new(),
             right_signals_set: HashSet::new(),
             max_lookahead,
@@ -399,8 +403,8 @@ where
         self.left_cache.clear();
         self.right_cache.clear();
         self.last_eval_time = None;
-        self.left_last_known = Step::new("", Y::unknown(), Duration::ZERO);
-        self.right_last_known = Step::new("", Y::unknown(), Duration::ZERO);
+        self.left_frontier = None;
+        self.right_frontier = None;
         self.left.reset();
         self.right.reset();
     }
@@ -432,6 +436,9 @@ where
                 Vec::new()
             };
 
+        if let Some(last) = left_updates.last() {
+            self.left_frontier = self.left_frontier.max(Some(last.timestamp));
+        }
         for update in &left_updates {
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.left_cache.update_step(update.clone())
@@ -447,6 +454,9 @@ where
                 Vec::new()
             };
 
+        if let Some(last) = right_updates.last() {
+            self.right_frontier = self.right_frontier.max(Some(last.timestamp));
+        }
         for update in &right_updates {
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.right_cache.update_step(update.clone())
@@ -456,10 +466,11 @@ where
         }
 
         let mut output = process_binary::<C, Y, _, IS_EAGER, IS_ROSI>(
-            &mut self.left_cache,
-            &mut self.right_cache,
-            &mut self.left_last_known,
-            &mut self.right_last_known,
+            &self.left_cache,
+            &self.right_cache,
+            self.left_frontier,
+            self.right_frontier,
+            if IS_ROSI { None } else { self.last_eval_time },
             Y::or,
             Some(Y::atomic_true()),
         );
@@ -473,10 +484,8 @@ where
 
         // we protect up to the minimum of the last known timestamps minus lookahead
         // we can safely prune it if both sides have verdict and are beyond lookahead
-        let protected_ts = self
-            .left_last_known
-            .timestamp
-            .min(self.right_last_known.timestamp)
+        let protected_ts = joint_frontier(self.left_frontier, self.right_frontier)
+            .unwrap_or_default()
             .saturating_sub(lookahead);
 
         guarded_prune(&mut self.left_cache, lookahead, protected_ts);

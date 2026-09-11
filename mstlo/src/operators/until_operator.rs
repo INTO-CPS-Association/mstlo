@@ -8,6 +8,7 @@ use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
     TimeInterval,
 };
+use crate::operators::unary_temporal_operators::enqueue_eval;
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
 use std::collections::{HashSet, VecDeque};
 use std::fmt::Display;
@@ -33,6 +34,12 @@ pub struct Until<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_signals_set: HashSet<&'static str>,
     right_signals_set: HashSet<&'static str>,
     max_lookahead: Duration,
+    /// Timestamp of the first operand output ever seen. A shifted evaluation timestamp
+    /// earlier than this is dropped: neither operand has a value to report there.
+    first_ts: Option<Duration>,
+    /// Newest evaluation timestamp already answered for good; a shifted timestamp at or
+    /// before it is dropped rather than re-queued into a window that has closed.
+    finalized_ts: Option<Duration>,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -73,6 +80,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
                 left_signals_set: HashSet::new(),
                 right_signals_set: HashSet::new(),
                 max_lookahead,
+                first_ts: None,
+                finalized_ts: None,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -88,6 +97,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
                 left_signals_set: HashSet::new(),
                 right_signals_set: HashSet::new(),
                 max_lookahead,
+                first_ts: None,
+                finalized_ts: None,
             }
         }
     }
@@ -140,6 +151,8 @@ where
         self.right_cache.clear();
         self.eval_buffer.clear();
         self.t_max = (Duration::ZERO, Duration::ZERO);
+        self.first_ts = None;
+        self.finalized_ts = None;
         self.left.reset();
         self.right.reset();
     }
@@ -198,12 +211,29 @@ where
         }
         all_ts.sort();
         all_ts.dedup();
+        // A breakpoint `ts` of either operand queues up to three evaluation timestamps. The
+        // satisfaction signal of `phi U[a,b] psi` changes only where a window boundary
+        // crosses an operand breakpoint, which is at `ts - a` and `ts - b`; evaluating only
+        // at `ts` misses an interval of satisfaction that opens and closes between two
+        // breakpoints. `ts` itself is kept so the operator still answers at the timestamps
+        // that were submitted to it.
         for ts in all_ts {
-            if self.eval_buffer.back().is_none_or(|&b| ts > b) {
-                self.eval_buffer.push_back(ts);
+            let earliest = *self.first_ts.get_or_insert(ts);
+            for candidate in [
+                Some(ts),
+                ts.checked_sub(self.interval.start),
+                ts.checked_sub(self.interval.end),
+            ] {
+                if let Some(t) = candidate
+                    && t >= earliest
+                    && self.finalized_ts.is_none_or(|answered| t > answered)
+                {
+                    enqueue_eval(&mut self.eval_buffer, t);
+                }
             }
         }
         let mut tasks_to_remove = Vec::new();
+        let mut newest_finalized: Option<Duration> = None;
         // Finalized entries (Case 1) are always at the front — track separately
         // to use pop_front() instead of retain() in the common case.
         let mut n_front_to_pop: usize = 0;
@@ -228,84 +258,116 @@ where
             // We must use the minimum of the current time and the window end.
             let effective_end_time = current_time.min(window_end_t_eval);
 
-            // Iterate over all t' in [window_start_t_eval, effective_end_time].
-            // We use the eval_buffer as the source of t' timestamps.
-            let t_prime_iter = self
-                .eval_buffer
-                .iter()
-                .copied()
-                .skip_while(|s| s < &window_start_t_eval)
-                .take_while(|s| s <= &effective_end_time); // Only up to current time
+            // phi must hold from t_eval onwards, so the running infimum starts at the value
+            // phi holds *at* t_eval. That value is generally carried by an earlier sample:
+            // a shifted evaluation timestamp need not be a breakpoint of phi at all. If phi
+            // is not known that far yet this t_eval cannot be evaluated, and neither can any
+            // later one, so stop.
+            let phi_held = (t_eval <= self.t_max.0)
+                .then(|| self.left_cache.zoh_at(t_eval))
+                .flatten()
+                .map(|entry| entry.value.clone());
+            let Some(phi_held) = phi_held else { break };
 
-            let mut left_cache_t_prime_min = Y::globally_identity();
-            // Collect left_cache into a vector for progressive skipping
-            let left_cache_vec: Vec<_> = self.left_cache.iter().collect();
-            let right_cache_vec: Vec<_> = self.right_cache.iter().collect();
-
-            // phi (left operand) must hold on [t_eval, t'), so its running min
-            // starts at the first sample with timestamp >= t_eval.
-            let left_skip_count = left_cache_vec
+            // Candidate t'. Both operands are piecewise constant, so
+            // `min(psi(t'), inf over [t_eval, t') of phi)` is piecewise constant too, and its
+            // supremum over the window is attained either at the window start or at an
+            // operand breakpoint inside it. The candidates therefore come from the caches
+            // and not from `eval_buffer`: a t' matters because an operand changes there, not
+            // because a verdict happens to have been asked for there.
+            // Both caches are ascending, so the breakpoints inside the window form a
+            // contiguous run -- binary search for its start, and stop at its end.
+            let left_from = self
+                .left_cache
+                .partition_point(|entry| entry.timestamp <= window_start_t_eval);
+            let right_from = self
+                .right_cache
+                .partition_point(|entry| entry.timestamp <= window_start_t_eval);
+            // Each side is ascending, so their union is a merge of the two runs, dropping
+            // duplicates as they appear. The window start comes first: every breakpoint
+            // taken is strictly after it.
+            let mut left_ts = self
+                .left_cache
                 .iter()
-                .take_while(|entry| entry.timestamp < t_eval)
-                .count();
-
-            // psi (right operand) is sampled at t' ∈ [window_start_t_eval, ...].
-            let right_skip_count = right_cache_vec
-                .iter()
-                .take_while(|entry| entry.timestamp < window_start_t_eval)
-                .count();
-
-            let mut left_cache_iter = left_cache_vec
-                .iter()
-                .skip(left_skip_count)
+                .skip(left_from)
+                .take_while(|entry| entry.timestamp <= effective_end_time)
+                .map(|entry| entry.timestamp)
                 .peekable();
-            let mut right_cache_iter = right_cache_vec.iter().skip(right_skip_count);
+            let mut right_ts = self
+                .right_cache
+                .iter()
+                .skip(right_from)
+                .take_while(|entry| entry.timestamp <= effective_end_time)
+                .map(|entry| entry.timestamp)
+                .peekable();
+            let mut t_primes: Vec<Duration> = Vec::new();
+            if window_start_t_eval <= effective_end_time {
+                t_primes.push(window_start_t_eval);
+            }
+            loop {
+                let next = match (left_ts.peek(), right_ts.peek()) {
+                    (Some(&l), Some(&r)) => l.min(r),
+                    (Some(&l), None) => l,
+                    (None, Some(&r)) => r,
+                    (None, None) => break,
+                };
+                left_ts.next_if_eq(&next);
+                right_ts.next_if_eq(&next);
+                if t_primes.last() != Some(&next) {
+                    t_primes.push(next);
+                }
+            }
 
-            // phi must hold "from now" at t_eval, so fold the sample at t_eval
-            // into the running min before iterating t'. This is required even
-            // when the first t' coincides with t_eval (i.e. interval.start == 0).
-            // If phi(t_eval) is not available yet, this t_eval cannot be
-            // evaluated; leave max_robustness_vec empty to make the outer loop wait.
-            let phi_ready = match left_cache_iter.peek() {
-                Some(first) if first.timestamp == t_eval => {
+            // phi samples strictly after t_eval, folded into the running min as t' passes
+            // them so that phi(t') itself stays excluded (until semantics).
+            let phi_from = self
+                .left_cache
+                .partition_point(|entry| entry.timestamp <= t_eval);
+            let mut left_cache_iter = self.left_cache.iter().skip(phi_from).peekable();
+            let mut left_cache_t_prime_min = phi_held;
+
+            // Cursor over psi, positioned at the entry in force at the window start:
+            // `right_from` is the first entry strictly after it, so its predecessor is
+            // the one holding there.
+            let mut psi_iter = self
+                .right_cache
+                .iter()
+                .skip(right_from.saturating_sub(1))
+                .peekable();
+            let mut psi_held: Option<&Step<Y>> = None;
+
+            for t_prime in t_primes {
+                // 1. Fold phi samples in (t_eval, t') into the cumulative min.
+                while let Some(left_step) = left_cache_iter.next_if(|s| s.timestamp < t_prime) {
                     left_cache_t_prime_min =
-                        Y::and(left_cache_t_prime_min, first.value.clone());
-                    left_cache_iter.next();
-                    true
+                        Y::and(left_cache_t_prime_min, left_step.value.clone());
                 }
-                _ => false,
-            };
+                let robustness_phi_left = left_cache_t_prime_min.clone();
 
-            if phi_ready {
-                for t_prime in t_prime_iter {
-                    // 1. Fold phi samples in [t_eval, t') into the cumulative min,
-                    //    so phi(t') itself is excluded (until semantics).
-                    while let Some(left_step) = left_cache_iter.next_if(|s| s.timestamp < t_prime) {
-                        left_cache_t_prime_min =
-                            Y::and(left_cache_t_prime_min, left_step.value.clone());
-                    }
-                    let robustness_phi_left = left_cache_t_prime_min.clone();
-
-                    // 2. Get rho_psi(t') - the right operand at t'
-                    let robustness_psi_right = match right_cache_iter.next() {
-                        Some(val) => val.value.clone(),
-                        None => Y::unknown(),
-                    };
-
-                    // 3. Eager falsification check: if phi has become false, short-circuit
-                    if IS_EAGER
-                        && robustness_phi_left == Y::atomic_false()
-                        && t_max_combined >= t_eval
-                    {
-                        falsified = true;
-                        max_robustness_vec.push(Y::atomic_false());
-                        break;
-                    }
-
-                    // 4. Combine: min(rho_psi(t'), robustness_phi_left)
-                    let robustness_t_prime = Y::and(robustness_psi_right, robustness_phi_left);
-                    max_robustness_vec.push(robustness_t_prime);
+                // 2. rho_psi(t'): the value psi holds at t'. t' is as often a breakpoint of
+                //    phi, or a bare window start, as it is a sample of psi.
+                // `t_primes` ascends, so a cursor over the cache tracks the entry psi
+                // holds at t'. The `held_until` test is the one `zoh_at` makes: a sample
+                // that has been superseded no longer answers.
+                while let Some(entry) = psi_iter.next_if(|entry| entry.timestamp <= t_prime) {
+                    psi_held = Some(entry);
                 }
+                let robustness_psi_right = (t_prime <= self.t_max.1)
+                    .then(|| psi_held.filter(|entry| entry.held_until > t_prime))
+                    .flatten()
+                    .map_or_else(Y::unknown, |entry| entry.value.clone());
+
+                // 3. Eager falsification check: if phi has become false, short-circuit
+                if IS_EAGER && robustness_phi_left == Y::atomic_false() && t_max_combined >= t_eval
+                {
+                    falsified = true;
+                    max_robustness_vec.push(Y::atomic_false());
+                    break;
+                }
+
+                // 4. Combine: min(rho_psi(t'), robustness_phi_left)
+                let robustness_t_prime = Y::and(robustness_psi_right, robustness_phi_left);
+                max_robustness_vec.push(robustness_t_prime);
             }
 
             let max_robustness = if max_robustness_vec.is_empty() {
@@ -355,8 +417,16 @@ where
             }
 
             if remove_task {
+                // Answered for good, whether by the window closing or by a short-circuit.
+                newest_finalized = Some(t_eval);
                 tasks_to_remove.push(t_eval);
             }
+        }
+
+        // A shifted timestamp derived later from a sample that has only just arrived must
+        // not re-open a window that has already been answered for good.
+        if let Some(t) = newest_finalized {
+            self.finalized_ts = Some(t);
         }
 
         // 3. Prune the caches and remove completed tasks from the buffer.
@@ -686,6 +756,10 @@ mod tests {
 
         let expected_outputs = [
             step!("output", false, Duration::from_secs(0)), // x>5 inbetween [3,4], which it isn't
+            // t = 1 is the breakpoint at 4s shifted by the lower bound. Its window is
+            // [4, 5], over which x is held at 2 by the sample at 4s, so x > 5 is false
+            // throughout. No sample of the signal lies in that window.
+            step!("output", false, Duration::from_secs(1)),
             step!("output", true, Duration::from_secs(2)),
             step!("output", true, Duration::from_secs(3)),
             step!("output", true, Duration::from_secs(4)),

@@ -54,6 +54,7 @@ fn process_eval_buffer<C, Y, FCombine, FIdentity, const IS_EAGER: bool, const IS
     cache: &C,
     window: WindowParams<'_>,
     op: OpParams<Y, FCombine, FIdentity>,
+    finalized_ts: &mut Option<Duration>,
 ) -> Vec<Step<Y>>
 where
     C: RingBufferTrait<Value = Y>,
@@ -95,22 +96,40 @@ where
         //   entry only in favour of a later one that dominates it, so a surviving entry past
         //   `window_end` still carries the correct extremum for this window. Bounding the
         //   scan would return identity() and lose that value.
-        let windowed_value = if IS_ROSI {
+        // The operand's signal is piecewise constant between the steps it emits, so the
+        // value it takes at `window_start` is the one held there, and `window_start` is
+        // generally not a step of its own. `zoh_at` returns `None` when the cache no
+        // longer holds that sample, which happens only where a dominating sample inside
+        // the window has replaced it and already carries its contribution.
+        // Only up to the frontier: past it the operand has not reported, and the newest
+        // cache entry reads as holding indefinitely because its successor is unknown.
+        let held_at_start = (window_start <= window.frontier)
+            .then(|| cache.zoh_at(window_start))
+            .flatten()
+            .map(|step| step.value.clone());
+
+        // The cache is ascending, so the first entry at or after `window_start` is a
+        // binary search. The prefix ahead of it is retained as far back as the oldest
+        // pending evaluation, so it is not worth scanning.
+        let first_in_window = cache.partition_point(|f| f.timestamp < window_start);
+        let in_window = if IS_ROSI {
             cache
                 .iter()
-                .skip_while(|s| s.timestamp < window_start)
+                .skip(first_in_window)
                 .take_while(|s| s.timestamp <= window_end)
                 .map(|s| s.value.clone())
                 .reduce(&op.combine)
-                .unwrap_or_else(&op.identity)
         } else {
             cache
                 .iter()
-                // .find(|f| f.timestamp >= window_start) // equivalent but wayyy slower than skip_while + next but clippy complains..
-                .skip_while(|f| f.timestamp < window_start)
-                .next()
+                .nth(first_in_window)
                 .map(|entry| entry.value.clone())
-                .unwrap_or_else(&op.identity)
+        };
+
+        let windowed_value = match (held_at_start, in_window) {
+            (Some(held), Some(inside)) => (op.combine)(held, inside),
+            (Some(value), None) | (None, Some(value)) => value,
+            (None, None) => (op.identity)(),
         };
 
         // The `!IS_ROSI` guard keeps eager short-circuiting out of RoSI, where it is both
@@ -128,6 +147,11 @@ where
         }
     }
 
+    if n_finalized > 0 {
+        // Newest timestamp answered for good, so a shifted timestamp derived later from a
+        // sample that has only just arrived cannot re-open a window already closed.
+        *finalized_ts = Some(eval_buffer[n_finalized - 1]);
+    }
     eval_buffer.drain(..n_finalized);
 
     output_robustness
@@ -146,73 +170,21 @@ where
         .unwrap_or(Duration::ZERO)
 }
 
-/// Signal tag for cache entries that carry the operand's *held* value rather than a
-/// value the operand emitted. Only used to make cache dumps readable; the emitted
-/// verdicts are re-tagged `"output"` by [`process_eval_buffer`].
-const HELD: &str = "hold";
-
-/// Materializes the operand's held value at the window starts inside a newly closed
-/// constant segment.
+/// Inserts an evaluation timestamp, keeping `eval_buffer` strictly ascending and unique.
 ///
-/// The operand's signal is piecewise constant between the steps it emits, so a step
-/// arriving at `upto` closes the segment `[back.timestamp, upto)` at the value of the
-/// current back. A pending evaluation `t_eval` whose window opens inside that segment
-/// has no cache entry at `t_eval + interval_start`, and the window scan would either
-/// find nothing at all (returning the operator's `identity()`) or start at the next
-/// operand step, in both cases reading a value the signal does not take there.
-///
-/// One entry is added per such pending evaluation, at the exact window start. Window
-/// starts are ascending in `t_eval`, so the ones falling in the segment are a slice of
-/// `eval_buffer` and the entries are appended in order. They are genuine samples of the
-/// operand's signal, so they take part in every later window scan like any other entry.
-///
-/// Two properties keep the insertion contained:
-///
-/// * The entries are never queued in `eval_buffer`, so the operator's own output
-///   breakpoints stay exactly the operand's. Without that, each inserted entry would
-///   become an evaluation timestamp of its own, needing a further entry one
-///   `interval_start` later, and so on without end.
-/// * Nothing is evicted. The entries repeat the value of the current back, so the
-///   cache stays monotone for the Lemire scan without any pruning, and the windows
-///   that [`process_eval_buffer`] is about to finalize against the pre-registration
-///   cache keep every entry they had.
-///
-/// With `interval_start == 0` the window opens on `t_eval` itself, which is always an
-/// operand step, so that case is rejected before any work is done.
-fn insert_hold_entries<C, Y>(
-    cache: &mut C,
-    eval_buffer: &VecDeque<Duration>,
-    interval_start: Duration,
-    upto: Duration,
-) where
-    C: RingBufferTrait<Value = Y>,
-    Y: RobustnessSemantics,
-{
-    // A zero lower bound never holds a window open, and this runs on every step of
-    // every temporal node, so it is worth rejecting before touching the cache.
-    if interval_start.is_zero() {
-        return;
-    }
-    let Some(back) = cache.get_back() else { return };
-    let segment_start = back.timestamp;
-    // Nothing to hold over, or no window opens before `upto` at all: `eval_buffer` is
-    // ascending, so its front bounds every window start behind it.
-    if segment_start >= upto
-        || eval_buffer
-            .front()
-            .is_none_or(|&t| t + interval_start >= upto)
-    {
-        return;
-    }
-    let held_value = back.value.clone();
-
-    let first_pending = eval_buffer.partition_point(|&t| t + interval_start <= segment_start);
-    for &t_eval in eval_buffer.range(first_pending..) {
-        let window_start = t_eval + interval_start;
-        if window_start >= upto {
-            break;
+/// A shifted timestamp is earlier than the sample that produced it, so it interleaves with
+/// entries already pending rather than extending the buffer. It can never precede one that
+/// has already been finalized: a window closes only once the frontier reaches `t + b`, and
+/// a new sample at `ts` is past the previous frontier, so `ts - b` is past every closed
+/// evaluation timestamp.
+pub(crate) fn enqueue_eval(eval_buffer: &mut VecDeque<Duration>, t: Duration) {
+    match eval_buffer.back() {
+        Some(&back) if t <= back => {
+            if let Err(pos) = eval_buffer.binary_search(&t) {
+                eval_buffer.insert(pos, t);
+            }
         }
-        cache.add_step(Step::new(HELD, held_value.clone(), window_start));
+        _ => eval_buffer.push_back(t),
     }
 }
 
@@ -229,15 +201,23 @@ fn insert_hold_entries<C, Y>(
 /// `false` means the entry was already evicted by domination, so the refinement is
 /// subsumed by the surviving value and can be dropped.
 ///
-/// Every new step also closes a constant segment of the operand, handled by
-/// [`insert_hold_entries`] before the step itself is admitted.
+/// A step at `ts` queues up to three evaluation timestamps. The satisfaction signal of
+/// `F[a,b] phi` or `G[a,b] phi` changes only where a window boundary crosses a breakpoint
+/// of `phi`, which is at `ts - a` and `ts - b`; evaluating only at `ts` misses an interval
+/// of satisfaction that opens and closes between two breakpoints. `ts` itself is kept so
+/// the operator still answers at the timestamps that were submitted to it.
+///
+/// A shifted timestamp before the operand's first sample is dropped, since the operand has
+/// no value to report there, as is one at or before `finalized_ts`, which would re-open a
+/// window already answered.
 fn register_sub_steps<C, Y, const IS_ROSI: bool>(
     cache: &mut C,
     eval_buffer: &mut VecDeque<Duration>,
     sub_steps: Vec<Step<Y>>,
     is_max: bool,
-    window_length: Duration,
-    interval_start: Duration,
+    interval: &TimeInterval,
+    first_ts: &mut Option<Duration>,
+    finalized_ts: Option<Duration>,
 ) where
     C: RingBufferTrait<Value = Y>,
     Y: RobustnessSemantics + Debug,
@@ -247,11 +227,20 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
             .get_back()
             .is_none_or(|back| sub_step.timestamp > back.timestamp)
         {
-            // The step closes a constant segment of the operand, so the value held
-            // over it is now known at every window start it covers.
-            insert_hold_entries(cache, eval_buffer, interval_start, sub_step.timestamp);
-            eval_buffer.push_back(sub_step.timestamp);
-            pop_dominated_values(cache, &sub_step, is_max, window_length);
+            let earliest = *first_ts.get_or_insert(sub_step.timestamp);
+            enqueue_eval(eval_buffer, sub_step.timestamp);
+            for shift in [interval.start, interval.end] {
+                if let Some(t) = sub_step.timestamp.checked_sub(shift)
+                    && t >= earliest
+                    && finalized_ts.is_none_or(|answered| t > answered)
+                {
+                    enqueue_eval(eval_buffer, t);
+                }
+            }
+            // After `enqueue_eval`, the front of the buffer is the oldest window still
+            // waiting for an answer, which is what bounds the eviction below.
+            let oldest_pending = eval_buffer.front().copied();
+            pop_dominated_values(cache, &sub_step, is_max, oldest_pending, interval.end);
             cache.add_step(sub_step);
         } else if IS_ROSI {
             cache.update_step(sub_step);
@@ -263,18 +252,26 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
 /// sliding min/max).
 ///
 /// `is_max = true` is used for `Eventually`; `is_max = false` for `Globally`.
+///
+/// A dominated entry may be dropped only once the step that dominates it stands in for it
+/// in every window that could still ask for it. The windows still to be answered are those
+/// of `oldest_pending` onwards, the earliest of which ends at `oldest_pending +
+/// interval_end`, so the dominating step has to fall at or before that. Bounding by the
+/// dominated entry itself would instead assume that every window holding it in its interior
+/// has been answered, which fails whenever answers lag behind the input, as under nesting.
 fn pop_dominated_values<C, Y>(
     cache: &mut C,
     sub_step: &Step<Y>,
     is_max: bool,
-    window_length: Duration,
+    oldest_pending: Option<Duration>,
+    interval_end: Duration,
 ) where
     C: RingBufferTrait<Value = Y>,
     Y: RobustnessSemantics + Debug,
 {
     while let Some(back) = cache.get_back() {
         if Y::prune_dominated(back.value.clone(), sub_step.value.clone(), is_max)
-            && back.timestamp + window_length >= sub_step.timestamp
+            && oldest_pending.is_some_and(|oldest| oldest + interval_end >= sub_step.timestamp)
         {
             cache.pop_back();
         } else {
@@ -295,6 +292,10 @@ pub struct Eventually<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     eval_buffer: VecDeque<Duration>,
     max_lookahead: Duration,
     operand_lookahead: Duration,
+    /// Timestamp of the operand's first sample; a shifted timestamp before it is dropped.
+    first_ts: Option<Duration>,
+    /// Newest evaluation timestamp already answered for good. See [`register_sub_steps`].
+    finalized_ts: Option<Duration>,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -327,6 +328,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 eval_buffer,
                 max_lookahead,
                 operand_lookahead,
+                first_ts: None,
+                finalized_ts: None,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -339,6 +342,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 eval_buffer,
                 max_lookahead,
                 operand_lookahead,
+                first_ts: None,
+                finalized_ts: None,
             }
         }
     }
@@ -367,6 +372,8 @@ where
     fn reset(&mut self) {
         self.cache.clear();
         self.eval_buffer.clear();
+        self.first_ts = None;
+        self.finalized_ts = None;
         self.operand.reset();
     }
 
@@ -385,18 +392,6 @@ where
         } else {
             Duration::ZERO
         };
-
-        // Phase 0: the first new sub-step closes a constant segment of the operand.
-        // Materialize the held value at the window starts it covers before Phase A
-        // finalizes anything against the cache.
-        if let Some(first) = sub_robustness_vec.first() {
-            insert_hold_entries(
-                &mut self.cache,
-                &self.eval_buffer,
-                self.interval.start,
-                first.timestamp,
-            );
-        }
 
         // Phase A: finalize windows that close strictly before the
         // first new sub-step, against the current (pre-Phase-B) cache.
@@ -419,6 +414,7 @@ where
                     identity: Y::eventually_identity,
                     eager_short_circuit: Y::atomic_true(),
                 },
+                &mut self.finalized_ts,
             ));
         }
 
@@ -428,8 +424,9 @@ where
             &mut self.eval_buffer,
             sub_robustness_vec,
             true,
-            self.interval.window_length(),
-            self.interval.start,
+            &self.interval,
+            &mut self.first_ts,
+            self.finalized_ts,
         );
 
         // Phase C: process remaining eval_buffer entries with the updated cache.
@@ -447,6 +444,7 @@ where
                 identity: Y::eventually_identity,
                 eager_short_circuit: Y::atomic_true(),
             },
+            &mut self.finalized_ts,
         ));
 
         // Prune the cache.
@@ -478,6 +476,10 @@ pub struct Globally<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     eval_buffer: VecDeque<Duration>,
     max_lookahead: Duration,
     operand_lookahead: Duration,
+    /// Timestamp of the operand's first sample; a shifted timestamp before it is dropped.
+    first_ts: Option<Duration>,
+    /// Newest evaluation timestamp already answered for good. See [`register_sub_steps`].
+    finalized_ts: Option<Duration>,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -510,6 +512,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 eval_buffer,
                 max_lookahead,
                 operand_lookahead,
+                first_ts: None,
+                finalized_ts: None,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -522,6 +526,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 eval_buffer,
                 max_lookahead,
                 operand_lookahead,
+                first_ts: None,
+                finalized_ts: None,
             }
         }
     }
@@ -550,6 +556,8 @@ where
     fn reset(&mut self) {
         self.cache.clear();
         self.eval_buffer.clear();
+        self.first_ts = None;
+        self.finalized_ts = None;
         self.operand.reset();
     }
 
@@ -568,18 +576,6 @@ where
         } else {
             Duration::ZERO
         };
-
-        // Phase 0: the first new sub-step closes a constant segment of the operand.
-        // Materialize the held value at the window starts it covers before Phase A
-        // finalizes anything against the cache.
-        if let Some(first) = sub_robustness_vec.first() {
-            insert_hold_entries(
-                &mut self.cache,
-                &self.eval_buffer,
-                self.interval.start,
-                first.timestamp,
-            );
-        }
 
         // Phase A: finalize windows that close strictly before the
         // first new sub-step, against the current (pre-Phase-B) cache.
@@ -602,6 +598,7 @@ where
                     identity: Y::globally_identity,
                     eager_short_circuit: Y::atomic_false(),
                 },
+                &mut self.finalized_ts,
             ));
         }
 
@@ -611,8 +608,9 @@ where
             &mut self.eval_buffer,
             sub_robustness_vec,
             false,
-            self.interval.window_length(),
-            self.interval.start,
+            &self.interval,
+            &mut self.first_ts,
+            self.finalized_ts,
         );
 
         // Phase C: process remaining eval_buffer entries with the updated cache.
@@ -630,6 +628,7 @@ where
                 identity: Y::globally_identity,
                 eager_short_circuit: Y::atomic_false(),
             },
+            &mut self.finalized_ts,
         ));
 
         // Prune the cache.
@@ -1084,10 +1083,17 @@ mod sparse_timestamp_tests {
                             "t_eval={t_eval} expected RoSI to collapse to [13, 13], got {iv:?}"
                         );
                     }
-                    // x = 2 violates the atom, so eager cannot conclude yet and must wait.
+                    // x = 2 violates the atom, so eager cannot conclude for t_eval = 5 and
+                    // must wait. It does conclude for t_eval = 3, the breakpoint at 5s
+                    // shifted by the window length: the window [3, 5] still lies inside the
+                    // segment that the sample at 2s holds at 16.
                     assert!(
-                        out_eager.is_empty(),
-                        "t=5 eager must stay pending, got {out_eager:?}"
+                        !out_eager.iter().any(|s| s.timestamp == secs(5)),
+                        "t=5 eager must stay pending for t_eval=5, got {out_eager:?}"
+                    );
+                    assert!(
+                        find_output_secs(&out_eager, 3),
+                        "t_eval=3 expected an eager true from the held value, got {out_eager:?}"
                     );
                     let iv = find_output_secs(&out_rosi, 5);
                     assert!(
@@ -1521,9 +1527,24 @@ mod sparse_timestamp_tests {
                     "t_eval=3500 expected F ROSI bounds to be [3.0, +inf], got {:?}",
                     even_rosi_val_3
                 );
+                // t_eval = 1500 is the breakpoint at 3.5s shifted by the window length.
+                // Its window [1.5, 3.5] opens inside the segment held by the sample at 1s,
+                // where x = 1, so G is 1 and F is 3 over it.
+                let glob_rosi_val_1500 = find_output_millis(&globally_rosi_out, 1500);
+                let even_rosi_val_1500 = find_output_millis(&eventually_rosi_out, 1500);
                 assert!(
-                    globally_rosi_out.len() == 3 && eventually_rosi_out.len() == 3,
-                    "t_eval=3500 expected exactly three ROSI outputs for G and F, got {:?} and {:?}",
+                    glob_rosi_val_1500.0 == 1.0 && glob_rosi_val_1500.1 == 1.0,
+                    "t_eval=1500 expected G ROSI bounds to be [1.0, 1.0], got {:?}",
+                    glob_rosi_val_1500
+                );
+                assert!(
+                    even_rosi_val_1500.0 == 3.0 && even_rosi_val_1500.1 == 3.0,
+                    "t_eval=1500 expected F ROSI bounds to be [3.0, 3.0], got {:?}",
+                    even_rosi_val_1500
+                );
+                assert!(
+                    globally_rosi_out.len() == 4 && eventually_rosi_out.len() == 4,
+                    "t_eval=3500 expected exactly four ROSI outputs for G and F, got {:?} and {:?}",
                     globally_rosi_out,
                     eventually_rosi_out
                 );
