@@ -446,7 +446,19 @@ where
         ));
 
         // Prune the cache.
-        let protected_ts = self.eval_buffer.front().copied().unwrap_or(Duration::ZERO);
+        //
+        // a sample still to arrive at `ts` queues the shifted timestamp `ts - interval.end`,
+        // whose window opens at `ts - interval.end + interval.start`. The earliest such window
+        // start still reachable is the one derived from a sample just past the frontier, so the value
+        // in force there has to survive even though nothing pending asks for it yet.
+        let earliest_future_window_start = cache_frontier(&self.cache)
+            .saturating_sub(self.interval.end.saturating_sub(self.interval.start));
+        let protected_ts = self
+            .eval_buffer
+            .front()
+            .copied()
+            .unwrap_or(Duration::ZERO)
+            .min(earliest_future_window_start);
         guarded_prune(&mut self.cache, self.max_lookahead, protected_ts);
 
         output_robustness
@@ -630,7 +642,23 @@ where
         ));
 
         // Prune the cache.
-        let protected_ts = self.eval_buffer.front().copied().unwrap_or(Duration::ZERO);
+        //
+        // The evaluation buffer is not the whole story: a sample still to arrive at `ts`
+        // queues the shifted timestamp `ts - interval.end`, whose window opens at
+        // `ts - interval.end + interval.start`. The earliest such window start still
+        // reachable is the one derived from a sample just past the frontier, so the value
+        // in force there has to survive even though nothing pending asks for it yet.
+        // Pruning it away leaves the window-start ZOH read empty and the window is then
+        // aggregated without the value it opens on -- reporting, for `F`, a violation over
+        // an interval where the operand is in force and satisfied.
+        let earliest_future_window_start = cache_frontier(&self.cache)
+            .saturating_sub(self.interval.end.saturating_sub(self.interval.start));
+        let protected_ts = self
+            .eval_buffer
+            .front()
+            .copied()
+            .unwrap_or(Duration::ZERO)
+            .min(earliest_future_window_start);
         guarded_prune(&mut self.cache, self.max_lookahead, protected_ts);
 
         output_robustness
