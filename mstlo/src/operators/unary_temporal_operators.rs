@@ -18,8 +18,7 @@ struct WindowParams<'a> {
     interval: &'a TimeInterval,
     /// Newest timestamp the operand has produced a value for. The operand's signal is
     /// known up to here and no further, which is what decides whether a window is
-    /// closed -- not the input clock, which runs ahead of any operand that has to wait
-    /// for a second signal or for a window of its own.
+    /// closed.
     frontier: Duration,
     /// How far past a window's end the frontier must reach before the values inside it
     /// stop moving. Zero in the delayed and eager modes, where the operand emits a value
@@ -193,7 +192,7 @@ pub(crate) fn enqueue_eval(eval_buffer: &mut VecDeque<Duration>, t: Duration) {
 /// `eval_buffer` holds the pending evaluation timestamps: strictly ascending and unique.
 /// `cache.get_back()` is the watermark of the newest timestamp ever admitted —
 /// [`pop_dominated_values`] only evicts the back in favour of a strictly newer step, and
-/// [`guarded_prune`] only evicts from the front — so a step is new iff its timestamp
+/// [`guarded_prune`] only evicts from the front – so a step is new iff its timestamp
 /// exceeds it.
 ///
 /// Under RoSI the operand re-emits already-seen timestamps as refined verdicts. Those are
@@ -228,7 +227,8 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
             .is_none_or(|back| sub_step.timestamp > back.timestamp)
         {
             let earliest = *first_ts.get_or_insert(sub_step.timestamp);
-            enqueue_eval(eval_buffer, sub_step.timestamp);
+            enqueue_eval(eval_buffer, sub_step.timestamp); // always enqueue substep's ts
+            // check for windowed eval timestamps (ts-a and ts-b)
             for shift in [interval.start, interval.end] {
                 if let Some(t) = sub_step.timestamp.checked_sub(shift)
                     && t >= earliest
@@ -256,9 +256,7 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
 /// A dominated entry may be dropped only once the step that dominates it stands in for it
 /// in every window that could still ask for it. The windows still to be answered are those
 /// of `oldest_pending` onwards, the earliest of which ends at `oldest_pending +
-/// interval_end`, so the dominating step has to fall at or before that. Bounding by the
-/// dominated entry itself would instead assume that every window holding it in its interior
-/// has been answered, which fails whenever answers lag behind the input, as under nesting.
+/// interval_end`, so the dominating step has to fall at or before that.
 fn pop_dominated_values<C, Y>(
     cache: &mut C,
     sub_step: &Step<Y>,
