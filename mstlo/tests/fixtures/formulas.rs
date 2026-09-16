@@ -121,3 +121,9 @@ pub fn formula_10() -> FormulaDefinition {
 pub fn formula_11() -> FormulaDefinition {
     stl! {x<8 U[0,4] (x>5)}
 }
+
+#[fixture]
+#[once]
+pub fn formula_12() -> FormulaDefinition {
+    stl! {G[0,2] (x > 10.0) && F[0,3] (y < 20.0)}
+}

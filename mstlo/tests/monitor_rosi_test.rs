@@ -191,6 +191,16 @@ fn test_rosi_interval_bounds(
 }
 
 #[rstest]
+#[case(vec![formula_12()])]
+#[case(vec![formula_8(), formula_8_alt()])]
+fn test_rosi_interval_bounds_2(
+    #[case] formulas: Vec<FormulaDefinition>,
+    #[values(signal_5())] signal: Vec<Step<f64>>,
+) {
+    run_rosi_interval_bounds_check(formulas, signal);
+}
+
+#[rstest]
 fn test_library_formulas_rosi(
     #[values(
         monotonic_increasing(),

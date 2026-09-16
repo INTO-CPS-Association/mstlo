@@ -1,4 +1,4 @@
-//! Specification for `SignalInterpretation::Linear`.
+//! Specification for `SignalInterpolation::Linear`.
 //!
 //! This suite is the contract for reading input signals as **piecewise linear** between
 //! consecutive samples instead of holding them zero-order.
@@ -12,21 +12,21 @@
 use mstlo::monitor::{
     Algorithm, DelayedQualitative, DelayedQuantitative, EagerQualitative, Rosi, StlMonitor,
 };
-use mstlo::{FormulaDefinition, SignalInterpretation, Step, step, stl};
+use mstlo::{FormulaDefinition, SignalInterpolation, Step, step, stl};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 /// Latest verdict per timestamp, which is what a consumer of the stream ends up holding.
 fn run(
     formula: FormulaDefinition,
-    interpretation: SignalInterpretation,
+    interpolation: SignalInterpolation,
     trace: &[Step<f64>],
 ) -> BTreeMap<Duration, bool> {
     let mut monitor = StlMonitor::builder()
         .formula(formula)
         .semantics(DelayedQualitative)
         .algorithm(Algorithm::Incremental)
-        .signal_interpretation(interpretation)
+        .signal_interpolation(interpolation)
         .build()
         .unwrap();
 
@@ -40,11 +40,11 @@ fn run(
 }
 
 fn linear(formula: FormulaDefinition, trace: &[Step<f64>]) -> BTreeMap<Duration, bool> {
-    run(formula, SignalInterpretation::Linear, trace)
+    run(formula, SignalInterpolation::Linear, trace)
 }
 
 fn zoh(formula: FormulaDefinition, trace: &[Step<f64>]) -> BTreeMap<Duration, bool> {
-    run(formula, SignalInterpretation::ZeroOrderHold, trace)
+    run(formula, SignalInterpolation::ZeroOrderHold, trace)
 }
 
 fn secs(t: u64) -> Duration {
@@ -130,7 +130,7 @@ fn a7_zero_order_hold_invents_no_crossing() {
 /// closed and `x = 4` at its right end, which is not `> 4`.
 ///
 /// Under ZOH the predicate stays true until the `4s` sample, so the same window reads
-/// true. This is the headline behavioural difference between the two interpretations.
+/// true. This is the headline behavioural difference between the two interpolations.
 #[test]
 fn b1_globally_sees_the_crossing_inside_a_closed_window() {
     let trace = x_trace(&[(0, 6.0), (4, 2.0)]);
@@ -228,28 +228,27 @@ fn b4_until_finds_a_witness_strictly_between_psi_samples() {
 
 /// A single-signal formula must actually be monitored linearly.
 ///
-/// Today `monitor.rs` forces the synchronizer to `None` whenever the formula mentions at
-/// most one signal, because the old synchronizer was inherently cross-signal. Signal
-/// interpretation is a property of each signal on its own, so that downgrade must not
-/// survive: the request must be honoured, and observably so.
+/// Synchronization was cross-signal and so pointless on a one-signal formula. Signal
+/// interpolation is a property of each signal on its own, so it must not be downgraded
+/// away on that basis: the request has to be honoured, and observably so.
 #[test]
 fn b5_single_signal_formula_is_not_downgraded() {
     let monitor = StlMonitor::builder()
         .formula(stl! {G[0,2] (x > 4)})
         .semantics(DelayedQualitative)
         .algorithm(Algorithm::Incremental)
-        .signal_interpretation(SignalInterpretation::Linear)
+        .signal_interpolation(SignalInterpolation::Linear)
         .build()
         .unwrap();
 
     assert_eq!(
-        monitor.signal_interpretation(),
-        SignalInterpretation::Linear,
-        "one signal identifier must not silently downgrade the interpretation"
+        monitor.signal_interpolation(),
+        SignalInterpolation::Linear,
+        "one signal identifier must not silently downgrade the interpolation"
     );
     assert!(
         format!("{monitor}").contains("Linear"),
-        "Display should report the interpretation in force"
+        "Display should report the interpolation in force"
     );
 }
 
@@ -266,7 +265,7 @@ fn c1_linear_is_rejected_for_delayed_quantitative() {
         .formula(stl! {x > 4})
         .semantics(DelayedQuantitative)
         .algorithm(Algorithm::Incremental)
-        .signal_interpretation(SignalInterpretation::Linear)
+        .signal_interpolation(SignalInterpolation::Linear)
         .build()
         .err()
         .expect("quantitative robustness under Linear is not exact and must be refused");
@@ -283,7 +282,7 @@ fn c2_linear_is_rejected_for_robustness_interval() {
         .formula(stl! {x > 4})
         .semantics(Rosi)
         .algorithm(Algorithm::Incremental)
-        .signal_interpretation(SignalInterpretation::Linear)
+        .signal_interpolation(SignalInterpolation::Linear)
         .build()
         .err()
         .expect("RoSI carries quantitative bounds, so Linear must be refused");
@@ -295,7 +294,7 @@ fn c3_linear_is_rejected_for_the_naive_algorithm() {
         .formula(stl! {x > 4})
         .semantics(DelayedQualitative)
         .algorithm(Algorithm::Naive)
-        .signal_interpretation(SignalInterpretation::Linear)
+        .signal_interpolation(SignalInterpolation::Linear)
         .build()
         .err()
         .expect("the naive backend does not route through Atomic, so it cannot cross");
@@ -307,7 +306,7 @@ fn c4_linear_builds_for_both_qualitative_semantics() {
         .formula(stl! {x > 4})
         .semantics(DelayedQualitative)
         .algorithm(Algorithm::Incremental)
-        .signal_interpretation(SignalInterpretation::Linear)
+        .signal_interpolation(SignalInterpolation::Linear)
         .build()
         .expect("delayed qualitative is exact under Linear");
 
@@ -315,7 +314,7 @@ fn c4_linear_builds_for_both_qualitative_semantics() {
         .formula(stl! {x > 4})
         .semantics(EagerQualitative)
         .algorithm(Algorithm::Incremental)
-        .signal_interpretation(SignalInterpretation::Linear)
+        .signal_interpolation(SignalInterpolation::Linear)
         .build()
         .expect("eager qualitative is exact under Linear");
 }

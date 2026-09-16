@@ -2,24 +2,17 @@
 mod common;
 mod fixtures;
 
+use mstlo::Step;
 use mstlo::monitor::{Algorithm, DelayedQuantitative, EagerQualitative, Rosi, StlMonitor};
 use mstlo::step;
 use mstlo::stl;
-use mstlo::{Step, SynchronizationStrategy};
-use rstest::rstest;
 use std::time::Duration;
 use std::vec;
 
 use common::*;
 
-#[rstest]
-fn test_signal_interleaving(
-    #[values(
-        SynchronizationStrategy::ZeroOrderHold,
-        SynchronizationStrategy::Linear
-    )]
-    interpolation_strategy: SynchronizationStrategy,
-) {
+#[test]
+fn test_signal_interleaving() {
     // test that outputs are correctly produced when signals are interleaved over multiple timesteps
     let steps = [
         step!("x", 1.0, Duration::from_secs(0)),
@@ -35,7 +28,6 @@ fn test_signal_interleaving(
         .formula(stl! { G[0,20]((x > 0) && (y < 150)) })
         .semantics(Rosi)
         .algorithm(Algorithm::Incremental)
-        .synchronization_strategy(interpolation_strategy)
         .build()
         .unwrap();
 
@@ -62,17 +54,15 @@ fn test_signal_interleaving(
     assert_eq!(out6.verdicts().len(), 5); // now we have both signals at t=10
 }
 
-#[rstest]
-fn test_until_two_disjoint_signals(
-    #[values(
-        SynchronizationStrategy::ZeroOrderHold,
-        SynchronizationStrategy::Linear
-    )]
-    strategy: SynchronizationStrategy,
-) {
+#[test]
+fn test_until_two_disjoint_signals() {
     let formula = stl! {G[0,2](x > 0) U[0, 4] (y > 5)};
 
-    let x_steps = create_steps("x", vec![5.0, 3.0, 1.0, -7.0, 1.0], vec![0, 3, 4, 5, 7, 8]);
+    let x_steps = create_steps(
+        "x",
+        vec![5.0, 3.0, 1.0, -7.0, 1.0, 1.0],
+        vec![0, 3, 4, 5, 7, 8],
+    );
     let y_steps = create_steps("y", vec![1.0, 8.0, 8.0, 10.0], vec![2, 6, 9, 10]);
     let signal = combine_and_sort_steps(vec![x_steps, y_steps]);
 
@@ -81,7 +71,6 @@ fn test_until_two_disjoint_signals(
         .formula(formula.clone())
         .semantics(DelayedQuantitative)
         .algorithm(Algorithm::Incremental)
-        .synchronization_strategy(strategy)
         .build()
         .unwrap();
 
@@ -89,7 +78,6 @@ fn test_until_two_disjoint_signals(
         .formula(formula.clone())
         .semantics(EagerQualitative)
         .algorithm(Algorithm::Incremental)
-        .synchronization_strategy(strategy)
         .build()
         .unwrap();
 
@@ -100,7 +88,7 @@ fn test_until_two_disjoint_signals(
         bool_per_step.push(incr_bool.update(step).all_raw_outputs());
     }
 
-    eprintln!("=== Disjoint Until: {:?} ===", strategy);
+    eprintln!("=== Disjoint Until ===");
     eprintln!("Raw signals: {:?}", signal);
     for (i, (f64_out, bool_out)) in f64_per_step.iter().zip(bool_per_step.iter()).enumerate() {
         eprintln!("  step {}: f64={:?}  bool={:?}", i, f64_out, bool_out);
@@ -119,14 +107,8 @@ fn test_until_two_disjoint_signals(
     );
 }
 
-#[rstest]
-fn test_synchronization(
-    #[values(
-        SynchronizationStrategy::ZeroOrderHold,
-        SynchronizationStrategy::Linear
-    )]
-    interpolation_strategy: SynchronizationStrategy,
-) {
+#[test]
+fn test_synchronization() {
     // x_steps are even timestamps from 0 to 100
     let x_steps: Vec<Step<f64>> = (0..101)
         .step_by(2)
@@ -142,7 +124,6 @@ fn test_synchronization(
         .formula(stl! { (x > 0) && (y < 150) })
         .semantics(Rosi)
         .algorithm(Algorithm::Incremental)
-        .synchronization_strategy(interpolation_strategy)
         .build()
         .unwrap();
 
