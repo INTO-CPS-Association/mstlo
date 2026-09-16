@@ -7,7 +7,7 @@
 //! - a high-level monitor builder API,
 //! - incremental evaluation backend,
 //! - multiple semantics (qualitative, quantitative, RoSI), and
-//! - optional multi-signal synchronization/interpolation.
+//! - selectable signal interpolation (zero-order hold or linear).
 //!
 //! ## Simple usage
 //!
@@ -111,6 +111,8 @@ pub use parser::{ParseError, parse_stl};
 #[cfg(feature = "track-cache-size")]
 pub use ring_buffer::GLOBAL_CACHE_SIZE;
 pub use ring_buffer::{RingBuffer, RingBufferTrait, Step};
-pub use synchronizer::{Interpolatable, SynchronizationStrategy, Synchronizer};
+#[allow(deprecated)]
+pub use synchronizer::SynchronizationStrategy;
+pub use synchronizer::{Interpolatable, SignalInterpolation, Synchronizer};
 
 pub use mstlo_macros::{step, steps, stl};
