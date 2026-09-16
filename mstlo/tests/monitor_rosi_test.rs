@@ -4,9 +4,9 @@ mod fixtures;
 
 use fixtures::formulas::*;
 use fixtures::signals::*;
-use mstlo::Step;
 use mstlo::monitor::{Algorithm, DelayedQuantitative, Rosi, StlMonitor};
 use mstlo::{FormulaDefinition, RobustnessInterval};
+use mstlo::{Step, step, stl};
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use std::collections::HashMap;
@@ -195,7 +195,15 @@ fn test_rosi_interval_bounds(
 #[case(vec![formula_8(), formula_8_alt()])]
 fn test_rosi_interval_bounds_2(
     #[case] formulas: Vec<FormulaDefinition>,
-    #[values(signal_5())] signal: Vec<Step<f64>>,
+    #[values(signal_5(), vec![
+        step!("x", 5.0, 0s),
+        step!("y", 25.0, 0s),
+        step!("x", 15.0, 2s),
+        step!("y", 15.0, 3s),
+        step!("x", 8.0, 4s),
+        step!("y", 30.0, 5s),
+    ])]
+    signal: Vec<Step<f64>>,
 ) {
     run_rosi_interval_bounds_check(formulas, signal);
 }
