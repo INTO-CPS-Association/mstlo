@@ -54,6 +54,11 @@ where
         self.operand.reset();
     }
 
+    /// Negation is pointwise, so this stream has exactly the operand's holes.
+    fn known_through(&self) -> Option<Duration> {
+        self.operand.known_through()
+    }
+
     /// Updates the child operator and negates each produced value.
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let operand_updates = self.operand.update(step);

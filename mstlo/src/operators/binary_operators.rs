@@ -10,7 +10,7 @@ use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
 };
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
@@ -20,6 +20,98 @@ use std::time::Duration;
 /// has reported at time zero: the first cannot answer anywhere, the second answers there.
 fn joint_frontier(left: Option<Duration>, right: Option<Duration>) -> Option<Duration> {
     Some(left?.min(right?))
+}
+
+/// Caps a frontier by what the operand reports as gap-free; see
+/// [`StlOperatorTrait::known_through`]. A `None` bound means no holes, so no cap.
+///
+/// Apply this after taking the max with the newest emitted timestamp: unlike that
+/// timestamp this bound does not only rise, and must be able to pull the frontier back
+/// when a hole opens.
+fn clamp_to_known(frontier: Option<Duration>, known: Option<Duration>) -> Option<Duration> {
+    match known {
+        Some(bound) => Some(frontier?.min(bound)),
+        None => frontier,
+    }
+}
+
+/// Whether `ts` lies inside the region both operands have reported on.
+fn within(joint: Option<Duration>, ts: Duration) -> bool {
+    joint.is_some_and(|frontier| ts <= frontier)
+}
+
+/// Settles the emission watermark for eager mode after a batch of output.
+///
+/// Advances it to the newest output at or below the joint frontier, and records the
+/// timestamps short-circuited past that frontier separately. Those answers are final, but
+/// must not move the watermark: the lagging operand can still deliver a breakpoint earlier
+/// in time, and the watermark is what would drop it.
+fn settle_eager_watermark<Y>(
+    output: &[Step<Y>],
+    joint: Option<Duration>,
+    last_eval_time: &mut Option<Duration>,
+    answered_beyond_joint: &mut VecDeque<Duration>,
+) {
+    // Only timestamps both operands could answer finalize in the ordinary sense.
+    if let Some(eval_time) = output
+        .iter()
+        .map(|step| step.timestamp)
+        .rfind(|ts| within(joint, *ts))
+    {
+        *last_eval_time = Some(eval_time);
+    }
+
+    answered_beyond_joint.extend(
+        output
+            .iter()
+            .map(|step| step.timestamp)
+            .filter(|ts| !within(joint, *ts)),
+    );
+
+    // Once the watermark reaches a remembered timestamp it suppresses re-emission on its
+    // own, so the queue only ever holds the genuinely-ahead ones and stays bounded by the
+    // frontier gap rather than by the length of the trace.
+    if let Some(last) = *last_eval_time {
+        answered_beyond_joint.retain(|ts| *ts > last);
+    }
+}
+
+/// One side of a binary operator: the cache of what that operand has emitted, plus what is
+/// needed to read a value back out of it correctly.
+struct Operand<'a, C> {
+    cache: &'a C,
+    /// Newest timestamp the operand has produced a value for. Its output is known up to
+    /// here and no further.
+    frontier: Option<Duration>,
+    /// The operand's [`StlOperatorTrait::get_max_lookahead`], which for a temporal operator
+    /// is exactly the distance from its window end back to the evaluation timestamp.
+    lookahead: Duration,
+}
+
+/// Reads what an operand is worth at `ts`, through the cache of its emissions.
+///
+/// An operand's output is piecewise constant with breakpoints exactly where it emits, so a
+/// zero-order-hold read of the cache is exact -- but only up to `frontier - lookahead`.
+/// Past that mark the operand's own window is still open at `ts`, so the value it emitted
+/// below `ts` is refinable, and holding it forward would pass on a finality the operand
+/// never claimed. `ts` is then simply outside what this operand is known over, which is the
+/// `[f_inf, f_sup]` case of the RoSI atomic rule: [`RobustnessSemantics::unknown`].
+fn read_operand<C, Y, const IS_ROSI: bool>(operand: &Operand<'_, C>, ts: Duration) -> Option<Y>
+where
+    C: RingBufferTrait<Value = Y>,
+    Y: RobustnessSemantics + Copy,
+{
+    if !within(operand.frontier, ts) {
+        return None;
+    }
+    if IS_ROSI
+        && operand
+            .frontier
+            .is_some_and(|bound| ts + operand.lookahead > bound)
+    {
+        return Some(Y::unknown());
+    }
+    operand.cache.zoh_at(ts).map(|entry| entry.value)
 }
 
 /// A unified binary processor that handles Delayed, Eager, and Refinable (RoSI) semantics correctly.
@@ -38,10 +130,8 @@ fn joint_frontier(left: Option<Duration>, right: Option<Duration>) -> Option<Dur
 /// earlier one that is merely still pending would push the watermark past that earlier
 /// timestamp and strand its answer.
 fn process_binary<C, Y, F, const IS_EAGER: bool, const IS_ROSI: bool>(
-    left_cache: &C,
-    right_cache: &C,
-    left_frontier: Option<Duration>,
-    right_frontier: Option<Duration>,
+    left: &Operand<'_, C>,
+    right: &Operand<'_, C>,
     start_after: Option<Duration>,
     combine_op: F,
     short_circuit_val: Option<Y>,
@@ -52,11 +142,11 @@ where
     F: Fn(Y, Y) -> Y,
 {
     let mut output_robustness = Vec::new();
-    let joint = joint_frontier(left_frontier, right_frontier);
+    let joint = joint_frontier(left.frontier, right.frontier);
     // `None` orders below every `Some`, so the maximum is the operand that has reported the
     // furthest, and is `None` only while neither has reported at all.
     let horizon = if IS_EAGER && !IS_ROSI {
-        left_frontier.max(right_frontier)
+        left.frontier.max(right.frontier)
     } else {
         joint
     };
@@ -67,12 +157,14 @@ where
     // Breakpoints at or before `start_after` have been answered already, and outside RoSI
     // an operand never revises them, so the walk can start past them and cost only what is
     // new. RoSI passes `None`: a refinement rewrites timestamps that were already emitted.
-    let l_skip =
-        start_after.map_or(0, |ts| left_cache.partition_point(|entry| entry.timestamp <= ts));
-    let r_skip =
-        start_after.map_or(0, |ts| right_cache.partition_point(|entry| entry.timestamp <= ts));
-    let mut l_iter = left_cache.iter().skip(l_skip).peekable();
-    let mut r_iter = right_cache.iter().skip(r_skip).peekable();
+    let l_skip = start_after.map_or(0, |ts| {
+        left.cache.partition_point(|entry| entry.timestamp <= ts)
+    });
+    let r_skip = start_after.map_or(0, |ts| {
+        right.cache.partition_point(|entry| entry.timestamp <= ts)
+    });
+    let mut l_iter = left.cache.iter().skip(l_skip).peekable();
+    let mut r_iter = right.cache.iter().skip(r_skip).peekable();
 
     loop {
         // Walk the union of the two breakpoint sets, consuming both when they coincide.
@@ -94,16 +186,8 @@ where
             break;
         }
 
-        let left_value = left_frontier
-            .is_some_and(|frontier| ts <= frontier)
-            .then(|| left_cache.zoh_at(ts))
-            .flatten()
-            .map(|entry| entry.value);
-        let right_value = right_frontier
-            .is_some_and(|frontier| ts <= frontier)
-            .then(|| right_cache.zoh_at(ts))
-            .flatten()
-            .map(|entry| entry.value);
+        let left_value = read_operand::<_, _, IS_ROSI>(left, ts);
+        let right_value = read_operand::<_, _, IS_ROSI>(right, ts);
 
         match (left_value, right_value) {
             (Some(l), Some(r)) => {
@@ -140,6 +224,10 @@ pub struct And<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_cache: C,
     right_cache: C,
     last_eval_time: Option<Duration>,
+    /// Timestamps eager answered ahead of the joint frontier. Held apart from
+    /// `last_eval_time` so a short-circuit cannot strand a later-arriving earlier
+    /// breakpoint; see [`settle_eager_watermark`].
+    answered_beyond_joint: VecDeque<Duration>,
     /// Newest timestamp each operand has produced a value for. Its signal is known up to
     /// here and no further, which is what decides how far the combination can be answered.
     left_frontier: Option<Duration>,
@@ -171,6 +259,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> And<T, C, Y, IS_EAGER, 
             left_cache: left_cache.unwrap_or_else(|| C::new()),
             right_cache: right_cache.unwrap_or_else(|| C::new()),
             last_eval_time: None,
+            answered_beyond_joint: VecDeque::new(),
             left_frontier: None,
             right_frontier: None,
             left_signals_set: HashSet::new(),
@@ -193,10 +282,21 @@ where
         self.max_lookahead
     }
 
+    /// Eager short-circuiting past the joint frontier is what puts holes in this stream, so
+    /// the joint frontier is exactly how far it is gap-free. Every other mode answers a
+    /// timestamp only once both operands are known there, and has no holes to declare.
+    fn known_through(&self) -> Option<Duration> {
+        if !IS_EAGER || IS_ROSI {
+            return None;
+        }
+        Some(joint_frontier(self.left_frontier, self.right_frontier).unwrap_or(Duration::ZERO))
+    }
+
     fn total_size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.left_cache.heap_size()
             + self.right_cache.heap_size()
+            + self.answered_beyond_joint.capacity() * std::mem::size_of::<Duration>()
             + self.left_signals_set.capacity() * (std::mem::size_of::<&str>() + 1)
             + self.right_signals_set.capacity() * (std::mem::size_of::<&str>() + 1)
             + self.left.total_size()
@@ -207,6 +307,7 @@ where
         self.left_cache.clear();
         self.right_cache.clear();
         self.last_eval_time = None;
+        self.answered_beyond_joint.clear();
         self.left_frontier = None;
         self.right_frontier = None;
         self.left.reset();
@@ -243,11 +344,13 @@ where
         if let Some(last) = left_updates.last() {
             self.left_frontier = self.left_frontier.max(Some(last.timestamp));
         }
+        self.left_frontier = clamp_to_known(self.left_frontier, self.left.known_through());
         for update in &left_updates {
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.left_cache.update_step(update.clone())
             {
-                self.left_cache.add_step(update.clone());
+                // Operand output can arrive out of order; see `RingBufferTrait::insert_step`.
+                self.left_cache.insert_step(update.clone());
             }
         }
 
@@ -261,19 +364,27 @@ where
         if let Some(last) = right_updates.last() {
             self.right_frontier = self.right_frontier.max(Some(last.timestamp));
         }
+        self.right_frontier = clamp_to_known(self.right_frontier, self.right.known_through());
         for update in &right_updates {
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.right_cache.update_step(update.clone())
             {
-                self.right_cache.add_step(update.clone());
+                // Operand output can arrive out of order; see `RingBufferTrait::insert_step`.
+                self.right_cache.insert_step(update.clone());
             }
         }
 
         let mut output = process_binary::<C, Y, _, IS_EAGER, IS_ROSI>(
-            &self.left_cache,
-            &self.right_cache,
-            self.left_frontier,
-            self.right_frontier,
+            &Operand {
+                cache: &self.left_cache,
+                frontier: self.left_frontier,
+                lookahead: self.left.get_max_lookahead(),
+            },
+            &Operand {
+                cache: &self.right_cache,
+                frontier: self.right_frontier,
+                lookahead: self.right.get_max_lookahead(),
+            },
             if IS_ROSI { None } else { self.last_eval_time },
             Y::and,
             Some(Y::atomic_false()),
@@ -284,26 +395,41 @@ where
             output.retain(|step| step.timestamp > last_time);
         }
 
+        // A timestamp short-circuited beyond the joint frontier is re-walked on every later
+        // update, because the watermark deliberately stops short of it. Drop the repeats:
+        // the value is final and was already reported.
+        if IS_EAGER && !IS_ROSI && !self.answered_beyond_joint.is_empty() {
+            output.retain(|step| !self.answered_beyond_joint.contains(&step.timestamp));
+        }
+
         let lookahead = self.get_max_lookahead();
+        let joint = joint_frontier(self.left_frontier, self.right_frontier);
 
         // we protect up to the minimum of the last known timestamps minus lookahead
         // we can safely prune it if both sides have verdict and are beyond lookahead
-        let protected_ts = joint_frontier(self.left_frontier, self.right_frontier)
-            .unwrap_or_default()
-            .saturating_sub(lookahead);
+        let protected_ts = joint.unwrap_or_default().saturating_sub(lookahead);
 
         guarded_prune(&mut self.left_cache, lookahead, protected_ts);
         guarded_prune(&mut self.right_cache, lookahead, protected_ts);
 
         // Update last_eval_time based on delayed semantics
-        if let Some(eval_time) = if IS_ROSI {
+        if IS_ROSI {
             // For intervals, we track the *start* of the batch because we might re-evaluate it
-            output.first().map(|step| step.timestamp)
+            if let Some(eval_time) = output.first().map(|step| step.timestamp) {
+                self.last_eval_time = Some(eval_time);
+            }
+        } else if IS_EAGER {
+            settle_eager_watermark(
+                &output,
+                joint,
+                &mut self.last_eval_time,
+                &mut self.answered_beyond_joint,
+            );
         } else {
             // For delayed/bool, we track the *end* because everything before is finalized
-            output.last().map(|step| step.timestamp)
-        } {
-            self.last_eval_time = Some(eval_time);
+            if let Some(eval_time) = output.last().map(|step| step.timestamp) {
+                self.last_eval_time = Some(eval_time);
+            }
         }
 
         output
@@ -336,6 +462,10 @@ pub struct Or<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_cache: C,
     right_cache: C,
     last_eval_time: Option<Duration>,
+    /// Timestamps eager answered ahead of the joint frontier. Held apart from
+    /// `last_eval_time` so a short-circuit cannot strand a later-arriving earlier
+    /// breakpoint; see [`settle_eager_watermark`].
+    answered_beyond_joint: VecDeque<Duration>,
     /// Newest timestamp each operand has produced a value for. Its signal is known up to
     /// here and no further, which is what decides how far the combination can be answered.
     left_frontier: Option<Duration>,
@@ -367,6 +497,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Or<T, C, Y, IS_EAGER, I
             left_cache: left_cache.unwrap_or_else(|| C::new()),
             right_cache: right_cache.unwrap_or_else(|| C::new()),
             last_eval_time: None,
+            answered_beyond_joint: VecDeque::new(),
             left_frontier: None,
             right_frontier: None,
             left_signals_set: HashSet::new(),
@@ -389,10 +520,21 @@ where
         self.max_lookahead
     }
 
+    /// Eager short-circuiting past the joint frontier is what puts holes in this stream, so
+    /// the joint frontier is exactly how far it is gap-free. Every other mode answers a
+    /// timestamp only once both operands are known there, and has no holes to declare.
+    fn known_through(&self) -> Option<Duration> {
+        if !IS_EAGER || IS_ROSI {
+            return None;
+        }
+        Some(joint_frontier(self.left_frontier, self.right_frontier).unwrap_or(Duration::ZERO))
+    }
+
     fn total_size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.left_cache.heap_size()
             + self.right_cache.heap_size()
+            + self.answered_beyond_joint.capacity() * std::mem::size_of::<Duration>()
             + self.left_signals_set.capacity() * (std::mem::size_of::<&str>() + 1)
             + self.right_signals_set.capacity() * (std::mem::size_of::<&str>() + 1)
             + self.left.total_size()
@@ -403,6 +545,7 @@ where
         self.left_cache.clear();
         self.right_cache.clear();
         self.last_eval_time = None;
+        self.answered_beyond_joint.clear();
         self.left_frontier = None;
         self.right_frontier = None;
         self.left.reset();
@@ -439,11 +582,13 @@ where
         if let Some(last) = left_updates.last() {
             self.left_frontier = self.left_frontier.max(Some(last.timestamp));
         }
+        self.left_frontier = clamp_to_known(self.left_frontier, self.left.known_through());
         for update in &left_updates {
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.left_cache.update_step(update.clone())
             {
-                self.left_cache.add_step(update.clone());
+                // Operand output can arrive out of order; see `RingBufferTrait::insert_step`.
+                self.left_cache.insert_step(update.clone());
             }
         }
 
@@ -457,19 +602,27 @@ where
         if let Some(last) = right_updates.last() {
             self.right_frontier = self.right_frontier.max(Some(last.timestamp));
         }
+        self.right_frontier = clamp_to_known(self.right_frontier, self.right.known_through());
         for update in &right_updates {
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.right_cache.update_step(update.clone())
             {
-                self.right_cache.add_step(update.clone());
+                // Operand output can arrive out of order; see `RingBufferTrait::insert_step`.
+                self.right_cache.insert_step(update.clone());
             }
         }
 
         let mut output = process_binary::<C, Y, _, IS_EAGER, IS_ROSI>(
-            &self.left_cache,
-            &self.right_cache,
-            self.left_frontier,
-            self.right_frontier,
+            &Operand {
+                cache: &self.left_cache,
+                frontier: self.left_frontier,
+                lookahead: self.left.get_max_lookahead(),
+            },
+            &Operand {
+                cache: &self.right_cache,
+                frontier: self.right_frontier,
+                lookahead: self.right.get_max_lookahead(),
+            },
             if IS_ROSI { None } else { self.last_eval_time },
             Y::or,
             Some(Y::atomic_true()),
@@ -480,26 +633,41 @@ where
             output.retain(|step| step.timestamp > last_time);
         }
 
+        // A timestamp short-circuited beyond the joint frontier is re-walked on every later
+        // update, because the watermark deliberately stops short of it. Drop the repeats:
+        // the value is final and was already reported.
+        if IS_EAGER && !IS_ROSI && !self.answered_beyond_joint.is_empty() {
+            output.retain(|step| !self.answered_beyond_joint.contains(&step.timestamp));
+        }
+
         let lookahead = self.get_max_lookahead();
+        let joint = joint_frontier(self.left_frontier, self.right_frontier);
 
         // we protect up to the minimum of the last known timestamps minus lookahead
         // we can safely prune it if both sides have verdict and are beyond lookahead
-        let protected_ts = joint_frontier(self.left_frontier, self.right_frontier)
-            .unwrap_or_default()
-            .saturating_sub(lookahead);
+        let protected_ts = joint.unwrap_or_default().saturating_sub(lookahead);
 
         guarded_prune(&mut self.left_cache, lookahead, protected_ts);
         guarded_prune(&mut self.right_cache, lookahead, protected_ts);
 
         // Update last_eval_time based on delayed semantics
-        if let Some(eval_time) = if IS_ROSI {
+        if IS_ROSI {
             // For intervals, we track the *start* of the batch because we might re-evaluate it
-            output.first().map(|step| step.timestamp)
+            if let Some(eval_time) = output.first().map(|step| step.timestamp) {
+                self.last_eval_time = Some(eval_time);
+            }
+        } else if IS_EAGER {
+            settle_eager_watermark(
+                &output,
+                joint,
+                &mut self.last_eval_time,
+                &mut self.answered_beyond_joint,
+            );
         } else {
             // For delayed/bool, we track the *end* because everything before is finalized
-            output.last().map(|step| step.timestamp)
-        } {
-            self.last_eval_time = Some(eval_time);
+            if let Some(eval_time) = output.last().map(|step| step.timestamp) {
+                self.last_eval_time = Some(eval_time);
+            }
         }
 
         output
