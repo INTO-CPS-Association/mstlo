@@ -7,8 +7,8 @@ Tests all formula types, monitor types, and error handling.
 import subprocess
 import sys
 
-import pytest
 import mstlo_python.mstlo_python as mstlo
+import pytest
 
 
 class TestParseFormula:
@@ -647,71 +647,120 @@ class TestErrorHandling:
             )
 
 
-class TestsynchronizationStrategies:
-    """Test that all synchronization strategies can be created."""
+class TestDeprecatedSynchronization:
+    """`synchronization` is deprecated and does nothing but name an interpolation.
 
-    def test_zoh_synchronization(self):
-        """Test zero-order hold synchronization."""
+    It asked how several signals are aligned onto a common timeline, which turned out
+    not to be a question with an answer. Each value now selects the interpolation of the
+    same name, and "None" selects "ZeroOrderHold".
+    """
+
+    @pytest.mark.parametrize(
+        "synchronization,expected",
+        [
+            ("ZeroOrderHold", "ZeroOrderHold"),
+            ("None", "ZeroOrderHold"),
+            ("Linear", "Linear"),
+        ],
+    )
+    def test_maps_onto_signal_interpolation(self, synchronization, expected):
+        formula = mstlo.Formula.gt("x", 5.0)
+        with pytest.warns(DeprecationWarning, match="signal_interpolation"):
+            monitor = mstlo.Monitor(
+                formula,
+                semantics="DelayedQualitative",
+                synchronization=synchronization,
+            )
+        assert monitor.get_signal_interpolation() == expected
+
+    def test_explicit_interpolation_wins(self):
+        """Both may be passed while porting; the one that still exists decides."""
+        formula = mstlo.Formula.gt("x", 5.0)
+        with pytest.warns(DeprecationWarning):
+            monitor = mstlo.Monitor(
+                formula,
+                semantics="DelayedQualitative",
+                synchronization="Linear",
+                signal_interpolation="ZeroOrderHold",
+            )
+        assert monitor.get_signal_interpolation() == "ZeroOrderHold"
+
+    def test_getter_is_deprecated(self):
         formula = mstlo.Formula.gt("x", 5.0)
         monitor = mstlo.Monitor(
-            formula, semantics="DelayedQualitative", synchronization="ZeroOrderHold"
+            formula, semantics="DelayedQualitative", signal_interpolation="Linear"
         )
-        assert monitor is not None
-        assert "ZeroOrderHold" in repr(monitor)
+        with pytest.warns(DeprecationWarning, match="get_signal_interpolation"):
+            # Reports the interpolation in force, so never "None".
+            assert monitor.get_synchronization_strategy() == "Linear"
 
-    def test_linear_synchronization(self):
-        """Test linear synchronization."""
+
+class TestSignalInterpolation:
+    """The signal interpolation is what the formula is evaluated over.
+
+    It says how a signal behaves between its own samples, which decides the verdicts
+    themselves, so it is only offered where the implementation is exact.
+    """
+
+    def test_defaults_to_zero_order_hold(self):
+        formula = mstlo.Formula.gt("x", 5.0)
+        monitor = mstlo.Monitor(formula, semantics="DelayedQualitative")
+        assert monitor.get_signal_interpolation() == "ZeroOrderHold"
+
+    def test_explicit_linear(self):
         formula = mstlo.Formula.gt("x", 5.0)
         monitor = mstlo.Monitor(
-            formula, semantics="DelayedQualitative", synchronization="Linear"
+            formula,
+            semantics="DelayedQualitative",
+            signal_interpolation="Linear",
         )
-        assert monitor is not None
-        assert "Linear" in repr(monitor)
+        assert monitor.get_signal_interpolation() == "Linear"
+        assert "signal_interpolation='Linear'" in repr(monitor)
 
-    def test_none_synchronization(self):
-        """Test no synchronization."""
+    def test_invalid_interpolation_raises(self):
         formula = mstlo.Formula.gt("x", 5.0)
-        monitor = mstlo.Monitor(
-            formula, semantics="DelayedQualitative", synchronization="None"
-        )
-        assert monitor is not None
-        assert "None" in repr(monitor)
+        with pytest.raises(ValueError, match="Invalid signal_interpolation"):
+            mstlo.Monitor(
+                formula,
+                semantics="DelayedQualitative",
+                signal_interpolation="Quadratic",
+            )
 
-    def test_synchronization_with_quantitative(self):
-        """Test synchronization strategies work with quantitative semantics."""
+    @pytest.mark.parametrize("semantics", ["DelayedQuantitative", "Rosi"])
+    def test_linear_rejected_for_quantitative_semantics(self, semantics):
+        """A window sup/inf over a piecewise-linear robustness needs more than
+        predicate-layer crossings, so it is refused rather than approximated."""
         formula = mstlo.Formula.gt("x", 5.0)
+        with pytest.raises(ValueError, match="not supported for"):
+            mstlo.Monitor(formula, semantics=semantics, signal_interpolation="Linear")
 
-        monitor_zoh = mstlo.Monitor(
-            formula, semantics="DelayedQuantitative", synchronization="ZeroOrderHold"
-        )
-        assert monitor_zoh is not None
-
-        monitor_linear = mstlo.Monitor(
-            formula, semantics="DelayedQuantitative", synchronization="Linear"
-        )
-        assert monitor_linear is not None
-
-        monitor_none = mstlo.Monitor(
-            formula, semantics="DelayedQuantitative", synchronization="None"
-        )
-        assert monitor_none is not None
-
-    def test_synchronization_with_rosi(self):
-        """Test synchronization strategies work with Rosi semantics."""
+    def test_linear_rejected_for_naive_algorithm(self):
         formula = mstlo.Formula.gt("x", 5.0)
+        with pytest.raises(ValueError, match="Naive"):
+            mstlo.Monitor(
+                formula,
+                semantics="DelayedQualitative",
+                algorithm="Naive",
+                signal_interpolation="Linear",
+            )
 
-        monitor_zoh = mstlo.Monitor(
-            formula, semantics="Rosi", synchronization="ZeroOrderHold"
+    def test_linear_reports_the_crossing_time(self):
+        """`x` ramps 6.0 -> 2.0 over [0s, 4s], so `x > 4` dies at 2s, not 4s."""
+        formula = mstlo.Formula.gt("x", 4.0)
+        trace = [("x", 6.0, 0.0), ("x", 2.0, 4.0)]
+
+        linear = mstlo.Monitor(
+            formula, semantics="DelayedQualitative", signal_interpolation="Linear"
         )
-        assert monitor_zoh is not None
+        zoh = mstlo.Monitor(formula, semantics="DelayedQualitative")
 
-        monitor_linear = mstlo.Monitor(
-            formula, semantics="Rosi", synchronization="Linear"
-        )
-        assert monitor_linear is not None
+        linear_verdicts, zoh_verdicts = [], []
+        for signal, value, ts in trace:
+            linear_verdicts.extend(linear.update(signal, value, ts).verdicts())
+            zoh_verdicts.extend(zoh.update(signal, value, ts).verdicts())
 
-        monitor_none = mstlo.Monitor(formula, semantics="Rosi", synchronization="None")
-        assert monitor_none is not None
+        assert linear_verdicts == [(0.0, True), (2.0, False), (4.0, False)]
+        assert zoh_verdicts == [(0.0, True), (4.0, False)]
 
 
 class TestTemporalFormulas:
@@ -1200,7 +1249,7 @@ class TestMonitorWithVariables:
 
     def test_variables_not_supported_in_naive(self):
         """Test that variables are not supported in naive algorithm.
-        the Rust panic aborts the Python process, so a normal pytest.raises cannot catch it. """
+        the Rust panic aborts the Python process, so a normal pytest.raises cannot catch it."""
         script = """
 import mstlo_python.mstlo_python as mstlo
 
@@ -1259,18 +1308,21 @@ class TestMonitorGetters:
         monitor_rosi = mstlo.Monitor(formula, semantics="Rosi")
         assert monitor_rosi.get_semantics() == "Rosi"
 
-    def test_get_synchronization_strategy(self):
-        """Test getting the synchronization strategy from a monitor."""
+    def test_get_signal_interpolation(self):
+        """Test getting the signal interpolation from a monitor."""
         formula = mstlo.parse_formula("x > 5")
 
-        monitor_zoh = mstlo.Monitor(formula, synchronization="ZeroOrderHold")
-        assert monitor_zoh.get_synchronization_strategy() == "ZeroOrderHold"
+        monitor_zoh = mstlo.Monitor(formula, signal_interpolation="ZeroOrderHold")
+        assert monitor_zoh.get_signal_interpolation() == "ZeroOrderHold"
 
-        monitor_linear = mstlo.Monitor(formula, synchronization="Linear")
-        assert monitor_linear.get_synchronization_strategy() == "Linear"
+        # "Linear" is not supported by the default quantitative semantics -- hence
+        # the explicit semantics.
+        monitor_linear = mstlo.Monitor(
+            formula, semantics="DelayedQualitative", signal_interpolation="Linear"
+        )
+        assert monitor_linear.get_signal_interpolation() == "Linear"
 
-        monitor_none = mstlo.Monitor(formula, synchronization="None")
-        assert monitor_none.get_synchronization_strategy() == "None"
+        assert mstlo.Monitor(formula).get_signal_interpolation() == "ZeroOrderHold"
 
     def test_get_specification(self):
         """Test getting the specification string from a monitor."""
@@ -1328,7 +1380,7 @@ class TestMonitorDisplay:
             formula,
             semantics="DelayedQuantitative",
             algorithm="Incremental",
-            synchronization="Linear",
+            signal_interpolation="ZeroOrderHold",
         )
 
         display = str(monitor)
@@ -1336,7 +1388,7 @@ class TestMonitorDisplay:
         assert "Specification:" in display
         assert "Algorithm: Incremental" in display
         assert "Semantics: DelayedQuantitative" in display
-        assert "Synchronization: Linear" in display
+        assert "Signal interpolation: ZeroOrderHold" in display
         assert "Temporal Depth:" in display
         assert "5s" in display
 
@@ -1364,14 +1416,14 @@ class TestMonitorDisplay:
             formula,
             semantics="DelayedQualitative",
             algorithm="Naive",
-            synchronization="None",
+            signal_interpolation="ZeroOrderHold",
         )
 
         repr_str = repr(monitor)
         assert "Monitor(" in repr_str
         assert "semantics='DelayedQualitative'" in repr_str
         assert "algorithm='Naive'" in repr_str
-        assert "synchronization='None'" in repr_str
+        assert "signal_interpolation='ZeroOrderHold'" in repr_str
 
     def test_print_monitor(self):
         """Test that print(monitor) works correctly."""
@@ -1411,15 +1463,15 @@ class TestMonitorReset:
         formula = mstlo.parse_formula("G[0, 5](x > 5)")
         monitor = mstlo.Monitor(
             formula,
-            semantics="DelayedQuantitative",
+            semantics="DelayedQualitative",
             algorithm="Incremental",
-            synchronization="Linear",
+            signal_interpolation="Linear",
         )
         spec_before = monitor.get_specification()
         depth_before = monitor.get_temporal_depth()
         algo_before = monitor.get_algorithm()
         sem_before = monitor.get_semantics()
-        sync_before = monitor.get_synchronization_strategy()
+        interpolation_before = monitor.get_signal_interpolation()
 
         monitor.reset()
 
@@ -1427,14 +1479,16 @@ class TestMonitorReset:
         assert monitor.get_temporal_depth() == depth_before
         assert monitor.get_algorithm() == algo_before
         assert monitor.get_semantics() == sem_before
-        assert monitor.get_synchronization_strategy() == sync_before
+        assert monitor.get_signal_interpolation() == interpolation_before
 
     def test_reset_preserves_variables(self):
         """Variable values survive reset."""
         formula = mstlo.parse_formula("x > $threshold")
         variables = mstlo.Variables()
         variables.set("threshold", 5.0)
-        monitor = mstlo.Monitor(formula, semantics="DelayedQualitative", variables=variables)
+        monitor = mstlo.Monitor(
+            formula, semantics="DelayedQualitative", variables=variables
+        )
 
         monitor.update("x", 10.0, 1.0)
         monitor.reset()
