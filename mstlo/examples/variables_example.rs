@@ -1,4 +1,3 @@
-use mstlo::SynchronizationStrategy;
 use mstlo::Variables;
 use mstlo::monitor::{Algorithm, StlMonitor, semantic_markers};
 use mstlo::{step, stl};
@@ -18,7 +17,7 @@ fn main() {
         .formula(phi)
         .semantics(semantic_markers::Rosi)
         .algorithm(Algorithm::Incremental)
-        .synchronization_strategy(SynchronizationStrategy::ZeroOrderHold)
+        .signal_interpolation(mstlo::SignalInterpolation::ZeroOrderHold)
         .variables(vars.clone())
         .build()
         .expect("Failed to build STL monitor");

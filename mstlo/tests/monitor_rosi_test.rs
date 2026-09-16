@@ -6,7 +6,7 @@ use fixtures::formulas::*;
 use fixtures::signals::*;
 use mstlo::monitor::{Algorithm, DelayedQuantitative, Rosi, StlMonitor};
 use mstlo::{FormulaDefinition, RobustnessInterval};
-use mstlo::{Step, step, stl};
+use mstlo::{Step, step};
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use std::collections::HashMap;
