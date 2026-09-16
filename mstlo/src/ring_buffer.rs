@@ -117,6 +117,13 @@ pub trait RingBufferTrait {
 
     /// Appends a step to the buffer.
     fn add_step(&mut self, step: Step<Self::Value>);
+    /// Inserts a step at its timestamp-ordered position.
+    ///
+    /// [`Self::add_step`] is the fast path and assumes the step is newer than everything
+    /// stored. Use this when it may not be: an eager `And`/`Or` is required to emit a
+    /// breakpoint behind one it has already answered, rather than strand it, so a consumer
+    /// caching that stream cannot assume ascending arrival.
+    fn insert_step(&mut self, step: Step<Self::Value>);
     /// Replaces a step with matching timestamp.
     ///
     /// Returns `true` if a step was updated, `false` if no matching timestamp
@@ -212,6 +219,37 @@ where
             back.held_until = step.timestamp;
         }
         self.steps.push_back(step);
+        #[cfg(feature = "track-cache-size")]
+        if self.is_tracked {
+            GLOBAL_CACHE_SIZE.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Inserts a step at its timestamp-ordered position, repairing the hold intervals
+    /// around it.
+    ///
+    /// The step lands between two samples whose values were until now held straight
+    /// across it, so the predecessor stops being in force here and this step holds until
+    /// the successor. Appending is the common case and stays on [`Self::add_step`].
+    pub fn insert_step(&mut self, step: Step<T>) {
+        if self
+            .steps
+            .back()
+            .is_none_or(|back| step.timestamp > back.timestamp)
+        {
+            self.add_step(step);
+            return;
+        }
+        let index = self.steps.partition_point(|s| s.timestamp < step.timestamp);
+        if self.steps[index].timestamp == step.timestamp {
+            self.update_step(step);
+            return;
+        }
+        let held_until = self.steps[index].timestamp;
+        if index > 0 {
+            self.steps[index - 1].held_until = step.timestamp;
+        }
+        self.steps.insert(index, Step { held_until, ..step });
         #[cfg(feature = "track-cache-size")]
         if self.is_tracked {
             GLOBAL_CACHE_SIZE.fetch_add(1, Ordering::Relaxed);
@@ -319,6 +357,9 @@ where
 
     fn add_step(&mut self, step: Step<T>) {
         self.add_step(step)
+    }
+    fn insert_step(&mut self, step: Step<T>) {
+        self.insert_step(step)
     }
     fn update_step(&mut self, step: Step<Self::Value>) -> bool {
         self.update_step(step)
