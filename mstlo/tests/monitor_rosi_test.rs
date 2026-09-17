@@ -193,7 +193,7 @@ fn test_rosi_interval_bounds(
 #[rstest]
 #[case(vec![formula_12()])]
 #[case(vec![formula_8(), formula_8_alt()])]
-fn test_rosi_interval_bounds_2(
+fn test_rosi_interval_bounds_two_signals(
     #[case] formulas: Vec<FormulaDefinition>,
     #[values(signal_5(), vec![
         step!("x", 5.0, 0s),
