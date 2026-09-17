@@ -96,7 +96,13 @@ struct Operand<'a, C> {
 /// below `ts` is refinable, and holding it forward would pass on a finality the operand
 /// never claimed. `ts` is then simply outside what this operand is known over, which is the
 /// `[f_inf, f_sup]` case of the RoSI atomic rule: [`RobustnessSemantics::unknown`].
-fn read_operand<C, Y, const IS_ROSI: bool>(operand: &Operand<'_, C>, ts: Duration) -> Option<Y>
+///
+/// `newest` is the operand's newest entry at or before `ts`, tracked by the caller's walk.
+fn read_operand<C, Y, const IS_ROSI: bool>(
+    operand: &Operand<'_, C>,
+    newest: Option<&Step<Y>>,
+    ts: Duration,
+) -> Option<Y>
 where
     C: RingBufferTrait<Value = Y>,
     Y: RobustnessSemantics + Copy,
@@ -111,7 +117,9 @@ where
     {
         return Some(Y::unknown());
     }
-    operand.cache.zoh_at(ts).map(|entry| entry.value)
+    newest
+        .filter(|entry| entry.held_until > ts)
+        .map(|entry| entry.value)
 }
 
 /// A unified binary processor that handles Delayed, Eager, and Refinable (RoSI) semantics correctly.
@@ -163,8 +171,11 @@ where
     let r_skip = start_after.map_or(0, |ts| {
         right.cache.partition_point(|entry| entry.timestamp <= ts)
     });
-    let mut l_iter = left.cache.iter().skip(l_skip).peekable();
-    let mut r_iter = right.cache.iter().skip(r_skip).peekable();
+    // Start one entry early: the last skipped entry is the value held at the first breakpoint.
+    let mut l_iter = left.cache.iter().skip(l_skip.saturating_sub(1)).peekable();
+    let mut r_iter = right.cache.iter().skip(r_skip.saturating_sub(1)).peekable();
+    let mut l_newest = if l_skip > 0 { l_iter.next() } else { None };
+    let mut r_newest = if r_skip > 0 { r_iter.next() } else { None };
 
     loop {
         // Walk the union of the two breakpoint sets, consuming both when they coincide.
@@ -177,17 +188,17 @@ where
             (None, None) => break,
         };
         if l_ts == Some(ts) {
-            l_iter.next();
+            l_newest = l_iter.next();
         }
         if r_ts == Some(ts) {
-            r_iter.next();
+            r_newest = r_iter.next();
         }
         if ts > horizon {
             break;
         }
 
-        let left_value = read_operand::<_, _, IS_ROSI>(left, ts);
-        let right_value = read_operand::<_, _, IS_ROSI>(right, ts);
+        let left_value = read_operand::<_, _, IS_ROSI>(left, l_newest, ts);
+        let right_value = read_operand::<_, _, IS_ROSI>(right, r_newest, ts);
 
         match (left_value, right_value) {
             (Some(l), Some(r)) => {

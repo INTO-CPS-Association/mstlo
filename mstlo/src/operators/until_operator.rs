@@ -310,6 +310,11 @@ where
             return output_robustness;
         }
 
+        let or_into = |acc: Option<Y>, value: Y| match acc {
+            Some(acc) => Some(Y::or(acc, value)),
+            None => Some(value),
+        };
+
         // 2. Process the evaluation buffer for tasks
         for &t_eval in self.eval_buffer.iter() {
             let window_start_t_eval = t_eval + self.interval.start;
@@ -317,12 +322,40 @@ where
             let window_end_t_eval = t_eval + self.interval.end;
 
             // This is the outer `max` (Eventually)
-            let mut max_robustness_vec = Vec::new();
+            let mut max_robustness: Option<Y> = None;
             let mut falsified = false;
 
             // We can only evaluate up to the data we have.
             // We must use the minimum of the current time and the window end.
             let effective_end_time = current_time.min(window_end_t_eval);
+
+            // Case 1 gate: both operands are known through the end of the window.
+            //
+            // This must be tested per operand. `step.timestamp` is the arrival clock of
+            // *whichever* signal moved last, so with phi and psi on different signals a
+            // burst on phi's signal drives it past the horizon while psi is still behind.
+            // The tail of the window then reads as `Y::unknown()` -- which for `bool` is
+            // `false` (`core.rs`, `impl RobustnessSemantics for bool`) -- and folds into
+            // the outer `or` as a genuine `false`. Case 1 would close the window on that,
+            // and `finalized_ts` would refuse to re-open it when psi finally arrived.
+            //
+            // `t_max` carries each operand's own output frontier, so requiring both to
+            // reach the window end closes it exactly when the data to decide it is in
+            // hand, and no earlier. Child lookaheads need no separate term: a child's
+            // frontier only advances when that child could answer.
+            //
+            // phi is read over `[t_eval, t']` and psi over `[t_eval + a, t']`, with t' up
+            // to the window end, so the window end is the bound for both.
+            let window_covered = if IS_ROSI {
+                current_time >= t_eval + self.get_max_lookahead()
+            } else {
+                self.t_max.0 >= window_end_t_eval && self.t_max.1 >= window_end_t_eval
+            };
+
+            // Delayed mode stops at the first uncovered window, so skip walking it.
+            if !IS_EAGER && !IS_ROSI && !window_covered {
+                break;
+            }
 
             // phi must hold from t_eval onwards, so the running infimum starts at the value
             // phi holds *at* t_eval. That value is generally carried by an earlier sample:
@@ -366,23 +399,22 @@ where
                 .take_while(|entry| entry.timestamp <= effective_end_time)
                 .map(|entry| entry.timestamp)
                 .peekable();
-            let mut t_primes: Vec<Duration> = Vec::new();
-            if window_start_t_eval <= effective_end_time {
-                t_primes.push(window_start_t_eval);
-            }
-            loop {
-                let next = match (left_ts.peek(), right_ts.peek()) {
-                    (Some(&l), Some(&r)) => l.min(r),
-                    (Some(&l), None) => l,
-                    (None, Some(&r)) => r,
-                    (None, None) => break,
-                };
-                left_ts.next_if_eq(&next);
-                right_ts.next_if_eq(&next);
-                if t_primes.last() != Some(&next) {
-                    t_primes.push(next);
-                }
-            }
+            // Merged lazily rather than collected. Each run is strictly ascending and starts
+            // past the window start, so no candidate repeats.
+            let t_primes = (window_start_t_eval <= effective_end_time)
+                .then_some(window_start_t_eval)
+                .into_iter()
+                .chain(std::iter::from_fn(|| {
+                    let next = match (left_ts.peek(), right_ts.peek()) {
+                        (Some(&l), Some(&r)) => l.min(r),
+                        (Some(&l), None) => l,
+                        (None, Some(&r)) => r,
+                        (None, None) => return None,
+                    };
+                    left_ts.next_if_eq(&next);
+                    right_ts.next_if_eq(&next);
+                    Some(next)
+                }));
 
             // phi samples after t_eval, folded into the running min as t' reaches them.
             //
@@ -508,19 +540,17 @@ where
                     .is_some_and(|died| died < window_start_t_eval || self.t_max.1 >= died);
                 if IS_EAGER && psi_rules_out_earlier_witnesses && t_max_combined >= t_eval {
                     falsified = true;
-                    max_robustness_vec.push(Y::atomic_false());
+                    max_robustness = or_into(max_robustness, Y::atomic_false());
                     break;
                 }
 
                 // 4. Combine: min(rho_psi(t'), robustness_phi_left)
                 let robustness_t_prime = Y::and(robustness_psi_right, robustness_phi_left);
-                max_robustness_vec.push(robustness_t_prime);
+                max_robustness = or_into(max_robustness, robustness_t_prime);
             }
 
-            let max_robustness = if max_robustness_vec.is_empty() {
+            let Some(max_robustness) = max_robustness else {
                 break; // No data to evaluate yet
-            } else {
-                max_robustness_vec.into_iter().reduce(Y::or).unwrap()
             };
 
             // ---
@@ -528,29 +558,6 @@ where
             // ---
             let final_value: Option<Y>;
             let mut remove_task = false;
-
-            // Case 1 gate: both operands are known through the end of the window.
-            //
-            // This must be tested per operand. `step.timestamp` is the arrival clock of
-            // *whichever* signal moved last, so with phi and psi on different signals a
-            // burst on phi's signal drives it past the horizon while psi is still behind.
-            // The tail of the window then reads as `Y::unknown()` -- which for `bool` is
-            // `false` (`core.rs`, `impl RobustnessSemantics for bool`) -- and folds into
-            // the outer `or` as a genuine `false`. Case 1 would close the window on that,
-            // and `finalized_ts` would refuse to re-open it when psi finally arrived.
-            //
-            // `t_max` carries each operand's own output frontier, so requiring both to
-            // reach the window end closes it exactly when the data to decide it is in
-            // hand, and no earlier. Child lookaheads need no separate term: a child's
-            // frontier only advances when that child could answer.
-            //
-            // phi is read over `[t_eval, t']` and psi over `[t_eval + a, t']`, with t' up
-            // to the window end, so the window end is the bound for both.
-            let window_covered = if IS_ROSI {
-                current_time >= t_eval + self.get_max_lookahead()
-            } else {
-                self.t_max.0 >= window_end_t_eval && self.t_max.1 >= window_end_t_eval
-            };
 
             if window_covered {
                 // Case 1: Full window covered by both operands.

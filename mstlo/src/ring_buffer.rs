@@ -263,6 +263,13 @@ where
     /// This uses binary search and therefore assumes the internal storage is
     /// sorted by timestamp.
     pub fn update_step(&mut self, step: Step<T>) -> bool {
+        if self
+            .steps
+            .back()
+            .is_none_or(|back| step.timestamp > back.timestamp)
+        {
+            return false;
+        }
         self.steps
             .binary_search_by(|s| s.timestamp.cmp(&step.timestamp))
             .map(|index| {

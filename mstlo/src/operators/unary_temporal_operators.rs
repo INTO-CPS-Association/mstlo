@@ -27,6 +27,7 @@ struct WindowParams<'a> {
     /// finalized as soon as the frontier covers it would freeze an intermediate value.
     settle: Duration,
     upper_bound: Option<Duration>,
+    dominated_through: Option<Duration>,
 }
 
 /// Operator-specific semantic parameters passed to [`process_eval_buffer`].
@@ -46,13 +47,9 @@ where
 /// force at `window_start` nor an entry inside it. Callers give that their own reading:
 /// the identity for [`process_eval_buffer`], "nothing known" for a still-open window.
 ///
-/// The window is aggregated rather than sampled, in both modes. Under RoSI the cache is
-/// not a monotone Lemire deque, since `prune_dominated` for intervals requires
-/// strict separation. Outside RoSI it is only *mostly* monotone: `pop_dominated_values`
-/// declines to evict a dominated entry whose dominator falls past the oldest pending
-/// window's end, so reading just the first in-window entry can return the dominated one.
-/// The scan still stops early on the absorbing element of `combine` (`false` for `G`,
-/// `true` for `F`), which keeps it O(1) on the boolean semantics in the monotone case.
+/// A window starting after `dominated_through` lies where the cache is a monotone Lemire
+/// deque, so its first entry is the extremum. Any other window, and every RoSI window
+/// (interval domination is not a total order), is aggregated.
 ///
 /// The unbounded read is the fallback for an empty window: with no entry inside
 /// `[window_start, window_end]`, a surviving entry past `window_end` still carries the
@@ -61,7 +58,7 @@ fn window_value<C, Y, FCombine, const IS_ROSI: bool>(
     cache: &C,
     window_start: Duration,
     window_end: Duration,
-    frontier: Duration,
+    window: &WindowParams<'_>,
     op: &OpParams<Y, FCombine, impl Fn() -> Y>,
 ) -> Option<Y>
 where
@@ -69,36 +66,33 @@ where
     Y: RobustnessSemantics + Debug,
     FCombine: Fn(Y, Y) -> Y,
 {
-    // The operand's signal is piecewise constant between the steps it emits, so the value
-    // it takes at `window_start` is the one held there, and `window_start` is generally not
-    // a step of its own. `zoh_at` returns `None` when the cache no longer holds that
-    // sample, which happens only where a dominating sample inside the window has replaced
-    // it and already carries its contribution.
-    //
-    // Only up to the frontier: past it the operand has not reported, and the newest cache
-    // entry reads as holding indefinitely because its successor is unknown.
-    let held_at_start = (window_start <= frontier)
-        .then(|| cache.zoh_at(window_start))
+    // The cache is ascending: binary search for the window, keeping the entry just before it.
+    let first_in_window = cache.partition_point(|f| f.timestamp < window_start);
+    let mut entries = cache
+        .iter()
+        .skip(first_in_window.saturating_sub(1))
+        .peekable();
+    let before = entries.next_if(|entry| entry.timestamp < window_start);
+
+    // The value held at `window_start`, i.e. `zoh_at` without a second search. `None` only
+    // where a dominating entry inside the window already carries it. Only up to the
+    // frontier: past it the newest entry would read as holding indefinitely.
+    let held_at_start = (window_start <= window.frontier)
+        .then(|| match entries.peek() {
+            Some(entry) if entry.timestamp == window_start => Some(*entry),
+            _ => before.filter(|entry| entry.held_until > window_start),
+        })
         .flatten()
         .map(|step| step.value.clone());
 
-    // The cache is ascending, so the first entry at or after `window_start` is a binary
-    // search. The prefix ahead of it is retained as far back as the oldest pending
-    // evaluation, so it is not worth scanning.
-    let first_in_window = cache.partition_point(|f| f.timestamp < window_start);
-    let mut in_window: Option<Y> = None;
-    for entry in cache.iter().skip(first_in_window) {
-        if entry.timestamp > window_end {
-            break;
-        }
-        in_window = Some(match in_window {
-            Some(accumulated) => (op.combine)(accumulated, entry.value.clone()),
-            None => entry.value.clone(),
-        });
-        if !IS_ROSI && in_window.as_ref() == Some(&op.eager_short_circuit) {
-            break;
-        }
-    }
+    let mut entries = entries
+        .take_while(|entry| entry.timestamp <= window_end)
+        .map(|entry| entry.value.clone());
+    let mut in_window = if !IS_ROSI && window.dominated_through.is_none_or(|t| window_start > t) {
+        entries.next()
+    } else {
+        entries.reduce(&op.combine)
+    };
     if in_window.is_none() && !IS_ROSI {
         in_window = cache
             .iter()
@@ -157,7 +151,7 @@ where
         }
 
         let windowed_value =
-            window_value::<_, _, _, IS_ROSI>(cache, window_start, window_end, window.frontier, &op)
+            window_value::<_, _, _, IS_ROSI>(cache, window_start, window_end, &window, &op)
                 .unwrap_or_else(&op.identity);
 
         // The `!IS_ROSI` guard keeps eager short-circuiting out of RoSI, where it is both
@@ -235,7 +229,11 @@ fn window_known_through(
 pub(crate) fn enqueue_eval(eval_buffer: &mut VecDeque<Duration>, t: Duration) {
     match eval_buffer.back() {
         Some(&back) if t <= back => {
-            if let Err(pos) = eval_buffer.binary_search(&t) {
+            // On a regular grid a shifted timestamp is already at one end.
+            if t != back
+                && eval_buffer.front() != Some(&t)
+                && let Err(pos) = eval_buffer.binary_search(&t)
+            {
                 eval_buffer.insert(pos, t);
             }
         }
@@ -298,6 +296,7 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
     first_ts: &mut Option<Duration>,
     finalized_ts: Option<Duration>,
     known_through: Option<Duration>,
+    dominated_through: &mut Option<Duration>,
 ) where
     C: RingBufferTrait<Value = Y>,
     Y: RobustnessSemantics + Debug,
@@ -310,8 +309,7 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
         // has already answered rather than strand it, so a step older than the cache back
         // is an ordinary arrival, not a stale duplicate. Such a step is inserted in place,
         // skipping `pop_dominated_values`, which reasons about a *newest* arrival. That
-        // leaves the deque locally non-monotone, which is why [`window_value`] aggregates
-        // the window rather than sampling its first entry.
+        // leaves the deque locally non-monotone, which `dominated_through` records.
         let is_ascending = cache
             .get_back()
             .is_none_or(|back| sub_step.timestamp > back.timestamp);
@@ -335,6 +333,12 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
                 interval.end,
                 known_through,
             );
+            // A dominated back that survived was kept for a pending window.
+            if let Some(back) = cache.get_back()
+                && Y::prune_dominated(back.value.clone(), sub_step.value.clone(), is_max)
+            {
+                *dominated_through = (*dominated_through).max(Some(back.timestamp));
+            }
             cache.add_step(sub_step);
         } else if IS_ROSI {
             cache.update_step(sub_step);
@@ -350,6 +354,7 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
                 let earliest = *first_ts.get_or_insert(sub_step.timestamp);
                 enqueue_eval_windows(eval_buffer, sub_step.timestamp, earliest, interval, None);
             }
+            *dominated_through = (*dominated_through).max(Some(sub_step.timestamp));
             cache.insert_step(sub_step);
         }
     }
@@ -411,6 +416,8 @@ pub struct Eventually<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     first_ts: Option<Duration>,
     /// Newest evaluation timestamp already answered for good. See [`register_sub_steps`].
     finalized_ts: Option<Duration>,
+    /// Newest cache entry a later entry may dominate; the cache is monotone after it.
+    dominated_through: Option<Duration>,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -457,6 +464,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 operand_lookahead,
                 first_ts: None,
                 finalized_ts: None,
+                dominated_through: None,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -471,6 +479,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 operand_lookahead,
                 first_ts: None,
                 finalized_ts: None,
+                dominated_through: None,
             }
         }
     }
@@ -501,6 +510,7 @@ where
         self.eval_buffer.clear();
         self.first_ts = None;
         self.finalized_ts = None;
+        self.dominated_through = None;
         self.operand.reset();
     }
 
@@ -553,6 +563,7 @@ where
                     },
                     settle,
                     upper_bound: Some(split_key),
+                    dominated_through: self.dominated_through,
                 },
                 Self::op_params(),
                 &mut self.finalized_ts,
@@ -569,6 +580,7 @@ where
             &mut self.first_ts,
             self.finalized_ts,
             operand_known_through,
+            &mut self.dominated_through,
         );
 
         // Phase C: process remaining eval_buffer entries with the updated cache.
@@ -580,6 +592,7 @@ where
                 frontier: cache_frontier(&self.cache, operand_known_through),
                 settle,
                 upper_bound: None,
+                dominated_through: self.dominated_through,
             },
             Self::op_params(),
             &mut self.finalized_ts,
@@ -630,6 +643,8 @@ pub struct Globally<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     first_ts: Option<Duration>,
     /// Newest evaluation timestamp already answered for good. See [`register_sub_steps`].
     finalized_ts: Option<Duration>,
+    /// Newest cache entry a later entry may dominate; the cache is monotone after it.
+    dominated_through: Option<Duration>,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -676,6 +691,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 operand_lookahead,
                 first_ts: None,
                 finalized_ts: None,
+                dominated_through: None,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -690,6 +706,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 operand_lookahead,
                 first_ts: None,
                 finalized_ts: None,
+                dominated_through: None,
             }
         }
     }
@@ -720,6 +737,7 @@ where
         self.eval_buffer.clear();
         self.first_ts = None;
         self.finalized_ts = None;
+        self.dominated_through = None;
         self.operand.reset();
     }
 
@@ -772,6 +790,7 @@ where
                     },
                     settle,
                     upper_bound: Some(split_key),
+                    dominated_through: self.dominated_through,
                 },
                 Self::op_params(),
                 &mut self.finalized_ts,
@@ -788,6 +807,7 @@ where
             &mut self.first_ts,
             self.finalized_ts,
             operand_known_through,
+            &mut self.dominated_through,
         );
 
         // Phase C: process remaining eval_buffer entries with the updated cache.
@@ -799,6 +819,7 @@ where
                 frontier: cache_frontier(&self.cache, operand_known_through),
                 settle,
                 upper_bound: None,
+                dominated_through: self.dominated_through,
             },
             Self::op_params(),
             &mut self.finalized_ts,
