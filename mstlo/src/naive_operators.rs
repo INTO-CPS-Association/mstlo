@@ -18,7 +18,7 @@
 //! piecewise-constant functions of continuous time. It only ever looks at timestamps
 //! where a sample physically exists:
 //!
-//! - [`Self::eval_greater_than`] and [`Self::eval_less_than`] require an *exact* sample
+//! - [`StlOperator::eval_greater_than`] and [`StlOperator::eval_less_than`] require an *exact* sample
 //!   at the evaluation timestamp and return `None` otherwise — they never read a
 //!   zero-order-held value.
 //! - The `G`, `F` and `U` folds range over the samples that happen to fall inside the
