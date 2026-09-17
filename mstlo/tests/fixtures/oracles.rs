@@ -296,6 +296,9 @@ pub fn exp_f11_s3_bool_eager() -> Vec<Vec<Step<bool>>> {
         ],
         vec![],
         vec![],
+        // `phi = (x < 8)` fails at 4s (x = 8). Every witness reachable from 2s and 3s --
+        // `psi = (x > 5)` holds at 4s and 6s -- has an obligation interval containing 4s,
+        // and STL closes that interval at the witness, so both are false.
         vec![
             step!("output", false, Duration::from_secs(2)),
             step!("output", false, Duration::from_secs(3)),

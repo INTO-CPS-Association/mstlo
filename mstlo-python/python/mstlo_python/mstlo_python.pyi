@@ -38,7 +38,7 @@ Examples using Formula builder methods:
     >>> print(repr(output))  # Debug format
 """
 
-from typing import Iterable, Literal, Mapping, Optional, TypedDict, Union, List, Tuple
+from typing import Iterable, List, Literal, Mapping, Optional, Tuple, TypedDict, Union
 
 __version__: str
 
@@ -121,16 +121,16 @@ class OutputDict(TypedDict):
     """
 
 class EvaluationDict(TypedDict):
-    """Result of evaluating a synchronized step."""
+    """Result of evaluating a single input step."""
 
     sync_step_signal: str
-    """Signal name of the synchronized step (may be interpolated)."""
+    """Signal name of the evaluated step."""
     sync_step_timestamp: float
-    """Timestamp of the synchronized step."""
+    """Timestamp of the evaluated step."""
     sync_step_value: float
-    """Value of the synchronized step."""
+    """Value of the evaluated step."""
     outputs: List[OutputDict]
-    """List of output verdicts produced by evaluating this sync step."""
+    """List of output verdicts produced by evaluating this step."""
 
 class MonitorOutputDict(TypedDict):
     """Output from a monitor update operation."""
@@ -140,7 +140,7 @@ class MonitorOutputDict(TypedDict):
     input_timestamp: Optional[float]
     """The timestamp of the input that triggered this update. None for an empty batch."""
     evaluations: List[EvaluationDict]
-    """List of evaluations, one for each synchronized step. May be empty if data is buffered."""
+    """List of evaluations, one for each evaluated step. May be empty if data is buffered."""
 
 class Variables:
     """
@@ -557,6 +557,8 @@ SemanticsType = Literal[
 ]
 AlgorithmType = Literal["Incremental", "Naive"]
 SynchronizationType = Literal["ZeroOrderHold", "Linear", "None"]
+"""Deprecated. See `SignalInterpolationType`."""
+SignalInterpolationType = Literal["ZeroOrderHold", "Linear"]
 
 class MonitorOutput:
     """
@@ -734,7 +736,7 @@ class Monitor:
 
     Monitors signal traces against an STL formula and produces verdicts.
     Supports multiple semantics (DelayedQualitative, EagerQualitative, DelayedQuantitative, Rosi),
-    algorithms (Incremental, Naive), and synchronization strategies (ZeroOrderHold, Linear, None).
+    algorithms (Incremental, Naive), and signal interpolations (ZeroOrderHold, Linear).
 
     The monitor processes signals incrementally and produces verdicts when
     sufficient information is available.
@@ -752,7 +754,8 @@ class Monitor:
         formula: Formula,
         semantics: SemanticsType = "DelayedQuantitative",
         algorithm: AlgorithmType = "Incremental",
-        synchronization: SynchronizationType = "ZeroOrderHold",
+        synchronization: Union[SynchronizationType, None] = None,
+        signal_interpolation: Union[SignalInterpolationType, None] = None,
         variables: Union[Variables, None] = None,
     ) -> None:
         """
@@ -772,24 +775,36 @@ class Monitor:
                 * "Incremental": Efficient online monitoring with sliding windows (default)
                 * "Naive": Simple baseline implementation
 
-            synchronization: Signal synchronization method. Options:
+            synchronization: Deprecated, use `signal_interpolation`. Passing it emits a
+                DeprecationWarning and selects the interpolation of the same name, with
+                "None" meaning "ZeroOrderHold". An explicit `signal_interpolation` wins.
 
-                * "ZeroOrderHold": Zero-order hold (default)
-                * "Linear": Linear interpolation
-                * "None": No interpolation
+            signal_interpolation: How a signal behaves *between its own samples*.
+                Options:
+
+                * "ZeroOrderHold": the signal holds its last value until the next
+                  sample (default).
+                * "Linear": the signal ramps linearly between consecutive samples.
+                  Predicates then report the exact threshold crossing time, not the
+                  next sample's timestamp. Qualitative semantics only.
 
             variables: A Variables object containing runtime variable values.
                 Required if the formula contains variable predicates (e.g., `x > $threshold`).
                 Note: Variable predicates require the Incremental algorithm.
 
         Raises:
-            ValueError: If invalid semantics, algorithm, or synchronization is specified
+            ValueError: If invalid semantics, algorithm, synchronization, or
+                signal_interpolation is specified
             ValueError: If Naive algorithm is used with EagerQualitative (not supported)
             ValueError: If Naive algorithm is used with variable predicates (not supported)
+            ValueError: If "Linear" signal interpolation is combined with
+                "DelayedQuantitative" or "Rosi" semantics, or with the Naive algorithm.
+                Recovering the supremum of a piecewise-linear robustness over a window
+                needs more than predicate-layer crossings.
 
         Note:
-            For single-signal formulas, signal synchronization is automatically disabled
-            for better performance.
+            The signal interpolation is a property of one signal on its own, so it means
+            the same thing for a single-signal formula as for any other.
 
         Examples:
             >>> # DelayedQualitative monitoring
@@ -929,14 +944,31 @@ class Monitor:
 
     def get_synchronization_strategy(self) -> str:
         """
-        Get the synchronization strategy used by this monitor.
+        Deprecated, use `get_signal_interpolation`.
+
+        Emits a DeprecationWarning and reports the interpolation in force, so it
+        answers "ZeroOrderHold" or "Linear" and never "None".
 
         Returns:
-            One of: "ZeroOrderHold", "Linear", or "None"
+            One of: "ZeroOrderHold" or "Linear"
 
         Examples:
-            >>> monitor = Monitor(phi, synchronization="Linear")
-            >>> print(monitor.get_synchronization_strategy())  # "Linear"
+            >>> monitor = Monitor(phi, signal_interpolation="Linear")
+            >>> print(monitor.get_signal_interpolation())  # "Linear"
+        """
+        ...
+
+    def get_signal_interpolation(self) -> str:
+        """
+        Get the signal interpolation used by this monitor.
+
+        Returns:
+            One of: "ZeroOrderHold" or "Linear"
+
+        Examples:
+            >>> monitor = Monitor(phi, semantics="DelayedQualitative",
+            ...                   signal_interpolation="Linear")
+            >>> print(monitor.get_signal_interpolation())  # "Linear"
         """
         ...
 
@@ -1034,7 +1066,7 @@ class Monitor:
         Return a brief representation of the monitor.
 
         Returns:
-            String in the format: "Monitor(semantics='...', algorithm='...', synchronization='...')"
+            String in the format: "Monitor(semantics='...', algorithm='...', signal_interpolation='...')"
         """
         ...
 

@@ -15,18 +15,33 @@
 #   ./run_incubator_bench.sh                          # M = 50, normal+lid_open
 #   M_RUNS=5 ./run_incubator_bench.sh                 # quick pass
 #   PHASES= ./run_incubator_bench.sh                  # the whole session
+#   DATA_DIR=rv26_results ./run_incubator_bench.sh    # another recording
+#   RESULTS_DIR=/tmp/run1 ./run_incubator_bench.sh    # keep the recording intact
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DATA_DIR="$SCRIPT_DIR/data"
-RESULTS_DIR="$SCRIPT_DIR/results"
 
-MSTLO_DIR="${MSTLO_DIR:-$SCRIPT_DIR/../../mstlo}"
+# Every stage below runs from $SCRIPT_DIR, so a path handed in relative to the
+# caller's directory has to be resolved before the first cd.
+abspath() {
+	case "$1" in
+	/*) printf '%s\n' "$1" ;;
+	*) printf '%s\n' "$PWD/$1" ;;
+	esac
+}
+
+# DATA_DIR only supplies the recording and is never written to; everything
+# derived from it -- verdicts, datasets, timings, figures -- goes to RESULTS_DIR.
+# The two default to the same directory, which is the layout rv26_results has.
+DATA_DIR="$(abspath "${DATA_DIR:-$SCRIPT_DIR/data}")"
+RESULTS_DIR="$(abspath "${RESULTS_DIR:-$DATA_DIR}")"
+
+MSTLO_DIR="$(abspath "${MSTLO_DIR:-$SCRIPT_DIR/../../mstlo}")"
 
 M_RUNS="${M_RUNS:-50}"
 WARMUP_RUNS="${WARMUP_RUNS:-1}"
-SIGNAL="$DATA_DIR/signal.csv"
+SIGNAL="$(abspath "${SIGNAL:-$DATA_DIR/signal.csv}")"
 
 # Which phases of the recording every stage sees, comma-separated. Empty is the
 # whole session (1337 samples): the monitors then get one uninterrupted signal,
@@ -65,17 +80,21 @@ else
 	SCOPE="all phases"
 fi
 
+mkdir -p "$RESULTS_DIR"
+
 echo "=== 1/4  monitors and datasets ($SCOPE) ==="
 cd "$SCRIPT_DIR"
 
-python replay.py $PHASE_ARGS
+python replay.py --datadir "$DATA_DIR" --outdir "$RESULTS_DIR" $PHASE_ARGS
 
-python process_results.py $PHASE_ARGS
+python process_results.py --datadir "$DATA_DIR" --outdir "$RESULTS_DIR" \
+	$PHASE_ARGS
 
 echo
 echo "=== 2/4  $TOOLS, M = $M_RUNS ==="
 
 python benchmark.py --m-runs "$M_RUNS" --warmup-runs "$WARMUP_RUNS" \
+	--datadir "$DATA_DIR" --outdir "$RESULTS_DIR" \
 	$PHASE_ARGS
 
 echo
@@ -102,7 +121,7 @@ echo "=== 3/4  native Rust, timings (M = $M_RUNS), memory and cache sizes ==="
 echo
 echo "=== 4/4  figures ==="
 cd "$SCRIPT_DIR"
-python plot_results.py
+python plot_results.py --datadir "$RESULTS_DIR" --figdir "$RESULTS_DIR/figures"
 
 echo
 echo "done. results in $RESULTS_DIR:"

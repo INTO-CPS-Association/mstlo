@@ -58,6 +58,16 @@ pub fn signal_4() -> Vec<Step<f64>> {
 
 #[fixture]
 #[once]
+pub fn signal_5() -> Vec<Step<f64>> {
+    let x_steps = create_steps("x", vec![0.0, 6.0, 1.0, 3.0], vec![0, 2, 4, 6]);
+    let y_steps = create_steps("y", vec![7.0, 2.0, 1.0, 0.0], vec![0, 1, 3, 5]);
+
+    // Combine and sort the steps chronologically
+    combine_and_sort_steps(vec![x_steps, y_steps])
+}
+
+#[fixture]
+#[once]
 pub fn sparse_timestamps() -> Vec<Step<f64>> {
     create_steps(
         "x",

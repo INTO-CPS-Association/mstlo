@@ -17,7 +17,10 @@ use std::{collections::VecDeque, time::Duration};
 pub static GLOBAL_CACHE_SIZE: AtomicUsize = AtomicUsize::new(0);
 
 /// A single sampled value of a named signal at a given timestamp.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Signals are read under zero-order hold: the value sampled here is the value of the
+/// signal from `timestamp` until the next sample of the same signal.
+#[derive(Clone)]
 pub struct Step<T> {
     /// Signal identifier this step belongs to.
     pub signal: &'static str,
@@ -25,6 +28,39 @@ pub struct Step<T> {
     pub value: T,
     /// Logical/event timestamp of this sample.
     pub timestamp: Duration,
+    /// Timestamp of the next sample of the same signal, or [`Duration::MAX`] while no
+    /// later sample has been seen.
+    ///
+    /// Crate-internal bookkeeping a buffer maintains for the steps it stores:
+    /// a step on its own holds its value indefinitely, and a step handed back
+    /// to a caller carries no claim about when its value stopped being in force. It
+    /// records the next sample *admitted*, which is not always the next one still stored
+    /// -- a monotone (Lemire) cache evicts dominated entries, and this is what lets a
+    /// reader tell "this entry is still the value in force" from "a later sample replaced
+    /// it and was then evicted". See [`RingBufferTrait::zoh_at`].
+    pub(crate) held_until: Duration,
+}
+
+/// Prints the sample only. `held_until` is bookkeeping the holding buffer maintains, not
+/// something the step itself reports.
+impl<T: std::fmt::Debug> std::fmt::Debug for Step<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Step")
+            .field("signal", &self.signal)
+            .field("value", &self.value)
+            .field("timestamp", &self.timestamp)
+            .finish()
+    }
+}
+
+/// Two steps are equal when they are the same sample, regardless of what any buffer has
+/// since learned about how long the value stayed in force.
+impl<T: PartialEq> PartialEq for Step<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.signal == other.signal
+            && self.value == other.value
+            && self.timestamp == other.timestamp
+    }
 }
 
 impl<T> Step<T> {
@@ -39,6 +75,7 @@ impl<T> Step<T> {
             signal,
             value,
             timestamp,
+            held_until: Duration::MAX,
         }
     }
 }
@@ -80,6 +117,13 @@ pub trait RingBufferTrait {
 
     /// Appends a step to the buffer.
     fn add_step(&mut self, step: Step<Self::Value>);
+    /// Inserts a step at its timestamp-ordered position.
+    ///
+    /// [`Self::add_step`] is the fast path and assumes the step is newer than everything
+    /// stored. Use this when it may not be: an eager `And`/`Or` is required to emit a
+    /// breakpoint behind one it has already answered, rather than strand it, so a consumer
+    /// caching that stream cannot assume ascending arrival.
+    fn insert_step(&mut self, step: Step<Self::Value>);
     /// Replaces a step with matching timestamp.
     ///
     /// Returns `true` if a step was updated, `false` if no matching timestamp
@@ -103,6 +147,29 @@ pub trait RingBufferTrait {
         P: FnMut(&Step<Self::Value>) -> bool;
 
     fn drain(&mut self, range: std::ops::Range<usize>);
+
+    /// Returns the step whose value is in force at `ts` under zero-order hold, if the
+    /// buffer still knows it.
+    ///
+    /// That is the newest step at or before `ts` whose hold interval has not ended by
+    /// `ts`. `None` means the buffer cannot answer: either `ts` precedes every step it
+    /// holds, or the sample in force at `ts` was evicted.
+    ///
+    /// This answers from the steps the buffer holds, which says nothing about how far the
+    /// signal is *known*: the newest step has no successor yet, so it reads as holding
+    /// indefinitely. Callers that can look past the end of the signal must bound `ts` by
+    /// their own frontier first -- a value is in force only until the next sample, and a
+    /// sample that has not arrived could carry anything.
+    ///
+    /// A monotone cache may evict it. That is not a loss for a window opening at `ts`:
+    /// eviction is guarded so that the evicting step -- which dominates the evicted one --
+    /// falls inside every window still to be answered, and so carries its contribution
+    /// already.
+    fn zoh_at(&self, ts: Duration) -> Option<&Step<Self::Value>> {
+        let index = self.partition_point(|step| step.timestamp <= ts);
+        let step = self.iter().take(index).last()?;
+        (step.held_until > ts).then_some(step)
+    }
 
     #[cfg(feature = "track-cache-size")]
     /// Enables or disables global cache size tracking for this specific buffer.
@@ -139,9 +206,50 @@ where
         }
     }
 
-    /// Appends a new step.
+    /// Appends a new step, closing the previous one's hold interval.
+    ///
+    /// Only a step that is still open is closed: once a sample's successor has been
+    /// recorded, a later append cannot change when the value stopped being in force,
+    /// even if everything in between has since been evicted.
     pub fn add_step(&mut self, step: Step<T>) {
+        if let Some(back) = self.steps.back_mut()
+            && back.held_until == Duration::MAX
+            && step.timestamp > back.timestamp
+        {
+            back.held_until = step.timestamp;
+        }
         self.steps.push_back(step);
+        #[cfg(feature = "track-cache-size")]
+        if self.is_tracked {
+            GLOBAL_CACHE_SIZE.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Inserts a step at its timestamp-ordered position, repairing the hold intervals
+    /// around it.
+    ///
+    /// The step lands between two samples whose values were until now held straight
+    /// across it, so the predecessor stops being in force here and this step holds until
+    /// the successor. Appending is the common case and stays on [`Self::add_step`].
+    pub fn insert_step(&mut self, step: Step<T>) {
+        if self
+            .steps
+            .back()
+            .is_none_or(|back| step.timestamp > back.timestamp)
+        {
+            self.add_step(step);
+            return;
+        }
+        let index = self.steps.partition_point(|s| s.timestamp < step.timestamp);
+        if self.steps[index].timestamp == step.timestamp {
+            self.update_step(step);
+            return;
+        }
+        let held_until = self.steps[index].timestamp;
+        if index > 0 {
+            self.steps[index - 1].held_until = step.timestamp;
+        }
+        self.steps.insert(index, Step { held_until, ..step });
         #[cfg(feature = "track-cache-size")]
         if self.is_tracked {
             GLOBAL_CACHE_SIZE.fetch_add(1, Ordering::Relaxed);
@@ -155,10 +263,20 @@ where
     /// This uses binary search and therefore assumes the internal storage is
     /// sorted by timestamp.
     pub fn update_step(&mut self, step: Step<T>) -> bool {
+        if self
+            .steps
+            .back()
+            .is_none_or(|back| step.timestamp > back.timestamp)
+        {
+            return false;
+        }
         self.steps
             .binary_search_by(|s| s.timestamp.cmp(&step.timestamp))
             .map(|index| {
-                self.steps[index] = step;
+                // A refinement replaces the value, not the hold interval: when the value
+                // stopped being in force is a property of the sample times.
+                let held_until = self.steps[index].held_until;
+                self.steps[index] = Step { held_until, ..step };
             })
             .is_ok()
     }
@@ -247,6 +365,9 @@ where
     fn add_step(&mut self, step: Step<T>) {
         self.add_step(step)
     }
+    fn insert_step(&mut self, step: Step<T>) {
+        self.insert_step(step)
+    }
     fn update_step(&mut self, step: Step<Self::Value>) -> bool {
         self.update_step(step)
     }
@@ -306,6 +427,13 @@ where
     fn drain(&mut self, range: std::ops::Range<usize>) {
         self.drain(range)
     }
+    /// Indexed form of the trait's default, which has to walk the buffer to reach the
+    /// entry it finds.
+    fn zoh_at(&self, ts: Duration) -> Option<&Step<T>> {
+        let index = self.steps.partition_point(|step| step.timestamp <= ts);
+        let step = self.steps.get(index.checked_sub(1)?)?;
+        (step.held_until > ts).then_some(step)
+    }
 
     #[cfg(feature = "track-cache-size")]
     fn set_tracked(&mut self, tracked: bool) {
@@ -332,13 +460,20 @@ impl<T> Drop for RingBuffer<T> {
 /// * `cache` - The ring buffer to prune
 /// * `lookahead` - The normal lookahead duration for pruning
 /// * `protected_ts` - Timestamp to protect; entries at or after this will not be pruned
+///
+/// The entry immediately *before* `protected_ts` is preserved too. Under zero-order hold
+/// it is the value in force at `protected_ts`, so dropping it would lose the signal over
+/// the start of the oldest window still pending. See [`RingBufferTrait::zoh_at`].
 pub fn guarded_prune<C>(cache: &mut C, lookahead: Duration, protected_ts: Duration)
 where
     C: RingBufferTrait,
 {
     let Some(back) = cache.get_back() else { return };
+    let back_ts = back.timestamp;
+    let held_at_protected = cache.zoh_at(protected_ts).map(|step| step.timestamp);
     // Preserve entries at or after the earliest pending evaluation timestamp.
-    let distance_to_protected = back.timestamp.saturating_sub(protected_ts);
+    let distance_to_protected =
+        back_ts.saturating_sub(held_at_protected.unwrap_or(protected_ts).min(protected_ts));
     let effective_max_age = lookahead.max(distance_to_protected);
     cache.prune(effective_max_age);
 }
@@ -350,21 +485,9 @@ mod tests {
     #[test]
     fn ring_creation() {
         let mut signal = RingBuffer::new();
-        signal.add_step(Step {
-            signal: "x",
-            value: 1,
-            timestamp: Duration::new(0, 0),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 2,
-            timestamp: Duration::new(0, 0),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 3,
-            timestamp: Duration::new(0, 0),
-        });
+        signal.add_step(Step::new("x", 1, Duration::new(0, 0)));
+        signal.add_step(Step::new("x", 2, Duration::new(0, 0)));
+        signal.add_step(Step::new("x", 3, Duration::new(0, 0)));
 
         for i in 0..3 {
             if let Some(step) = signal.steps.get(i) {
@@ -376,21 +499,9 @@ mod tests {
     #[test]
     fn ring_prune() {
         let mut signal = RingBuffer::new();
-        signal.add_step(Step {
-            signal: "x",
-            value: 1,
-            timestamp: Duration::from_secs(1),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 2,
-            timestamp: Duration::from_secs(2),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 3,
-            timestamp: Duration::from_secs(3),
-        });
+        signal.add_step(Step::new("x", 1, Duration::from_secs(1)));
+        signal.add_step(Step::new("x", 2, Duration::from_secs(2)));
+        signal.add_step(Step::new("x", 3, Duration::from_secs(3)));
 
         // Prune steps older than 1 second from the latest timestamp (which is 3 seconds)
         // This should remove the step with timestamp 1 second
@@ -403,63 +514,27 @@ mod tests {
     #[test]
     fn ring_get_back() {
         let mut signal = RingBuffer::new();
-        signal.add_step(Step {
-            signal: "x",
-            value: 1,
-            timestamp: Duration::from_secs(1),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 2,
-            timestamp: Duration::from_secs(2),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 3,
-            timestamp: Duration::from_secs(3),
-        });
+        signal.add_step(Step::new("x", 1, Duration::from_secs(1)));
+        signal.add_step(Step::new("x", 2, Duration::from_secs(2)));
+        signal.add_step(Step::new("x", 3, Duration::from_secs(3)));
         let back_step = signal.get_back().unwrap();
         assert_eq!(back_step.value, 3);
     }
     #[test]
     fn ring_get_front() {
         let mut signal = RingBuffer::new();
-        signal.add_step(Step {
-            signal: "x",
-            value: 1,
-            timestamp: Duration::from_secs(1),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 2,
-            timestamp: Duration::from_secs(2),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 3,
-            timestamp: Duration::from_secs(3),
-        });
+        signal.add_step(Step::new("x", 1, Duration::from_secs(1)));
+        signal.add_step(Step::new("x", 2, Duration::from_secs(2)));
+        signal.add_step(Step::new("x", 3, Duration::from_secs(3)));
         let front_step = signal.get_front().unwrap();
         assert_eq!(front_step.value, 1);
     }
     #[test]
     fn ring_pop_front() {
         let mut signal = RingBuffer::new();
-        signal.add_step(Step {
-            signal: "x",
-            value: 1,
-            timestamp: Duration::from_secs(1),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 2,
-            timestamp: Duration::from_secs(2),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 3,
-            timestamp: Duration::from_secs(3),
-        });
+        signal.add_step(Step::new("x", 1, Duration::from_secs(1)));
+        signal.add_step(Step::new("x", 2, Duration::from_secs(2)));
+        signal.add_step(Step::new("x", 3, Duration::from_secs(3)));
         let popped_step = signal.pop_front().unwrap();
         assert_eq!(popped_step.value, 1);
         assert_eq!(signal.len(), 2);
@@ -469,21 +544,9 @@ mod tests {
     #[test]
     fn ring_iter() {
         let mut signal = RingBuffer::new();
-        signal.add_step(Step {
-            signal: "x",
-            value: 1,
-            timestamp: Duration::from_secs(1),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 2,
-            timestamp: Duration::from_secs(2),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 3,
-            timestamp: Duration::from_secs(3),
-        });
+        signal.add_step(Step::new("x", 1, Duration::from_secs(1)));
+        signal.add_step(Step::new("x", 2, Duration::from_secs(2)));
+        signal.add_step(Step::new("x", 3, Duration::from_secs(3)));
         let mut iter = signal.iter();
         assert_eq!(iter.next().unwrap().value, 1);
         assert_eq!(iter.next().unwrap().value, 2);
@@ -513,32 +576,16 @@ mod tests {
     #[test]
     fn ring_update_step() {
         let mut signal = RingBuffer::new();
-        signal.add_step(Step {
-            signal: "x",
-            value: 1,
-            timestamp: Duration::from_secs(1),
-        });
-        signal.add_step(Step {
-            signal: "x",
-            value: 2,
-            timestamp: Duration::from_secs(2),
-        });
+        signal.add_step(Step::new("x", 1, Duration::from_secs(1)));
+        signal.add_step(Step::new("x", 2, Duration::from_secs(2)));
 
         // Update existing timestamp
-        let updated = signal.update_step(Step {
-            signal: "x",
-            value: 10,
-            timestamp: Duration::from_secs(1),
-        });
+        let updated = signal.update_step(Step::new("x", 10, Duration::from_secs(1)));
         assert!(updated);
         assert_eq!(signal.get_front().unwrap().value, 10);
 
         // Update non-existing timestamp
-        let not_updated = signal.update_step(Step {
-            signal: "x",
-            value: 20,
-            timestamp: Duration::from_secs(5),
-        });
+        let not_updated = signal.update_step(Step::new("x", 20, Duration::from_secs(5)));
         assert!(!not_updated);
     }
 
@@ -551,22 +598,14 @@ mod tests {
     #[test]
     fn heap_size_after_add() {
         let mut signal = RingBuffer::new();
-        signal.add_step(Step {
-            signal: "x",
-            value: 1.0,
-            timestamp: Duration::from_secs(1),
-        });
+        signal.add_step(Step::new("x", 1.0, Duration::from_secs(1)));
         assert!(signal.heap_size() >= std::mem::size_of::<Step<f64>>());
     }
 
     #[test]
     fn heap_size_after_clear() {
         let mut signal = RingBuffer::new();
-        signal.add_step(Step {
-            signal: "x",
-            value: 1.0,
-            timestamp: Duration::from_secs(1),
-        });
+        signal.add_step(Step::new("x", 1.0, Duration::from_secs(1)));
         signal.clear();
         // clear() drops elements but VecDeque may retain capacity
         let _ = signal.heap_size();

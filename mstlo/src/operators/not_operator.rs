@@ -54,6 +54,11 @@ where
         self.operand.reset();
     }
 
+    /// Negation is pointwise, so this stream has exactly the operand's holes.
+    fn known_through(&self) -> Option<Duration> {
+        self.operand.known_through()
+    }
+
     /// Updates the child operator and negates each produced value.
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let operand_updates = self.operand.update(step);
@@ -62,11 +67,7 @@ where
             .into_iter()
             .map(|step| {
                 let negated_value = Y::not(step.value);
-                Step {
-                    signal: "output",
-                    value: negated_value,
-                    timestamp: step.timestamp,
-                }
+                Step::new("output", negated_value, step.timestamp)
             })
             .collect();
 
