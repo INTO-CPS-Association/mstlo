@@ -78,7 +78,30 @@ do not give.
 
 Only the samples you supply are ever monitored — no values are synthesized at other
 signals' timestamps. A multi-signal formula is evaluated at each signal's own
-timestamps, reading the other operands through the interpolation above.
+timestamps, reading the other operands through the interpolation above. The one
+exception is each signal's value at `t=0`, below.
+
+### Initial Values
+
+A formula over more than one signal is read from `t=0`. A signal whose first sample
+arrives later would leave a prefix where the formula is read from the other signals
+alone, so `init_signals=` gives each signal the value it holds until its own first
+sample:
+
+```python
+monitor = mstlo.Monitor(
+    mstlo.parse_formula("G[0,2]((x > 0) && (y > 0))"),
+    init_signals={"x": 0.0, "y": 1.0},
+)
+```
+
+Anything left out is `0.0`. A signal that really is sampled at `t=0` overrides its
+initial value, so a trace that starts every signal together is monitored exactly as it
+is written. A single-signal formula is defined wherever its signal is and ignores
+`init_signals` entirely.
+
+An initial value is data you assert, not data that was measured: with the default
+`0.0`, `x > 0` is definitely false until `x` is first sampled.
 
 ### Deprecated: `synchronization`
 

@@ -757,6 +757,7 @@ class Monitor:
         synchronization: Union[SynchronizationType, None] = None,
         signal_interpolation: Union[SignalInterpolationType, None] = None,
         variables: Union[Variables, None] = None,
+        init_signals: Union[Mapping[str, float], None] = None,
     ) -> None:
         """
         Create a new STL monitor.
@@ -791,6 +792,13 @@ class Monitor:
             variables: A Variables object containing runtime variable values.
                 Required if the formula contains variable predicates (e.g., `x > $threshold`).
                 Note: Variable predicates require the Incremental algorithm.
+
+            init_signals: Value each signal holds at t=0, before its own first sample.
+                A formula over more than one signal is read from t=0, so a signal that
+                starts later would otherwise leave a prefix where the formula is read
+                from the other signals alone. Anything left out is 0.0. A signal really
+                sampled at t=0 overrides its initial value. Ignored by a single-signal
+                formula, which is defined wherever its signal is.
 
         Raises:
             ValueError: If invalid semantics, algorithm, synchronization, or

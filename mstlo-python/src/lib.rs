@@ -474,7 +474,9 @@ struct Monitor {
 #[pymethods]
 impl Monitor {
     #[new]
-    #[pyo3(signature = (formula, semantics="DelayedQuantitative", algorithm="Incremental", synchronization=None, signal_interpolation=None, variables=None))]
+    // One keyword argument per builder option, which is the shape pyo3 asks for.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (formula, semantics="DelayedQuantitative", algorithm="Incremental", synchronization=None, signal_interpolation=None, variables=None, init_signals=None))]
     fn new(
         py: Python<'_>,
         formula: &Formula,
@@ -483,6 +485,7 @@ impl Monitor {
         synchronization: Option<&str>,
         signal_interpolation: Option<&str>,
         variables: Option<&PyVariables>,
+        init_signals: Option<HashMap<String, f64>>,
     ) -> PyResult<Self> {
         // Parse algorithm
         let algo = match algorithm {
@@ -550,6 +553,14 @@ impl Monitor {
         // Get or create variables
         let vars = variables.cloned().unwrap_or_else(PyVariables::new);
 
+        // A formula over more than one signal is read from t=0, so every signal needs a
+        // value there. Anything the caller leaves out is zero, so a monitor always builds.
+        let init_values: Vec<(&'static str, f64)> = init_signals
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(signal, value)| (intern(&signal), value))
+            .collect();
+
         // Build monitor based on semantics
         match semantics {
             "DelayedQualitative" => {
@@ -559,6 +570,8 @@ impl Monitor {
                     .semantics(DelayedQualitative)
                     .signal_interpolation(interpolation)
                     .variables(vars.inner.clone())
+                    .initialize_signals(init_values)
+                    .initialize_signals_to_zero()
                     .build()
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 Ok(Monitor {
@@ -577,6 +590,8 @@ impl Monitor {
                     .semantics(EagerQualitative)
                     .signal_interpolation(interpolation)
                     .variables(vars.inner.clone())
+                    .initialize_signals(init_values)
+                    .initialize_signals_to_zero()
                     .build()
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 Ok(Monitor {
@@ -595,6 +610,8 @@ impl Monitor {
                     .semantics(DelayedQuantitative)
                     .signal_interpolation(interpolation)
                     .variables(vars.inner.clone())
+                    .initialize_signals(init_values)
+                    .initialize_signals_to_zero()
                     .build()
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 Ok(Monitor {
@@ -613,6 +630,8 @@ impl Monitor {
                     .semantics(Rosi)
                     .signal_interpolation(interpolation)
                     .variables(vars.inner.clone())
+                    .initialize_signals(init_values)
+                    .initialize_signals_to_zero()
                     .build()
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 Ok(Monitor {

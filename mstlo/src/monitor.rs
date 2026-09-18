@@ -9,7 +9,9 @@
 //! It also defines output containers ([`MonitorOutput`], [`SyncStepResult`]) and
 //! semantic selection markers used for type-driven output inference.
 
-use crate::core::{RobustnessSemantics, StlOperatorAndSignalIdentifier, StlOperatorTrait};
+use crate::core::{
+    RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
+};
 use crate::formula_definition::FormulaDefinition;
 use crate::naive_operators::{StlFormula, StlOperator};
 use crate::operators::atomic_operators::Atomic;
@@ -21,6 +23,7 @@ use crate::ring_buffer::{RingBuffer, Step};
 #[allow(deprecated)]
 use crate::synchronizer::SynchronizationStrategy;
 use crate::synchronizer::{Interpolatable, SignalInterpolation, Synchronizer};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::time::Duration;
@@ -394,10 +397,19 @@ impl<T, Y> IntoIterator for MonitorOutput<T, Y> {
 /// though valid monitors will always have Y: RobustnessSemantics.
 pub struct StlMonitor<T: Clone + Interpolatable, Y> {
     root_operator: Box<dyn StlOperatorTrait<T, Output = Y>>,
+    /// Timestamp of the first input sample. Nothing before it is reported.
+    first_timestamp: Option<Duration>,
     synchronizer: Synchronizer<T>,
     variables: Variables,
     algorithm: Algorithm,
     semantics: Semantics,
+}
+
+/// The timestamp a monitor reports from, or `None` to report from its first input.
+///
+/// Initialized signals are defined from `t=0`, so the whole trace is worth reporting.
+fn reported_from<T: Interpolatable>(synchronizer: &Synchronizer<T>) -> Option<Duration> {
+    synchronizer.has_initial_values().then_some(Duration::ZERO)
 }
 
 /// Entry point for the builder.
@@ -413,6 +425,8 @@ impl StlMonitor<f64, f64> {
             semantics: Semantics::DelayedQuantitative, // Default, but will be overwritten if semantics() is called
             signal_interpolation: SignalInterpolation::default(),
             variables: Variables::new(),
+            initial_values: BTreeMap::new(),
+            initialize_rest_to_zero: false,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -429,11 +443,17 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
         Y: RobustnessSemantics + Debug,
     {
         self.synchronizer.evaluate(step.clone());
+        let first_timestamp = *self.first_timestamp.get_or_insert(step.timestamp);
 
         let evaluations = std::iter::from_fn(|| self.synchronizer.pending.pop_front())
             .map(|sync_step| {
-                let op_res = self.root_operator.update(&sync_step);
-                SyncStepResult::new(sync_step, op_res)
+                let outputs = self
+                    .root_operator
+                    .update(&sync_step)
+                    .into_iter()
+                    .filter(|output| output.timestamp >= first_timestamp)
+                    .collect();
+                SyncStepResult::new(sync_step, outputs)
             })
             .collect();
 
@@ -509,6 +529,7 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
     /// let mut monitor = StlMonitor::builder()
     ///     .formula(stl!(G[0, 1](temperature < 30.0) && (pressure > 100.0)))
     ///     .semantics(DelayedQuantitative)
+    ///     .initialize_signals([("temperature", 21.4), ("pressure", 101.3)])
     ///     .build()
     ///     .unwrap();
     ///
@@ -634,6 +655,7 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
     {
         self.root_operator.reset();
         self.synchronizer.reset();
+        self.first_timestamp = reported_from(&self.synchronizer);
     }
 
     #[allow(rustdoc::private_intra_doc_links)]
@@ -689,6 +711,10 @@ pub struct StlMonitorBuilder<T, Y> {
     semantics: Semantics,
     signal_interpolation: SignalInterpolation,
     variables: Variables,
+    /// Value each signal takes from `t=0` until its own first sample.
+    initial_values: BTreeMap<&'static str, T>,
+    /// Whether the signals left over are initialized to `T::zero()`.
+    initialize_rest_to_zero: bool,
     _phantom: std::marker::PhantomData<(T, Y)>,
 }
 
@@ -748,6 +774,38 @@ impl<T, Y> StlMonitorBuilder<T, Y> {
         self
     }
 
+    /// Defines `signal` from `t=0` by `value`, until its own first sample arrives.
+    ///
+    /// Every signal of a formula over more than one signal must be initialized, so that the
+    /// formula is defined from the start. A monitor over a signal that only begins later is
+    /// asked about time where that signal does not exist, and answers from the others alone.
+    ///
+    /// A signal whose own first sample is at `t=0` is defined by it, and the initial value
+    /// is never used.
+    pub fn initialize_signal(mut self, signal: &'static str, value: T) -> Self {
+        self.initial_values.insert(signal, value);
+        self
+    }
+
+    /// Defines several signals from `t=0`; see [`Self::initialize_signal`].
+    pub fn initialize_signals(
+        mut self,
+        signals: impl IntoIterator<Item = (&'static str, T)>,
+    ) -> Self {
+        self.initial_values.extend(signals);
+        self
+    }
+
+    /// Defines every signal not given its own value from `t=0` by zero; see
+    /// [`Self::initialize_signal`].
+    pub fn initialize_signals_to_zero(mut self) -> Self
+    where
+        T: Interpolatable,
+    {
+        self.initialize_rest_to_zero = true;
+        self
+    }
+
     /// Applies the semantics, switching the Builder's generic type `Y` to match the semantics.
     /// This allows inference of the output type (bool, f64, RobustnessInterval).
     ///
@@ -769,6 +827,8 @@ impl<T, Y> StlMonitorBuilder<T, Y> {
             semantics: S::as_enum(),
             signal_interpolation: self.signal_interpolation,
             variables: self.variables,
+            initial_values: self.initial_values,
+            initialize_rest_to_zero: self.initialize_rest_to_zero,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -844,9 +904,32 @@ where
             }
         };
 
+        let mut synchronizer = Synchronizer::new(signal_interpolation);
+        // A formula over one signal is defined wherever that signal is, so it needs no
+        // initial value; over several, an uninitialized one leaves a prefix where the
+        // formula is read from the others alone.
+        let signals = formula_def.clone().get_signal_identifiers();
+        if signals.len() > 1 {
+            let mut initial_values = self.initial_values.clone();
+            if self.initialize_rest_to_zero {
+                for signal in &signals {
+                    initial_values.entry(signal).or_insert_with(T::zero);
+                }
+            }
+            if signals.iter().any(|s| !initial_values.contains_key(s)) {
+                return Err(
+                    "Every signal of a formula over more than one signal must be given an \
+                     initial value: use initialize_signal, initialize_signals, or \
+                     initialize_signals_to_zero.",
+                );
+            }
+            synchronizer.set_initial_values(initial_values);
+        }
+
         Ok(StlMonitor {
             root_operator,
-            synchronizer: Synchronizer::new(signal_interpolation),
+            first_timestamp: reported_from(&synchronizer),
+            synchronizer,
             variables: self.variables.clone(),
             algorithm: self.algorithm,
             semantics: self.semantics,
@@ -1052,6 +1135,7 @@ mod tests {
             .formula(formula.clone())
             .algorithm(Algorithm::Incremental)
             .semantics(DelayedQuantitative)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -1059,6 +1143,7 @@ mod tests {
             .formula(formula)
             .algorithm(Algorithm::Naive)
             .semantics(DelayedQuantitative)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -1165,6 +1250,7 @@ mod tests {
             .semantics(DelayedQualitative)
             .algorithm(Algorithm::Incremental)
             .variables(variables)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -1202,6 +1288,7 @@ mod tests {
             .formula(formula)
             .semantics(Rosi)
             .algorithm(Algorithm::Incremental)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -1217,8 +1304,7 @@ mod tests {
         // `x` does and two seconds ahead of that, giving {0,2,4}; `F[0,3]` where `y` does
         // and three seconds ahead, giving {0,2,3,5}. Inside the trace that is {0,2,3,4}.
         //
-        // `t=3` is non-final: `G[0,2]` reads `x` over `[3,5]` and `x` is known only
-        // through 4s.
+        // `t=3` and `t=4` are non-final: `G[0,2]` reads `x` past 4s, where it is not known.
         assert_eq!(verdicts.len(), 4);
         assert!(verdicts[0].timestamp == Duration::from_secs(0));
         assert!(verdicts[0].value.0 == verdicts[0].value.1); // final
@@ -1247,6 +1333,7 @@ mod tests {
             StlMonitor::builder()
                 .formula(stl!(G[0,2] (x > 10.0) && F[0,3] (y < 20.0)))
                 .semantics(Rosi)
+                .initialize_signals_to_zero()
                 .build()
                 .unwrap()
         };
@@ -1333,6 +1420,7 @@ mod tests {
             .algorithm(Algorithm::Incremental)
             .signal_interpolation(SignalInterpolation::Linear)
             .variables(variables)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -1852,6 +1940,7 @@ mod tests {
                 .semantics(DelayedQuantitative)
                 .algorithm(Algorithm::Incremental)
                 .signal_interpolation(SignalInterpolation::ZeroOrderHold)
+                .initialize_signals_to_zero()
                 .build()
                 .unwrap();
 
@@ -1952,6 +2041,7 @@ mod tests {
             .semantics(DelayedQuantitative)
             .algorithm(Algorithm::Incremental)
             .signal_interpolation(SignalInterpolation::ZeroOrderHold)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
         let before = monitor.total_size();

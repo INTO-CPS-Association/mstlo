@@ -48,9 +48,20 @@ fn main() {
     let formula = parse_stl(property.trim()).expect("Invalid property");
     println!("Monitoring: {formula}");
 
+    // A formula over more than one signal is read from t=0, so every signal
+    // needs a value there. Each signal's own first sample is the natural
+    // choice; a signal that is really sampled at t=0 ignores it.
+    let mut initial: Vec<(&'static str, f64)> = Vec::new();
+    for step in &trace {
+        if !initial.iter().any(|(signal, _)| *signal == step.signal) {
+            initial.push((step.signal, step.value));
+        }
+    }
+
     let mut monitor = StlMonitor::builder()
         .formula(formula)
         .semantics(DelayedQuantitative)
+        .initialize_signals(initial)
         .build()
         .expect("Failed to build monitor");
 

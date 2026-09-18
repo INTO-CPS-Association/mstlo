@@ -5,10 +5,13 @@
 //! the [`SignalInterpolation`] the monitor was configured with is held so the layers that
 //! act on it can read it back.
 //!
-//! No samples are synthesized here. Reading a signal between its own samples is applied at
-//! the predicate layer instead; see [`SignalInterpolation`].
+//! Reading a signal between its own samples is applied at the predicate layer instead; see
+//! [`SignalInterpolation`]. The one sample synthesized here is a signal's initial value at
+//! `t=0`, so that a formula over several signals is defined from the start rather than over
+//! whatever prefix the slowest signal leaves undefined; see
+//! [`Synchronizer::set_initial_values`].
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ops::{Add, Mul, Sub};
 use std::time::Duration;
 
@@ -74,9 +77,15 @@ impl SynchronizationStrategy {
 pub trait Interpolatable:
     Copy + Add<Output = Self> + Sub<Output = Self> + Mul<f64, Output = Self>
 {
+    /// The value a signal is initialized to when no other one is given.
+    fn zero() -> Self;
 }
 
-impl Interpolatable for f64 {}
+impl Interpolatable for f64 {
+    fn zero() -> Self {
+        0.0
+    }
+}
 
 /// Admits input steps on their way to the operator tree.
 ///
@@ -89,6 +98,10 @@ pub struct Synchronizer<T> {
     interpolation: SignalInterpolation,
     /// Timestamp of the last admitted step per signal.
     last_timestamps: HashMap<&'static str, Duration>,
+    /// Initial value per signal, as configured. Survives [`Self::reset`].
+    initial_values: BTreeMap<&'static str, T>,
+    /// Those of [`Self::initial_values`] not yet resolved, in emission order.
+    pending_inits: BTreeMap<&'static str, T>,
     /// Queue of admitted steps to be drained by consumers.
     pub pending: VecDeque<Step<T>>,
 }
@@ -102,8 +115,35 @@ where
         Self {
             interpolation,
             last_timestamps: HashMap::new(),
+            initial_values: BTreeMap::new(),
+            pending_inits: BTreeMap::new(),
             pending: VecDeque::new(),
         }
+    }
+
+    /// Defines each of `initial_values` from `t=0`, until its own first sample arrives.
+    ///
+    /// A signal's initial value is emitted as a step at `t=0`, but only once it is needed:
+    /// when the first sample past `t=0` is admitted. A signal whose own first sample is at
+    /// `t=0` therefore never gets one, and a trace that already defines every signal at
+    /// `t=0` is admitted unchanged.
+    ///
+    /// The flush is what fixes the prefix, so a real `t=0` sample overrides an initial value
+    /// only while it arrives before the first sample past `t=0`; after that it is a repeated
+    /// timestamp like any other.
+    pub fn set_initial_values(
+        &mut self,
+        initial_values: impl IntoIterator<Item = (&'static str, T)>,
+    ) where
+        T: Copy,
+    {
+        self.initial_values = initial_values.into_iter().collect();
+        self.pending_inits = self.initial_values.clone();
+    }
+
+    /// Whether any signal is defined from `t=0` by [`Self::set_initial_values`].
+    pub fn has_initial_values(&self) -> bool {
+        !self.initial_values.is_empty()
     }
 
     /// Returns how this synchronizer reads signals between their own samples.
@@ -113,10 +153,15 @@ where
 
     /// Resets all runtime state (last seen timestamps, pending queue).
     ///
-    /// The signal interpolation is preserved.
-    pub fn reset(&mut self) {
+    /// The signal interpolation and the initial values are preserved, and the latter are
+    /// armed again.
+    pub fn reset(&mut self)
+    where
+        T: Copy,
+    {
         self.last_timestamps.clear();
         self.pending.clear();
+        self.pending_inits = self.initial_values.clone();
     }
 
     /// Returns estimated heap memory in bytes used by the synchronizer's
@@ -125,12 +170,16 @@ where
         self.pending.capacity() * std::mem::size_of::<Step<T>>()
             + self.last_timestamps.capacity()
                 * (std::mem::size_of::<&str>() + std::mem::size_of::<Duration>() + 1)
+            + (self.initial_values.len() + self.pending_inits.len())
+                * (std::mem::size_of::<&str>() + std::mem::size_of::<T>() + 1)
     }
 
     /// Admits a new step, appending it to `self.pending`.
     ///
     /// Timestamps must be strictly increasing per signal. Steps violating this
     /// are ignored and a warning is printed.
+    ///
+    /// Any initial value still owed is emitted first; see [`Self::set_initial_values`].
     pub fn evaluate(&mut self, current_step: Step<T>) {
         let signal_id = current_step.signal;
         let current_time = current_step.timestamp;
@@ -144,6 +193,21 @@ where
                 signal_id, current_time, prev_time
             );
             return;
+        }
+
+        if !self.pending_inits.is_empty() {
+            if current_time == Duration::ZERO {
+                // The signal defines itself at t=0; its initial value is not needed.
+                self.pending_inits.remove(&signal_id);
+            } else {
+                // Past t=0 the prefix is fixed: every signal still without a sample takes
+                // its initial value from t=0.
+                for (signal, value) in std::mem::take(&mut self.pending_inits) {
+                    self.last_timestamps.insert(signal, Duration::ZERO);
+                    self.pending
+                        .push_back(Step::new(signal, value, Duration::ZERO));
+                }
+            }
         }
 
         self.last_timestamps.insert(signal_id, current_time);
@@ -187,6 +251,70 @@ mod tests {
                 interpolation
             );
         }
+    }
+
+    /// Drains everything admitted so far.
+    fn drain(sync: &mut Synchronizer<f64>) -> Vec<Step<f64>> {
+        std::iter::from_fn(|| sync.pending.pop_front()).collect()
+    }
+
+    /// An initial value is emitted at `t=0`, but not before a sample past `t=0` needs it.
+    #[test]
+    fn test_initial_values_flushed_at_first_step_past_zero() {
+        let mut sync = Synchronizer::new(SignalInterpolation::ZeroOrderHold);
+        sync.set_initial_values([("A", 1.0), ("B", 10.0)]);
+        assert!(sync.pending.is_empty(), "nothing is owed before a sample");
+
+        let sample = Step::new("A", 5.0, Duration::from_secs(1));
+        sync.evaluate(sample.clone());
+
+        assert_eq!(
+            drain(&mut sync),
+            vec![
+                Step::new("A", 1.0, Duration::ZERO),
+                Step::new("B", 10.0, Duration::ZERO),
+                sample,
+            ],
+            "both signals are defined from t=0, in signal order, before the sample"
+        );
+    }
+
+    /// A signal sampled at `t=0` defines itself there; its initial value is dropped.
+    #[test]
+    fn test_real_zero_sample_overrides_initial_value() {
+        let mut sync = Synchronizer::new(SignalInterpolation::ZeroOrderHold);
+        sync.set_initial_values([("A", 1.0), ("B", 10.0)]);
+
+        let real = Step::new("A", 5.0, Duration::ZERO);
+        sync.evaluate(real.clone());
+        assert_eq!(drain(&mut sync), vec![real], "no initial value for A");
+
+        // B has still not been sampled, so it is the only one left to define.
+        let past_zero = Step::new("A", 6.0, Duration::from_secs(1));
+        sync.evaluate(past_zero.clone());
+        assert_eq!(
+            drain(&mut sync),
+            vec![Step::new("B", 10.0, Duration::ZERO), past_zero]
+        );
+    }
+
+    /// Initial values survive a reset and are owed again.
+    #[test]
+    fn test_reset_rearms_initial_values() {
+        let mut sync = Synchronizer::new(SignalInterpolation::ZeroOrderHold);
+        sync.set_initial_values([("A", 1.0)]);
+        sync.evaluate(Step::new("A", 5.0, Duration::from_secs(1)));
+        drain(&mut sync);
+
+        sync.reset();
+        sync.evaluate(Step::new("A", 7.0, Duration::from_secs(1)));
+        assert_eq!(
+            drain(&mut sync),
+            vec![
+                Step::new("A", 1.0, Duration::ZERO),
+                Step::new("A", 7.0, Duration::from_secs(1)),
+            ]
+        );
     }
 
     /// The deprecated strategy is nothing but a name for an interpolation.
