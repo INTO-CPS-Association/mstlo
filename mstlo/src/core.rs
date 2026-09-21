@@ -245,6 +245,14 @@ pub trait RobustnessSemantics: Clone + PartialEq {
     /// Used by incremental temporal operators where windows are not yet closed.
     fn unknown() -> Self;
 
+    /// Whether the value is final, i.e. no later update can change it.
+    ///
+    /// Only RoSI reports values that are not, and it widens an interval solely through
+    /// [`Self::unknown`], so a degenerate interval has none folded in and is settled.
+    fn is_final(&self) -> bool {
+        true
+    }
+
     /// Returns true if 'old' is strictly dominated by 'new' such that 'old'
     /// can be safely discarded from a Lemire sliding window.
     ///
@@ -393,6 +401,11 @@ impl RobustnessSemantics for RobustnessInterval {
     fn unknown() -> Self {
         RobustnessInterval(f64::NEG_INFINITY, f64::INFINITY)
     }
+
+    fn is_final(&self) -> bool {
+        self.0 == self.1
+    }
+
     fn prune_dominated(old: Self, new: Self, is_max: bool) -> bool {
         // example: F[a,b] x>0
         // x0 = -2, x1 = 2

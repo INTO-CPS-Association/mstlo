@@ -20,12 +20,15 @@ struct WindowParams<'a> {
     /// known up to here and no further, which is what decides whether a window is
     /// closed.
     frontier: Duration,
-    /// How far past a window's end the frontier must reach before the values inside it
-    /// stop moving. Zero in the delayed and eager modes, where the operand emits a value
-    /// only once it is final. Under RoSI the operand keeps refining timestamps it has
-    /// already emitted, and it is done doing so one operand lookahead later, so a window
-    /// finalized as soon as the frontier covers it would freeze an intermediate value.
-    settle: Duration,
+    /// Newest timestamp the operand has stopped refining. Equal to `frontier` in the
+    /// delayed and eager modes, where a value is emitted only once it is final. Under RoSI
+    /// the operand keeps refining timestamps it has already emitted, so a window finalized
+    /// as soon as the frontier covers it would freeze an intermediate value.
+    ///
+    /// Read off the values themselves rather than assumed to trail `frontier` by the
+    /// operand's lookahead: an operand whose own frontier is held back by a slow signal is
+    /// settled much closer to it than its lookahead suggests.
+    settled: Duration,
     upper_bound: Option<Duration>,
     dominated_through: Option<Duration>,
 }
@@ -77,13 +80,24 @@ where
     // The value held at `window_start`, i.e. `zoh_at` without a second search. `None` only
     // where a dominating entry inside the window already carries it. Only up to the
     // frontier: past it the newest entry would read as holding indefinitely.
-    let held_at_start = (window_start <= window.frontier)
+    let in_range = window_start <= window.frontier;
+    let held_entry = in_range
         .then(|| match entries.peek() {
             Some(entry) if entry.timestamp == window_start => Some(*entry),
             _ => before.filter(|entry| entry.held_until > window_start),
         })
-        .flatten()
-        .map(|step| step.value.clone());
+        .flatten();
+
+    // Past the settled mark the read is unusable: under RoSI the operand is still refining
+    // there, so a cached value is stale, and how its interval widens inside the stretch is
+    // its own aggregation's business. Nothing is known at the window start. `settled` is
+    // the frontier outside RoSI, so this never fires there.
+    let unknown_at_start = IS_ROSI && in_range && window_start > window.settled;
+    let held_at_start = if unknown_at_start {
+        Some(Y::unknown())
+    } else {
+        held_entry.map(|entry| entry.value.clone())
+    };
 
     let mut entries = entries
         .take_while(|entry| entry.timestamp <= window_end)
@@ -144,7 +158,7 @@ where
         let window_end = t_eval + window.interval.end;
 
         // the operand has produced every value the window covers, and settled on them
-        let is_closed = window.frontier >= window_end + window.settle;
+        let is_closed = window.settled >= window_end;
 
         if !is_closed && !IS_EAGER && !IS_ROSI {
             break;
@@ -340,8 +354,6 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
                 *dominated_through = (*dominated_through).max(Some(back.timestamp));
             }
             cache.add_step(sub_step);
-        } else if IS_ROSI {
-            cache.update_step(sub_step);
         } else {
             // A value re-reported at a timestamp already stored is not a new breakpoint and
             // needs no window queued. `finalized_ts` is not passed: it gates windows behind
@@ -411,7 +423,8 @@ pub struct Eventually<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     cache: C,
     eval_buffer: VecDeque<Duration>,
     max_lookahead: Duration,
-    operand_lookahead: Duration,
+    /// Newest operand timestamp whose value is final. See [`WindowParams::settled`].
+    operand_settled: Duration,
     /// Timestamp of the operand's first sample; a shifted timestamp before it is dropped.
     first_ts: Option<Duration>,
     /// Newest evaluation timestamp already answered for good. See [`register_sub_steps`].
@@ -448,8 +461,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
         C: RingBufferTrait<Value = Y> + Clone + 'static,
         Y: RobustnessSemantics + 'static,
     {
-        let operand_lookahead = operand.get_max_lookahead();
-        let max_lookahead = interval.end + operand_lookahead;
+        let max_lookahead = interval.end + operand.get_max_lookahead();
         let eval_buffer = eval_buffer.unwrap_or_default();
         #[cfg(feature = "track-cache-size")]
         {
@@ -461,10 +473,10 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 cache: c,
                 eval_buffer,
                 max_lookahead,
-                operand_lookahead,
                 first_ts: None,
                 finalized_ts: None,
                 dominated_through: None,
+                operand_settled: Duration::ZERO,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -476,10 +488,10 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Eventually<T, C, Y, IS_
                 cache: c,
                 eval_buffer,
                 max_lookahead,
-                operand_lookahead,
                 first_ts: None,
                 finalized_ts: None,
                 dominated_through: None,
+                operand_settled: Duration::ZERO,
             }
         }
     }
@@ -537,31 +549,39 @@ where
         let sub_robustness_vec = self.operand.update(step);
         let operand_known_through = self.operand.known_through();
         let mut output_robustness = Vec::new();
-        // See [`WindowParams::settle`].
-        let settle = if IS_ROSI {
-            self.operand_lookahead
-        } else {
-            Duration::ZERO
-        };
+        // See [`WindowParams::settled`]. The operand refines from the oldest timestamp
+        // forward, so the ones it is still working on are a suffix and the newest final
+        // value marks where that suffix starts. Outside RoSI every value is final, and the
+        // frontier is the mark.
+        for sub_step in &sub_robustness_vec {
+            if sub_step.value.is_final() {
+                self.operand_settled = self.operand_settled.max(sub_step.timestamp);
+            }
+        }
 
         // Phase A: finalize windows that close strictly before the
         // first new sub-step, against the current (pre-Phase-B) cache.
         if let Some(first) = sub_robustness_vec.first()
             && let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead)
         {
+            // The operand has just reported at `first.timestamp`, so its signal is known
+            // up to there even though the step is not registered yet -- as far as the
+            // operand admits to being gap-free, at least.
+            let frontier = match operand_known_through {
+                Some(bound) => first.timestamp.min(bound),
+                None => first.timestamp,
+            };
             output_robustness.extend(process_eval_buffer::<_, _, _, _, IS_EAGER, IS_ROSI>(
                 &mut self.eval_buffer,
                 &self.cache,
                 WindowParams {
                     interval: &self.interval,
-                    // The operand has just reported at `first.timestamp`, so its signal
-                    // is known up to there even though the step is not registered yet --
-                    // as far as the operand admits to being gap-free, at least.
-                    frontier: match operand_known_through {
-                        Some(bound) => first.timestamp.min(bound),
-                        None => first.timestamp,
+                    frontier,
+                    settled: if IS_ROSI {
+                        self.operand_settled.min(frontier)
+                    } else {
+                        frontier
                     },
-                    settle,
                     upper_bound: Some(split_key),
                     dominated_through: self.dominated_through,
                 },
@@ -590,7 +610,12 @@ where
             WindowParams {
                 interval: &self.interval,
                 frontier: cache_frontier(&self.cache, operand_known_through),
-                settle,
+                settled: if IS_ROSI {
+                    self.operand_settled
+                        .min(cache_frontier(&self.cache, operand_known_through))
+                } else {
+                    cache_frontier(&self.cache, operand_known_through)
+                },
                 upper_bound: None,
                 dominated_through: self.dominated_through,
             },
@@ -604,7 +629,10 @@ where
         // whose window opens at `ts - interval.end + interval.start`. The earliest such window
         // start still reachable is the one derived from a sample just past the frontier, so the value
         // in force there has to survive even though nothing pending asks for it yet.
+        // Under RoSI a breakpoint arrives anywhere back to the settled mark, not just past
+        // the frontier, so the reachable window start reaches `settle` further back too.
         let earliest_future_window_start = cache_frontier(&self.cache, operand_known_through)
+            .min(self.operand_settled)
             .saturating_sub(self.interval.end.saturating_sub(self.interval.start));
         let protected_ts = self
             .eval_buffer
@@ -638,7 +666,8 @@ pub struct Globally<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     cache: C,
     eval_buffer: VecDeque<Duration>,
     max_lookahead: Duration,
-    operand_lookahead: Duration,
+    /// Newest operand timestamp whose value is final. See [`WindowParams::settled`].
+    operand_settled: Duration,
     /// Timestamp of the operand's first sample; a shifted timestamp before it is dropped.
     first_ts: Option<Duration>,
     /// Newest evaluation timestamp already answered for good. See [`register_sub_steps`].
@@ -675,8 +704,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
         C: RingBufferTrait<Value = Y> + Clone + 'static,
         Y: RobustnessSemantics + 'static,
     {
-        let operand_lookahead = operand.get_max_lookahead();
-        let max_lookahead = interval.end + operand_lookahead;
+        let max_lookahead = interval.end + operand.get_max_lookahead();
         let eval_buffer = eval_buffer.unwrap_or_default();
         #[cfg(feature = "track-cache-size")]
         {
@@ -688,10 +716,10 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 cache: c,
                 eval_buffer,
                 max_lookahead,
-                operand_lookahead,
                 first_ts: None,
                 finalized_ts: None,
                 dominated_through: None,
+                operand_settled: Duration::ZERO,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -703,10 +731,10 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Globally<T, C, Y, IS_EA
                 cache: c,
                 eval_buffer,
                 max_lookahead,
-                operand_lookahead,
                 first_ts: None,
                 finalized_ts: None,
                 dominated_through: None,
+                operand_settled: Duration::ZERO,
             }
         }
     }
@@ -764,31 +792,39 @@ where
         let sub_robustness_vec = self.operand.update(step);
         let operand_known_through = self.operand.known_through();
         let mut output_robustness = Vec::new();
-        // See [`WindowParams::settle`].
-        let settle = if IS_ROSI {
-            self.operand_lookahead
-        } else {
-            Duration::ZERO
-        };
+        // See [`WindowParams::settled`]. The operand refines from the oldest timestamp
+        // forward, so the ones it is still working on are a suffix and the newest final
+        // value marks where that suffix starts. Outside RoSI every value is final, and the
+        // frontier is the mark.
+        for sub_step in &sub_robustness_vec {
+            if sub_step.value.is_final() {
+                self.operand_settled = self.operand_settled.max(sub_step.timestamp);
+            }
+        }
 
         // Phase A: finalize windows that close strictly before the
         // first new sub-step, against the current (pre-Phase-B) cache.
         if let Some(first) = sub_robustness_vec.first()
             && let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead)
         {
+            // The operand has just reported at `first.timestamp`, so its signal is known
+            // up to there even though the step is not registered yet -- as far as the
+            // operand admits to being gap-free, at least.
+            let frontier = match operand_known_through {
+                Some(bound) => first.timestamp.min(bound),
+                None => first.timestamp,
+            };
             output_robustness.extend(process_eval_buffer::<_, _, _, _, IS_EAGER, IS_ROSI>(
                 &mut self.eval_buffer,
                 &self.cache,
                 WindowParams {
                     interval: &self.interval,
-                    // The operand has just reported at `first.timestamp`, so its signal
-                    // is known up to there even though the step is not registered yet --
-                    // as far as the operand admits to being gap-free, at least.
-                    frontier: match operand_known_through {
-                        Some(bound) => first.timestamp.min(bound),
-                        None => first.timestamp,
+                    frontier,
+                    settled: if IS_ROSI {
+                        self.operand_settled.min(frontier)
+                    } else {
+                        frontier
                     },
-                    settle,
                     upper_bound: Some(split_key),
                     dominated_through: self.dominated_through,
                 },
@@ -817,7 +853,12 @@ where
             WindowParams {
                 interval: &self.interval,
                 frontier: cache_frontier(&self.cache, operand_known_through),
-                settle,
+                settled: if IS_ROSI {
+                    self.operand_settled
+                        .min(cache_frontier(&self.cache, operand_known_through))
+                } else {
+                    cache_frontier(&self.cache, operand_known_through)
+                },
                 upper_bound: None,
                 dominated_through: self.dominated_through,
             },
@@ -835,7 +876,10 @@ where
         // Pruning it away leaves the window-start ZOH read empty and the window is then
         // aggregated without the value it opens on -- reporting, for `F`, a violation over
         // an interval where the operand is in force and satisfied.
+        // Under RoSI a breakpoint arrives anywhere back to the settled mark, not just past
+        // the frontier, so the reachable window start reaches `settle` further back too.
         let earliest_future_window_start = cache_frontier(&self.cache, operand_known_through)
+            .min(self.operand_settled)
             .saturating_sub(self.interval.end.saturating_sub(self.interval.start));
         let protected_ts = self
             .eval_buffer

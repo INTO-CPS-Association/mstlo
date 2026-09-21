@@ -14,6 +14,24 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt::Display;
 use std::time::Duration;
 
+/// The value an operand holds at `t`, read off the cache entry in force there.
+///
+/// Under RoSI an entry carried forward from an earlier timestamp is the operand's value at
+/// `t` only where the operand has settled. Past `settled_through` it is still refining, and
+/// how its interval widens inside the stretch depends on its own aggregation, which is not
+/// something the reader can reconstruct -- so nothing is known there.
+fn held_value<Y: RobustnessSemantics, const IS_ROSI: bool>(
+    entry: &Step<Y>,
+    t: Duration,
+    settled_through: Duration,
+) -> Y {
+    if IS_ROSI && entry.timestamp < t && t > settled_through {
+        Y::unknown()
+    } else {
+        entry.value.clone()
+    }
+}
+
 #[derive(Clone)]
 /// Temporal until operator `φ U[a,b] ψ`.
 ///
@@ -30,6 +48,8 @@ pub struct Until<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_cache: C,
     right_cache: C,
     t_max: (Duration, Duration), // (left t_max, right t_max)
+    /// Newest timestamp each operand has stopped refining, i.e. reported a final value for.
+    settled: (Duration, Duration),
     eval_buffer: VecDeque<Duration>,
     left_signals_set: HashSet<&'static str>,
     right_signals_set: HashSet<&'static str>,
@@ -76,6 +96,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
                 left_cache: l_cache,
                 right_cache: r_cache,
                 t_max: (Duration::ZERO, Duration::ZERO),
+                settled: (Duration::ZERO, Duration::ZERO),
                 eval_buffer: VecDeque::new(),
                 left_signals_set: HashSet::new(),
                 right_signals_set: HashSet::new(),
@@ -93,6 +114,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
                 left_cache: left_cache.unwrap_or_else(|| C::new()),
                 right_cache: right_cache.unwrap_or_else(|| C::new()),
                 t_max: (Duration::ZERO, Duration::ZERO),
+                settled: (Duration::ZERO, Duration::ZERO),
                 eval_buffer: VecDeque::new(),
                 left_signals_set: HashSet::new(),
                 right_signals_set: HashSet::new(),
@@ -103,22 +125,14 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
         }
     }
 
-    /// Adds a step to a cache.
+    /// Adds a step to a cache, in timestamp order.
     ///
-    /// In RoSI mode this performs update-or-insert by timestamp; otherwise it
-    /// appends the step.
     /// Returns `true` when the step landed *behind* the newest one already cached.
-    fn add_to_cache<const ROSI: bool>(cache: &mut C, step: Step<Y>) -> bool
+    fn add_to_cache(cache: &mut C, step: Step<Y>) -> bool
     where
         C: RingBufferTrait<Value = Y>,
         Y: Clone,
     {
-        if ROSI {
-            if !cache.update_step(step.clone()) {
-                cache.add_step(step);
-            }
-            return false;
-        }
         let is_late = cache
             .get_back()
             .is_some_and(|back| step.timestamp < back.timestamp);
@@ -255,13 +269,19 @@ where
         let mut late_ts: Vec<Duration> = Vec::new();
         for update in &right_updates {
             all_ts.push(update.timestamp);
-            if Self::add_to_cache::<IS_ROSI>(&mut self.right_cache, update.clone()) {
+            if update.value.is_final() {
+                self.settled.1 = self.settled.1.max(update.timestamp);
+            }
+            if Self::add_to_cache(&mut self.right_cache, update.clone()) {
                 late_ts.push(update.timestamp);
             }
         }
         for update in &left_updates {
             all_ts.push(update.timestamp);
-            if Self::add_to_cache::<IS_ROSI>(&mut self.left_cache, update.clone()) {
+            if update.value.is_final() {
+                self.settled.0 = self.settled.0.max(update.timestamp);
+            }
+            if Self::add_to_cache(&mut self.left_cache, update.clone()) {
                 late_ts.push(update.timestamp);
             }
         }
@@ -315,6 +335,20 @@ where
             None => Some(value),
         };
 
+        // Under RoSI an operand keeps refining timestamps it has already emitted, so each
+        // side is settled only up to its newest final value. Past that mark its value moves
+        // *inside* a stretch, where there is no entry to carry it, so a held read there is
+        // not the operand's value. Outside RoSI an operand emits nothing until it is final,
+        // so the mark is the frontier.
+        let (left_settled, right_settled) = if IS_ROSI {
+            (
+                self.settled.0.min(self.t_max.0),
+                self.settled.1.min(self.t_max.1),
+            )
+        } else {
+            (self.t_max.0, self.t_max.1)
+        };
+
         // 2. Process the evaluation buffer for tasks
         for &t_eval in self.eval_buffer.iter() {
             let window_start_t_eval = t_eval + self.interval.start;
@@ -346,11 +380,11 @@ where
             //
             // phi is read over `[t_eval, t']` and psi over `[t_eval + a, t']`, with t' up
             // to the window end, so the window end is the bound for both.
-            let window_covered = if IS_ROSI {
-                current_time >= t_eval + self.get_max_lookahead()
-            } else {
-                self.t_max.0 >= window_end_t_eval && self.t_max.1 >= window_end_t_eval
-            };
+            // Under RoSI an operand keeps refining timestamps it has already emitted, and is
+            // done one of its own lookaheads later, so each side must reach that much past
+            // the window end before the values inside it stop moving.
+            let window_covered =
+                left_settled >= window_end_t_eval && right_settled >= window_end_t_eval;
 
             // Delayed mode stops at the first uncovered window, so skip walking it.
             if !IS_EAGER && !IS_ROSI && !window_covered {
@@ -365,7 +399,7 @@ where
             let phi_held = (t_eval <= self.t_max.0)
                 .then(|| self.left_cache.zoh_at(t_eval))
                 .flatten()
-                .map(|entry| entry.value.clone());
+                .map(|entry| held_value::<Y, IS_ROSI>(entry, t_eval, left_settled));
             let Some(phi_held) = phi_held else { break };
 
             // Candidate t'. Both operands are piecewise constant, so
@@ -481,15 +515,14 @@ where
                 // with `and` instead would push RoSI's lower bound to negative infinity and
                 // take a min against `NaN`, neither of which says "not known yet".
                 //
-                // RoSI is excluded. Its verdicts are refinable by construction, so an
-                // over-optimistic intermediate is corrected on the next update rather than
-                // frozen -- the unsoundness being guarded here is specifically that a
-                // *final* verdict rests on an unverified obligation. And its `unknown()` is
-                // the unbounded interval, which carries no information at all: substituting
-                // it leaves the enclosing `and` unable to report a bound, so the operator
-                // emits nothing and the refinement never starts.
-                let robustness_phi_left = if IS_ROSI || t_prime <= self.t_max.0 {
+                // RoSI folds `unknown()` in rather than substituting it. Its domain can say
+                // "no more than this, and no lower bound", so the obligation keeps the bound
+                // the arrived samples give it instead of going blank; substituting outright
+                // would leave the enclosing `and` with nothing to report.
+                let robustness_phi_left = if t_prime <= left_settled {
                     phi_known_min.clone()
+                } else if IS_ROSI {
+                    Y::and(phi_known_min.clone(), Y::unknown())
                 } else {
                     Y::unknown()
                 };
@@ -505,7 +538,9 @@ where
                 let robustness_psi_right = (t_prime <= self.t_max.1)
                     .then(|| psi_held.filter(|entry| entry.held_until > t_prime))
                     .flatten()
-                    .map_or_else(Y::unknown, |entry| entry.value.clone());
+                    .map_or_else(Y::unknown, |entry| {
+                        held_value::<Y, IS_ROSI>(entry, t_prime, right_settled)
+                    });
 
                 // 3. Eager falsification check: if phi has become false, short-circuit.
                 //

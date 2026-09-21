@@ -247,7 +247,11 @@ where
         }
         let held_until = self.steps[index].timestamp;
         if index > 0 {
-            self.steps[index - 1].held_until = step.timestamp;
+            // the predecessor may already have been closed by a
+            // step that has since been evicted, and this one landing after that point does
+            // not put it back in force. Same rule as [`Self::add_step`].
+            let previous = &mut self.steps[index - 1];
+            previous.held_until = previous.held_until.min(step.timestamp);
         }
         self.steps.insert(index, Step { held_until, ..step });
         #[cfg(feature = "track-cache-size")]
