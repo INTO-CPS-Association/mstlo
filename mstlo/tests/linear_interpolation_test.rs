@@ -16,6 +16,9 @@ use mstlo::{
     FormulaDefinition, RobustnessSemantics, SemanticType, SignalInterpolation, Step, step, stl,
 };
 use rstest::rstest;
+
+mod common;
+use common::initial_values;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::time::Duration;
@@ -31,6 +34,7 @@ fn run(
         .semantics(DelayedQualitative)
         .algorithm(Algorithm::Incremental)
         .signal_interpolation(interpolation)
+        .initialize_signals(initial_values(trace))
         .build()
         .unwrap();
 

@@ -7,8 +7,8 @@
 mod common;
 
 use common::*;
-use mstlo::monitor::{DelayedQualitative, DelayedQuantitative, EagerQualitative, Rosi};
-use mstlo::{FormulaDefinition, RobustnessInterval, step, stl};
+use mstlo::monitor::EagerQualitative;
+use mstlo::{FormulaDefinition, step, stl};
 
 /// `F[0,1](G[0.4,1](x > 3))`: the inner window starts between samples, so only the held
 /// value covers its start.
@@ -133,24 +133,13 @@ fn nested_window_with_zero_lower_bound() {
         step!("x", 1.0, secs(1.0)),
         step!("x", 7.0, secs(2.0)),
     ];
-    let formula = stl!(F[0, 1](G[0, 1](x > 3.0)));
-    let final_on = Some(signal[2].clone());
-    let at = secs(0.0);
-    assert_eq!(
-        verdict_at(&formula, &signal, DelayedQualitative, at),
-        final_on.clone().map(|on| (on, false))
-    );
-    assert_eq!(
-        verdict_at(&formula, &signal, DelayedQuantitative, at),
-        final_on.clone().map(|on| (on, -2.0))
-    );
-    assert_eq!(
-        verdict_at(&formula, &signal, Rosi, at),
-        final_on.map(|on| (on, RobustnessInterval(-2.0, -2.0)))
-    );
-    assert_eq!(
-        verdict_at(&formula, &signal, EagerQualitative, at),
-        Some((signal[1].clone(), false))
+    assert_verdict_at_eager_on(
+        stl!(F[0, 1](G[0, 1](x > 3.0))),
+        &signal,
+        secs(0.0),
+        -2.0,
+        &signal[2],
+        &signal[1],
     );
 }
 

@@ -2,11 +2,12 @@ mod common;
 
 use common::*;
 use mstlo::monitor::{Algorithm, DelayedQuantitative, EagerQualitative, Rosi, StlMonitor};
-use mstlo::{Step, step, stl};
+use mstlo::{RobustnessInterval, Step, step, stl};
+use std::collections::HashSet;
 use std::time::Duration;
 
-/// A conjunction answers only where both signals are known, so `y @10s` releases the
-/// timestamps `x` reported since `y @0s`.
+/// A conjunction is known only where both signals are. The timestamps `x` reports since
+/// `y @0s` wait for `y @10s`, which settles all four at once.
 #[test]
 fn interleaved_signals_answer_once_both_are_known() {
     let steps = [
@@ -18,20 +19,35 @@ fn interleaved_signals_answer_once_both_are_known() {
         step!("x", 1.0, Duration::from_secs(8)),
         step!("y", 1.0, Duration::from_secs(10)),
     ];
-    let expected_verdicts = [0, 1, 1, 1, 1, 1, 5];
 
     let mut monitor = StlMonitor::builder()
-        .formula(stl! { G[0,20]((x > 0) && (y < 150)) })
+        .formula(stl! { (x > 0) && (y < 150) })
         .semantics(Rosi)
         .algorithm(Algorithm::Incremental)
+        .initialize_signals(initial_values(&steps))
         .build()
         .unwrap();
 
-    for (step, expected) in steps.iter().zip(expected_verdicts) {
+    let verdicts: Vec<_> = steps
+        .iter()
+        .map(|step| monitor.update(step).verdicts())
+        .collect();
+    let at = |update: usize, secs: u64| {
+        verdicts[update]
+            .iter()
+            .find(|verdict| verdict.timestamp == Duration::from_secs(secs))
+            .map(|verdict| verdict.value)
+    };
+
+    // Nothing past `y`'s frontier is reported before it moves, not even bounded by `x`.
+    for update in 2..=5 {
+        assert_eq!(at(update, 2), None, "update {update}");
+    }
+    for secs in [2, 4, 6, 8] {
         assert_eq!(
-            monitor.update(step).verdicts().len(),
-            expected,
-            "verdicts after {step:?}"
+            at(6, secs),
+            Some(RobustnessInterval(1.0, 1.0)),
+            "at {secs}s"
         );
     }
 }
@@ -53,19 +69,21 @@ fn until_over_disjoint_signals_produces_verdicts() {
         .formula(formula.clone())
         .semantics(DelayedQuantitative)
         .algorithm(Algorithm::Incremental)
+        .initialize_signals(initial_values(&signal))
         .build()
         .unwrap();
     let mut eager = StlMonitor::builder()
         .formula(formula)
         .semantics(EagerQualitative)
         .algorithm(Algorithm::Incremental)
+        .initialize_signals(initial_values(&signal))
         .build()
         .unwrap();
 
     let (mut quantitative_verdicts, mut eager_verdicts) = (0, 0);
     for step in &signal {
-        quantitative_verdicts += quantitative.update(step).all_raw_outputs().len();
-        eager_verdicts += eager.update(step).all_raw_outputs().len();
+        quantitative_verdicts += quantitative.update(step).total_raw_outputs();
+        eager_verdicts += eager.update(step).total_raw_outputs();
     }
     assert!(quantitative_verdicts > 0, "no DelayedQuantitative verdicts");
     assert!(eager_verdicts > 0, "no EagerQualitative verdicts");
@@ -84,14 +102,16 @@ fn conjunction_answers_every_joint_timestamp() {
         .map(|i| step!("y", i as f64, Duration::from_secs(i)))
         .collect();
 
+    let signal = combine_and_sort_steps(vec![x_steps, y_steps]);
     let mut monitor = StlMonitor::builder()
         .formula(stl! { (x > 0) && (y < 150) })
         .semantics(Rosi)
         .algorithm(Algorithm::Incremental)
+        .initialize_signals(initial_values(&signal))
         .build()
         .unwrap();
 
-    let answered: Vec<Duration> = combine_and_sort_steps(vec![x_steps, y_steps])
+    let answered: HashSet<Duration> = signal
         .iter()
         .flat_map(|step| monitor.update(step).all_raw_outputs())
         .map(|verdict| verdict.timestamp)

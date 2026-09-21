@@ -1,4 +1,3 @@
-#[cfg(test)]
 mod common;
 mod fixtures;
 
@@ -10,8 +9,8 @@ use mstlo::{FormulaDefinition, RobustnessSemantics};
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use std::fmt::Debug;
-use std::vec;
 
+use common::initial_values;
 use fixtures::formulas::*;
 use fixtures::oracles::*;
 use fixtures::signals::*;
@@ -33,12 +32,13 @@ fn run_monitor_test<Y, S>(
             .formula(formula.clone())
             .algorithm(strategy)
             .semantics(semantics)
+            .initialize_signals(initial_values(&signal))
             .build()
             .unwrap();
 
         let mut all_results = Vec::new();
-        for step in signal.clone() {
-            let output = monitor.update(&step);
+        for step in &signal {
+            let output = monitor.update(step);
             println!("Step at {:?}, Monitor Output: {:?}", step.timestamp, output);
             all_results.push(output.all_raw_outputs());
         }

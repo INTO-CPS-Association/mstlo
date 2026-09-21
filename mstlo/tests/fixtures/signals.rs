@@ -66,6 +66,16 @@ pub fn signal_5() -> Vec<Step<f64>> {
     combine_and_sort_steps(vec![x_steps, y_steps])
 }
 
+/// Two signals sampled apart, `x` reaching each timestamp before `y` does.
+#[fixture]
+#[once]
+pub fn x_leads_y() -> Vec<Step<f64>> {
+    let x_steps = create_steps("x", vec![5.0, 15.0, 8.0], vec![0, 2, 4]);
+    let y_steps = create_steps("y", vec![25.0, 15.0, 30.0], vec![0, 3, 5]);
+
+    combine_and_sort_steps(vec![x_steps, y_steps])
+}
+
 #[fixture]
 #[once]
 pub fn sparse_timestamps() -> Vec<Step<f64>> {
