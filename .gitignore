@@ -4,4 +4,5 @@ __pycache__/
 .vscode/
 target/
 cobertura.xml
-_site/
+.claude/
+.serena/
