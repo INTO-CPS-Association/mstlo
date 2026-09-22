@@ -452,11 +452,6 @@ let monitor = StlMonitor::builder()
 
 A signal that is really sampled at $t=0$ overrides its initial value, provided that sample arrives before the first sample past $t=0$; a trace that starts every signal together is therefore monitored exactly as it is written. For `(x > 0) && (y > 0)` with $x$ at $0, 1, 2, 3$ and $y$ first at $2.5$, the monitor reads $y$ as its initial value on $[0, 2.5)$ and gives verdicts from $0$.
 
-<!-- README.md: the batch-update snippet (`G[0, 2](x > 5.0) && (y < 10.0)`) is over two signals
-and no longer builds as written. It needs a line such as
-`.initialize_signals([("x", 7.0), ("y", 3.0)])` before `.build()`. Both signals are sampled at
-0s there, so the values are never read and the verdicts are unchanged. -->
-
 #### Refinable Verdicts
 
 The RoSI semantics are the only ones that answer a timestamp before the trace decides it. A verdict is emitted as soon as the timestamp exists, and re-emitted, narrower, as samples arrive; a bound sits at $\pm\infty$ for as long as the prefix admits a continuation that would move it. `verdicts()` keeps the newest interval per timestamp, `raw_outputs()` every refinement in the order produced.

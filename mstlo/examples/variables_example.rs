@@ -1,5 +1,5 @@
-use mstlo::Variables;
 use mstlo::monitor::{Algorithm, StlMonitor, semantic_markers};
+use mstlo::{SignalInterpolation, Variables};
 use mstlo::{step, stl};
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ fn main() {
         .formula(phi)
         .semantics(semantic_markers::Rosi)
         .algorithm(Algorithm::Incremental)
-        .signal_interpolation(mstlo::SignalInterpolation::ZeroOrderHold)
+        .signal_interpolation(SignalInterpolation::ZeroOrderHold)
         .variables(vars.clone())
         .build()
         .expect("Failed to build STL monitor");
