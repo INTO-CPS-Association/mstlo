@@ -13,6 +13,8 @@
 
 mstlo (_mistletoe_) is a Rust library for online monitoring of Signal Temporal Logic (STL) specifications. It is designed for high performance and low memory usage, making it suitable for real-time applications. The Python bindings are published as `mstlo-python`.
 
+<!-- TOC -->
+
 - [mstlo](#mstlo)
   - [About](#about)
   - [Installation](#installation)
@@ -23,14 +25,22 @@ mstlo (_mistletoe_) is a Rust library for online monitoring of Signal Temporal L
       - [Batch updates](#batch-updates)
     - [Python Usage](#python-usage)
   - [Theory](#theory)
-    - [Signal Temporal Logic (STL)](#signal-temporal-logic-stl)
+    - [Signal Temporal Logic STL](#signal-temporal-logic-stl)
     - [Evaluation Semantics](#evaluation-semantics)
       - [Visual Comparison](#visual-comparison)
       - [Delayed Qualitative](#delayed-qualitative)
       - [Delayed Quantitative](#delayed-quantitative)
-      - [Robust Satisfaction Intervals (RoSI)](#robust-satisfaction-intervals-rosi)
+      - [Robust Satisfaction Intervals RoSI](#robust-satisfaction-intervals-rosi)
       - [Eager Qualitative](#eager-qualitative)
-    - [Implementation](#implementation)
+  - [Implementation](#implementation)
+    - [Signal Model](#signal-model)
+      - [Zero-Order Hold default](#zero-order-hold-default)
+      - [Linear Interpolation](#linear-interpolation)
+    - [Input](#input)
+      - [Multiple Signals](#multiple-signals)
+      - [Initialization of Signals](#initialization-of-signals)
+      - [Refinable Verdicts](#refinable-verdicts)
+    - [Settings that can hurt performance](#settings-that-can-hurt-performance)
   - [Building from Source](#building-from-source)
     - [Prerequisites](#prerequisites)
     - [Rust Crate](#rust-crate)
