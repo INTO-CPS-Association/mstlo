@@ -4,7 +4,7 @@ use mstlo::monitor::{
 };
 use mstlo::parse_stl;
 use mstlo::{FormulaDefinition, RobustnessInterval, TimeInterval, Variables};
-use mstlo::{Step, SynchronizationStrategy, intern};
+use mstlo::{SignalInterpolation, Step, intern};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyList, PyTuple};
 use std::collections::{HashMap, HashSet};
@@ -463,7 +463,7 @@ struct Monitor {
     inner: InnerMonitor,
     semantics: String,
     algorithm: String,
-    synchronization: String,
+    signal_interpolation: String,
     variables: PyVariables,
     /// Cache mapping signal name → the interned `&'static str`, so the global
     /// interner is consulted at most once per unique signal name per monitor
@@ -474,13 +474,18 @@ struct Monitor {
 #[pymethods]
 impl Monitor {
     #[new]
-    #[pyo3(signature = (formula, semantics="DelayedQuantitative", algorithm="Incremental", synchronization="ZeroOrderHold", variables=None))]
+    // One keyword argument per builder option, which is the shape pyo3 asks for.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (formula, semantics="DelayedQuantitative", algorithm="Incremental", synchronization=None, signal_interpolation=None, variables=None, init_signals=None))]
     fn new(
+        py: Python<'_>,
         formula: &Formula,
         semantics: &str,
         algorithm: &str,
-        synchronization: &str,
+        synchronization: Option<&str>,
+        signal_interpolation: Option<&str>,
         variables: Option<&PyVariables>,
+        init_signals: Option<HashMap<String, f64>>,
     ) -> PyResult<Self> {
         // Parse algorithm
         let algo = match algorithm {
@@ -493,19 +498,68 @@ impl Monitor {
             }
         };
 
-        let synchronization_strategy = match synchronization {
-            "ZeroOrderHold" => SynchronizationStrategy::ZeroOrderHold,
-            "Linear" => SynchronizationStrategy::Linear,
-            "None" => SynchronizationStrategy::None,
-            _ => {
+        // `synchronization` asked how several signals are aligned onto a common timeline,
+        // which turned out not to be a question with an answer. Each of its values is now
+        // read as the interpolation of the same name, with "None" meaning "ZeroOrderHold".
+        let from_synchronization = match synchronization {
+            None => Option::None,
+            Some(name) => {
+                let selected = match name {
+                    "ZeroOrderHold" | "None" => SignalInterpolation::ZeroOrderHold,
+                    "Linear" => SignalInterpolation::Linear,
+                    _ => {
+                        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                            "Invalid synchronization. Use 'ZeroOrderHold', 'Linear', or 'None'",
+                        ));
+                    }
+                };
+                let message = std::ffi::CString::new(format!(
+                    "synchronization='{name}' is deprecated; use signal_interpolation='{}' instead",
+                    match selected {
+                        SignalInterpolation::ZeroOrderHold => "ZeroOrderHold",
+                        SignalInterpolation::Linear => "Linear",
+                    }
+                ))
+                .map_err(|_| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid synchronization")
+                })?;
+                PyErr::warn(
+                    py,
+                    &py.get_type::<pyo3::exceptions::PyDeprecationWarning>(),
+                    message.as_c_str(),
+                    1,
+                )?;
+                Some(selected)
+            }
+        };
+
+        // How a signal behaves *between its own samples*. Given explicitly it wins, so a
+        // caller porting off `synchronization` can pass both during the transition.
+        let interpolation = match signal_interpolation {
+            None => from_synchronization.unwrap_or_default(),
+            Some("ZeroOrderHold") => SignalInterpolation::ZeroOrderHold,
+            Some("Linear") => SignalInterpolation::Linear,
+            Some(_) => {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Invalid synchronization. Use 'ZeroOrderHold', 'Linear', or 'None'",
+                    "Invalid signal_interpolation. Use 'ZeroOrderHold' or 'Linear'",
                 ));
             }
+        };
+        let interpolation_name = match interpolation {
+            SignalInterpolation::ZeroOrderHold => "ZeroOrderHold",
+            SignalInterpolation::Linear => "Linear",
         };
 
         // Get or create variables
         let vars = variables.cloned().unwrap_or_else(PyVariables::new);
+
+        // A formula over more than one signal is read from t=0, so every signal needs a
+        // value there. Anything the caller leaves out is zero, so a monitor always builds.
+        let init_values: Vec<(&'static str, f64)> = init_signals
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(signal, value)| (intern(&signal), value))
+            .collect();
 
         // Build monitor based on semantics
         match semantics {
@@ -514,15 +568,17 @@ impl Monitor {
                     .formula(formula.inner.clone())
                     .algorithm(algo)
                     .semantics(DelayedQualitative)
-                    .synchronization_strategy(synchronization_strategy)
+                    .signal_interpolation(interpolation)
                     .variables(vars.inner.clone())
+                    .initialize_signals(init_values)
+                    .initialize_signals_to_zero()
                     .build()
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 Ok(Monitor {
                     inner: InnerMonitor::DelayedQualitative(m),
                     semantics: semantics.to_string(),
                     algorithm: algorithm.to_string(),
-                    synchronization: synchronization.to_string(),
+                    signal_interpolation: interpolation_name.to_string(),
                     variables: vars,
                     signal_name_cache: HashMap::new(),
                 })
@@ -532,15 +588,17 @@ impl Monitor {
                     .formula(formula.inner.clone())
                     .algorithm(algo)
                     .semantics(EagerQualitative)
-                    .synchronization_strategy(synchronization_strategy)
+                    .signal_interpolation(interpolation)
                     .variables(vars.inner.clone())
+                    .initialize_signals(init_values)
+                    .initialize_signals_to_zero()
                     .build()
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 Ok(Monitor {
                     inner: InnerMonitor::EagerQualitative(m),
                     semantics: semantics.to_string(),
                     algorithm: algorithm.to_string(),
-                    synchronization: synchronization.to_string(),
+                    signal_interpolation: interpolation_name.to_string(),
                     variables: vars,
                     signal_name_cache: HashMap::new(),
                 })
@@ -550,15 +608,17 @@ impl Monitor {
                     .formula(formula.inner.clone())
                     .algorithm(algo)
                     .semantics(DelayedQuantitative)
-                    .synchronization_strategy(synchronization_strategy)
+                    .signal_interpolation(interpolation)
                     .variables(vars.inner.clone())
+                    .initialize_signals(init_values)
+                    .initialize_signals_to_zero()
                     .build()
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 Ok(Monitor {
                     inner: InnerMonitor::Robustness(m),
                     semantics: semantics.to_string(),
                     algorithm: algorithm.to_string(),
-                    synchronization: synchronization.to_string(),
+                    signal_interpolation: interpolation_name.to_string(),
                     variables: vars,
                     signal_name_cache: HashMap::new(),
                 })
@@ -568,15 +628,17 @@ impl Monitor {
                     .formula(formula.inner.clone())
                     .algorithm(algo)
                     .semantics(Rosi)
-                    .synchronization_strategy(synchronization_strategy)
+                    .signal_interpolation(interpolation)
                     .variables(vars.inner.clone())
+                    .initialize_signals(init_values)
+                    .initialize_signals_to_zero()
                     .build()
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 Ok(Monitor {
                     inner: InnerMonitor::Rosi(m),
                     semantics: semantics.to_string(),
                     algorithm: algorithm.to_string(),
-                    synchronization: synchronization.to_string(),
+                    signal_interpolation: interpolation_name.to_string(),
                     variables: vars,
                     signal_name_cache: HashMap::new(),
                 })
@@ -643,8 +705,22 @@ impl Monitor {
         self.semantics.clone()
     }
 
-    fn get_synchronization_strategy(&self) -> String {
-        self.synchronization.clone()
+    /// Deprecated alias for [`Monitor::get_signal_interpolation`].
+    ///
+    /// Reports the interpolation in force, so it answers "ZeroOrderHold" or "Linear" and
+    /// never "None", whichever spelling the monitor was built with.
+    fn get_synchronization_strategy(&self, py: Python<'_>) -> PyResult<String> {
+        PyErr::warn(
+            py,
+            &py.get_type::<pyo3::exceptions::PyDeprecationWarning>(),
+            c"get_synchronization_strategy() is deprecated; use get_signal_interpolation()",
+            1,
+        )?;
+        Ok(self.signal_interpolation.clone())
+    }
+
+    fn get_signal_interpolation(&self) -> String {
+        self.signal_interpolation.clone()
     }
 
     fn get_temporal_depth(&self) -> f64 {
@@ -683,8 +759,8 @@ impl Monitor {
     }
 
     /// Resets the monitor to its initial state, clearing all internal caches and
-    /// evaluation buffers. The formula, semantics, algorithm, synchronization
-    /// strategy, and variables are preserved.
+    /// evaluation buffers. The formula, semantics, algorithm, signal
+    /// interpolation, and variables are preserved.
     ///
     /// Use this to reuse a monitor across multiple independent traces without
     /// rebuilding it from scratch.
@@ -707,8 +783,8 @@ impl Monitor {
 
     fn __repr__(&self) -> String {
         format!(
-            "Monitor(semantics='{}', algorithm='{}', synchronization='{}')",
-            self.semantics, self.algorithm, self.synchronization
+            "Monitor(semantics='{}', algorithm='{}', signal_interpolation='{}')",
+            self.semantics, self.algorithm, self.signal_interpolation
         )
     }
 

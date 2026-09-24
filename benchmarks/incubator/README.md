@@ -47,6 +47,12 @@ sh run_incubator_bench.sh
 
 By default it covers the `normal` and `lid_open` phases (989 samples). `PHASES= sh run_incubator_bench.sh` monitors the whole session (1337 samples) instead, and `M_RUNS=5 sh run_incubator_bench.sh` is a quick pass.
 
+`DATA_DIR` picks the recording to read (`data/` by default; only `signal.csv` is read from it, and it is never written to) and `RESULTS_DIR` picks where the verdicts, datasets, timings and figures go. `RESULTS_DIR` defaults to `DATA_DIR`, which is the single-directory layout `rv26_results/` has; set it to keep a recording untouched:
+
+```bash
+DATA_DIR=rv26_results RESULTS_DIR=/tmp/run1 sh run_incubator_bench.sh
+```
+
 ### Memory
 
 The native benchmark also estimates memory usage. It reads `StlMonitor::total_size()` after every `update()` and writes the whole series to `data/benchmark_rust_memory.csv`, which `plot_results.py` draws as `figures/incubator_memory.pdf`. `data/benchmark_rust.csv` carries the per-specification average and peak alongside the timings.

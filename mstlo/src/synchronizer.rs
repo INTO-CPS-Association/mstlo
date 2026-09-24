@@ -1,50 +1,96 @@
-//! Multi-signal timestamp synchronization and interpolation.
+//! Input admission and the signal model.
 //!
-//! The monitor evaluates formulas against time-aligned samples. This module
-//! fills timestamp gaps per signal when required, based on a chosen
-//! [`SynchronizationStrategy`], and emits synchronized steps through a pending
-//! queue.
+//! Every sample passes through here before reaching the operator tree. Timestamps are
+//! checked to be strictly increasing per signal, and each signal's initial value is
+//! emitted at `t=0`; see [`Synchronizer::set_initial_values`]. The configured
+//! [`SignalInterpolation`] is stored here but applied at the predicate layer.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
-use std::iter::Iterator;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ops::{Add, Mul, Sub};
 use std::time::Duration;
 
 use crate::ring_buffer::Step;
 
-/// Strategy used to synthesize missing samples at known timeline timestamps.
+/// How an input signal is read *between* two consecutive samples.
+///
+/// This is a property of each signal, configured at the monitor level.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum SynchronizationStrategy {
-    /// No synchronization/interpolation; forward only real input steps.
-    None,
+pub enum SignalInterpolation {
+    /// The signal holds its last value until the next sample: $v(t) = v_0$.
     #[default]
-    /// Zero-order hold: $v(t) = v_0$.
     ZeroOrderHold,
-    /// Linear interpolation: $v(t)=v_0 + (v_1-v_0) \cdot \frac{t-t_0}{t_1-t_0}$.
+    /// The signal runs straight between samples:
+    /// $v(t)=v_0 + (v_1-v_0) \cdot \frac{t-t_0}{t_1-t_0}$.
     Linear,
 }
 
-/// Value requirements for synchronization interpolation.
+/// Deprecated; superseded by [`SignalInterpolation`]. Each variant selects the
+/// interpolation of the same name.
+#[deprecated(
+    since = "0.2.0",
+    note = "use `SignalInterpolation`; `None` and `ZeroOrderHold` both mean \
+            `SignalInterpolation::ZeroOrderHold`, and `Linear` means `SignalInterpolation::Linear`"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SynchronizationStrategy {
+    /// No synchronization; selects [`SignalInterpolation::ZeroOrderHold`].
+    None,
+    /// Zero-order hold; selects [`SignalInterpolation::ZeroOrderHold`].
+    ZeroOrderHold,
+    /// Selects [`SignalInterpolation::Linear`].
+    Linear,
+}
+
+#[allow(deprecated, clippy::derivable_impls)]
+impl Default for SynchronizationStrategy {
+    fn default() -> Self {
+        Self::ZeroOrderHold
+    }
+}
+
+#[allow(deprecated)]
+impl SynchronizationStrategy {
+    /// The interpolation this strategy selects.
+    pub fn interpolation(self) -> SignalInterpolation {
+        match self {
+            SynchronizationStrategy::Linear => SignalInterpolation::Linear,
+            SynchronizationStrategy::None | SynchronizationStrategy::ZeroOrderHold => {
+                SignalInterpolation::ZeroOrderHold
+            }
+        }
+    }
+}
+
+/// Value requirements for linear interpolation.
 ///
 /// Types must support affine interpolation via `+`, `-`, and scalar multiply by `f64`.
 pub trait Interpolatable:
     Copy + Add<Output = Self> + Sub<Output = Self> + Mul<f64, Output = Self>
 {
+    /// The value a signal is initialized to when no other one is given.
+    fn zero() -> Self;
 }
 
-impl Interpolatable for f64 {}
+impl Interpolatable for f64 {
+    fn zero() -> Self {
+        0.0
+    }
+}
 
-/// Synchronizer struct that handles interpolation of missing steps across multiple signals.
-/// It maintains a timeline of all timestamps and the last known step for each active signal.
-/// A signal is considered active if it has received at least one step.
+/// Admits input steps on their way to the operator tree.
+///
+/// Rejects steps that go backwards in time per signal, and places admitted steps on
+/// [`Self::pending`] in arrival order, preceded by any initial values.
 pub struct Synchronizer<T> {
-    /// Synchronization/interpolation mode.
-    strategy: SynchronizationStrategy,
-    /// Last seen real step per signal.
-    last_steps: HashMap<&'static str, Step<T>>,
-    /// Global set of observed timestamps used as interpolation targets.
-    timeline: BTreeSet<Duration>,
-    /// Queue of synchronized outputs to be drained by consumers.
+    /// How signals are read between their own samples. Applied at the predicate layer.
+    interpolation: SignalInterpolation,
+    /// Timestamp of the last admitted step per signal.
+    last_timestamps: HashMap<&'static str, Duration>,
+    /// Initial value per signal, as configured. Survives [`Self::reset`].
+    initial_values: BTreeMap<&'static str, T>,
+    /// Those of [`Self::initial_values`] not yet resolved, in emission order.
+    pending_inits: BTreeMap<&'static str, T>,
+    /// Queue of admitted steps to be drained by consumers.
     pub pending: VecDeque<Step<T>>,
 }
 
@@ -52,262 +98,242 @@ impl<T> Synchronizer<T>
 where
     T: Interpolatable,
 {
-    /// Creates a new synchronizer with the selected strategy.
-    pub fn new(strategy: SynchronizationStrategy) -> Self {
+    /// Creates a new synchronizer reading signals under `interpolation`.
+    pub fn new(interpolation: SignalInterpolation) -> Self {
         Self {
-            strategy,
-            last_steps: HashMap::new(),
-            timeline: BTreeSet::new(),
+            interpolation,
+            last_timestamps: HashMap::new(),
+            initial_values: BTreeMap::new(),
+            pending_inits: BTreeMap::new(),
             pending: VecDeque::new(),
         }
     }
 
-    /// Returns the synchronization strategy used by this synchronizer.
-    pub fn strategy(&self) -> SynchronizationStrategy {
-        self.strategy
+    /// Defines each of `initial_values` from `t=0`, until its own first sample arrives.
+    ///
+    /// Initial values are emitted as steps at `t=0` when the first sample past `t=0` is
+    /// admitted. A signal with its own sample at `t=0` before then gets none.
+    pub fn set_initial_values(
+        &mut self,
+        initial_values: impl IntoIterator<Item = (&'static str, T)>,
+    ) where
+        T: Copy,
+    {
+        self.initial_values = initial_values.into_iter().collect();
+        self.pending_inits = self.initial_values.clone();
     }
 
-    /// Resets all runtime state (last seen steps, timeline, pending queue).
+    /// Whether any signal is defined from `t=0` by [`Self::set_initial_values`].
+    pub fn has_initial_values(&self) -> bool {
+        !self.initial_values.is_empty()
+    }
+
+    /// Returns how this synchronizer reads signals between their own samples.
+    pub fn interpolation(&self) -> SignalInterpolation {
+        self.interpolation
+    }
+
+    /// Resets all runtime state (last seen timestamps, pending queue).
     ///
-    /// The synchronization strategy is preserved.
-    pub fn reset(&mut self) {
-        self.last_steps.clear();
-        self.timeline.clear();
+    /// The signal interpolation and the initial values are preserved, and the latter are
+    /// armed again.
+    pub fn reset(&mut self)
+    where
+        T: Copy,
+    {
+        self.last_timestamps.clear();
         self.pending.clear();
+        self.pending_inits = self.initial_values.clone();
     }
 
     /// Returns estimated heap memory in bytes used by the synchronizer's
     /// internal data structures.
     pub fn heap_size(&self) -> usize {
         self.pending.capacity() * std::mem::size_of::<Step<T>>()
-            + self.last_steps.capacity()
-                * (std::mem::size_of::<&str>() + std::mem::size_of::<Step<T>>() + 1)
-            + self.timeline.len()
-                * (std::mem::size_of::<Duration>() + 2 * std::mem::size_of::<usize>())
+            + self.last_timestamps.capacity()
+                * (std::mem::size_of::<&str>() + std::mem::size_of::<Duration>() + 1)
+            + (self.initial_values.len() + self.pending_inits.len())
+                * (std::mem::size_of::<&str>() + std::mem::size_of::<T>() + 1)
     }
 
-    /// Processes a new real step and generates interpolated steps if necessary.
-    /// All resulting steps (interpolated + real) are added to `self.pending`.
+    /// Admits a new step, appending it to `self.pending`.
     ///
     /// Timestamps must be strictly increasing per signal. Steps violating this
     /// are ignored and a warning is printed.
+    ///
+    /// Any initial value still owed is emitted first; see [`Self::set_initial_values`].
     pub fn evaluate(&mut self, current_step: Step<T>) {
         let signal_id = current_step.signal;
         let current_time = current_step.timestamp;
 
         // Validate that timestamp is strictly increasing for this signal
-        if let Some(prev_step) = self.last_steps.get(&signal_id)
-            && current_time <= prev_step.timestamp
+        if let Some(prev_time) = self.last_timestamps.get(&signal_id)
+            && current_time <= *prev_time
         {
             eprintln!(
                 "Warning: Ignoring step for signal '{}' at {:?}. Timestamp must be strictly increasing (last: {:?}).",
-                signal_id, current_time, prev_step.timestamp
+                signal_id, current_time, prev_time
             );
             return;
         }
 
-        if self.strategy == SynchronizationStrategy::None {
-            self.last_steps.insert(signal_id, current_step.clone());
-            self.pending.push_back(current_step);
-            return;
-        }
-
-        let current_value = current_step.value;
-
-        // 1. Add this new timestamp to the global timeline
-        self.timeline.insert(current_time);
-
-        // 2. Check if we can interpolate for this specific signal
-        if let Some(prev_step) = self.last_steps.get(&signal_id).cloned() {
-            let prev_time = prev_step.timestamp;
-            let prev_val = prev_step.value;
-
-            if current_time > prev_time {
-                let missed_timestamps: Vec<Duration> = self
-                    .timeline
-                    .range((
-                        std::ops::Bound::Excluded(prev_time),
-                        std::ops::Bound::Excluded(current_time),
-                    ))
-                    .cloned()
-                    .collect();
-
-                for t in missed_timestamps {
-                    let interp_val = match self.strategy {
-                        SynchronizationStrategy::None => current_value, // this will never be hit
-                        SynchronizationStrategy::ZeroOrderHold => prev_val,
-                        SynchronizationStrategy::Linear => {
-                            let dt_total = current_time.as_secs_f64() - prev_time.as_secs_f64();
-                            let dt_curr = t.as_secs_f64() - prev_time.as_secs_f64();
-                            let alpha = if dt_total != 0.0 {
-                                dt_curr / dt_total
-                            } else {
-                                0.0
-                            };
-                            prev_val + (current_value - prev_val) * alpha
-                        }
-                    };
-
-                    self.pending.push_back(Step {
-                        signal: signal_id,
-                        timestamp: t,
-                        value: interp_val,
-                    });
+        if !self.pending_inits.is_empty() {
+            if current_time == Duration::ZERO {
+                // The signal defines itself at t=0; its initial value is not needed.
+                self.pending_inits.remove(&signal_id);
+            } else {
+                // Past t=0 the prefix is fixed: every signal still without a sample takes
+                // its initial value from t=0.
+                for (signal, value) in std::mem::take(&mut self.pending_inits) {
+                    self.last_timestamps.insert(signal, Duration::ZERO);
+                    self.pending
+                        .push_back(Step::new(signal, value, Duration::ZERO));
                 }
             }
         }
 
-        // 3. Update history for this signal
-        self.last_steps.insert(signal_id, current_step.clone());
-
-        // 4. Enqueue the real step
+        self.last_timestamps.insert(signal_id, current_time);
         self.pending.push_back(current_step);
-
-        // 5. Cleanup
-        self.prune_history();
-    }
-
-    fn prune_history(&mut self) {
-        if self.last_steps.is_empty() {
-            return;
-        }
-        let min_frontier = self.last_steps.values().map(|s| s.timestamp).min();
-        if let Some(frontier) = min_frontier {
-            let keep = self.timeline.split_off(&frontier);
-            self.timeline = keep;
-        }
     }
 }
 
 // -----------------------------------------------------------------------------
 // tests
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// Steps are forwarded verbatim under either interpolation; nothing is synthesized.
     #[test]
-    fn test_synchronizer_zero_order_hold() {
+    fn test_only_real_steps_are_forwarded() {
         let steps = vec![
-            Step {
-                signal: "B",
-                value: 0.0,
-                timestamp: Duration::from_secs(0),
-            },
-            Step {
-                signal: "A",
-                value: 1.0,
-                timestamp: Duration::from_secs(1),
-            },
-            Step {
-                signal: "A",
-                value: 10.0,
-                timestamp: Duration::from_secs(2),
-            },
-            Step {
-                signal: "A",
-                value: 3.0,
-                timestamp: Duration::from_secs(4),
-            },
-            Step {
-                signal: "B",
-                value: 30.0,
-                timestamp: Duration::from_secs(5),
-            },
+            Step::new("A", 0.0, Duration::from_secs(0)),
+            Step::new("B", 0.0, Duration::from_secs(0)),
+            Step::new("A", 10.0, Duration::from_secs(2)),
+            Step::new("B", 20.0, Duration::from_secs(4)),
         ];
-        let mut sync = Synchronizer::new(SynchronizationStrategy::ZeroOrderHold);
-        let mut result = Vec::new();
-        for step in &steps {
-            sync.evaluate(step.clone());
-            // Drain pending steps
-            while let Some(s) = sync.pending.pop_front() {
-                println!("Popped step: {:?}", s);
-                result.push(s);
+
+        for interpolation in [
+            SignalInterpolation::ZeroOrderHold,
+            SignalInterpolation::Linear,
+        ] {
+            let mut sync = Synchronizer::new(interpolation);
+            let mut result = Vec::new();
+            for step in &steps {
+                sync.evaluate(step.clone());
+                while let Some(s) = sync.pending.pop_front() {
+                    result.push(s);
+                }
             }
+            assert_eq!(
+                result, steps,
+                "{:?}: only the real steps may be forwarded",
+                interpolation
+            );
         }
-        // With zero-order hold, signal A at t=2 should hold value 1.0
-        assert!(result.iter().any(|s| s.signal == "B"
-            && (s.timestamp == Duration::from_secs(1)
-                || s.timestamp == Duration::from_secs(2)
-                || s.timestamp == Duration::from_secs(4))
-            && s.value == 0.0));
     }
 
+    /// Drains everything admitted so far.
+    fn drain(sync: &mut Synchronizer<f64>) -> Vec<Step<f64>> {
+        std::iter::from_fn(|| sync.pending.pop_front()).collect()
+    }
+
+    /// An initial value is emitted at `t=0`, but not before a sample past `t=0` needs it.
     #[test]
-    fn test_synchronizer_linear() {
-        let steps = vec![
-            Step {
-                signal: "A",
-                value: 0.0,
-                timestamp: Duration::from_secs(0),
-            },
-            Step {
-                signal: "B",
-                value: 0.0,
-                timestamp: Duration::from_secs(0),
-            },
-            Step {
-                signal: "A",
-                value: 10.0,
-                timestamp: Duration::from_secs(2),
-            },
-            Step {
-                signal: "B",
-                value: 20.0,
-                timestamp: Duration::from_secs(4),
-            },
-        ];
-        let mut sync = Synchronizer::new(SynchronizationStrategy::Linear);
-        let mut result = Vec::new();
-        for step in &steps {
-            sync.evaluate(step.clone());
-            // Drain pending steps
-            while let Some(s) = sync.pending.pop_front() {
-                result.push(s);
-            }
+    fn test_initial_values_flushed_at_first_step_past_zero() {
+        let mut sync = Synchronizer::new(SignalInterpolation::ZeroOrderHold);
+        sync.set_initial_values([("A", 1.0), ("B", 10.0)]);
+        assert!(sync.pending.is_empty(), "nothing is owed before a sample");
+
+        let sample = Step::new("A", 5.0, Duration::from_secs(1));
+        sync.evaluate(sample.clone());
+
+        assert_eq!(
+            drain(&mut sync),
+            vec![
+                Step::new("A", 1.0, Duration::ZERO),
+                Step::new("B", 10.0, Duration::ZERO),
+                sample,
+            ],
+            "both signals are defined from t=0, in signal order, before the sample"
+        );
+    }
+
+    /// A signal sampled at `t=0` defines itself there; its initial value is dropped.
+    #[test]
+    fn test_real_zero_sample_overrides_initial_value() {
+        let mut sync = Synchronizer::new(SignalInterpolation::ZeroOrderHold);
+        sync.set_initial_values([("A", 1.0), ("B", 10.0)]);
+
+        let real = Step::new("A", 5.0, Duration::ZERO);
+        sync.evaluate(real.clone());
+        assert_eq!(drain(&mut sync), vec![real], "no initial value for A");
+
+        // B has still not been sampled, so it is the only one left to define.
+        let past_zero = Step::new("A", 6.0, Duration::from_secs(1));
+        sync.evaluate(past_zero.clone());
+        assert_eq!(
+            drain(&mut sync),
+            vec![Step::new("B", 10.0, Duration::ZERO), past_zero]
+        );
+    }
+
+    /// Initial values survive a reset and are owed again.
+    #[test]
+    fn test_reset_rearms_initial_values() {
+        let mut sync = Synchronizer::new(SignalInterpolation::ZeroOrderHold);
+        sync.set_initial_values([("A", 1.0)]);
+        sync.evaluate(Step::new("A", 5.0, Duration::from_secs(1)));
+        drain(&mut sync);
+
+        sync.reset();
+        sync.evaluate(Step::new("A", 7.0, Duration::from_secs(1)));
+        assert_eq!(
+            drain(&mut sync),
+            vec![
+                Step::new("A", 1.0, Duration::ZERO),
+                Step::new("A", 7.0, Duration::from_secs(1)),
+            ]
+        );
+    }
+
+    /// The deprecated strategy is nothing but a name for an interpolation.
+    #[test]
+    fn test_strategy_maps_onto_interpolation() {
+        assert_eq!(
+            SynchronizationStrategy::Linear.interpolation(),
+            SignalInterpolation::Linear
+        );
+        for held in [
+            SynchronizationStrategy::None,
+            SynchronizationStrategy::ZeroOrderHold,
+        ] {
+            assert_eq!(held.interpolation(), SignalInterpolation::ZeroOrderHold);
         }
-        // With linear interpolation, at t=2, signal B should be linearly interpolated to 10.0
-        assert!(result.iter().any(|s| s.signal == "B"
-            && s.timestamp == Duration::from_secs(2)
-            && (s.value - 10.0).abs() < 1e-6));
     }
 
     #[test]
     fn test_non_increasing_timestamp_ignored() {
-        let mut sync = Synchronizer::new(SynchronizationStrategy::ZeroOrderHold);
+        let mut sync = Synchronizer::new(SignalInterpolation::ZeroOrderHold);
 
         // First step at t=2
-        sync.evaluate(Step {
-            signal: "A",
-            value: 10.0,
-            timestamp: Duration::from_secs(2),
-        });
+        sync.evaluate(Step::new("A", 10.0, Duration::from_secs(2)));
         assert_eq!(sync.pending.len(), 1);
         sync.pending.clear();
 
         // Valid step at t=3 (strictly increasing)
-        sync.evaluate(Step {
-            signal: "A",
-            value: 15.0,
-            timestamp: Duration::from_secs(3),
-        });
+        sync.evaluate(Step::new("A", 15.0, Duration::from_secs(3)));
         assert_eq!(sync.pending.len(), 1);
         sync.pending.clear();
 
         // Invalid step at t=3 (equal, should be ignored)
-        sync.evaluate(Step {
-            signal: "A",
-            value: 20.0,
-            timestamp: Duration::from_secs(3),
-        });
+        sync.evaluate(Step::new("A", 20.0, Duration::from_secs(3)));
         assert_eq!(sync.pending.len(), 0, "Equal timestamp should be ignored");
 
         // Invalid step at t=1 (decreasing, should be ignored)
-        sync.evaluate(Step {
-            signal: "A",
-            value: 25.0,
-            timestamp: Duration::from_secs(1),
-        });
+        sync.evaluate(Step::new("A", 25.0, Duration::from_secs(1)));
         assert_eq!(
             sync.pending.len(),
             0,
@@ -315,79 +341,51 @@ mod tests {
         );
 
         // Valid step at t=5 (strictly increasing again)
-        sync.evaluate(Step {
-            signal: "A",
-            value: 30.0,
-            timestamp: Duration::from_secs(5),
-        });
+        sync.evaluate(Step::new("A", 30.0, Duration::from_secs(5)));
         assert_eq!(sync.pending.len(), 1);
     }
 
     #[test]
     fn test_different_signals_independent_timestamps() {
-        let mut sync = Synchronizer::new(SynchronizationStrategy::None);
+        let mut sync = Synchronizer::new(SignalInterpolation::ZeroOrderHold);
 
         // Signal A at t=5
-        sync.evaluate(Step {
-            signal: "A",
-            value: 10.0,
-            timestamp: Duration::from_secs(5),
-        });
+        sync.evaluate(Step::new("A", 10.0, Duration::from_secs(5)));
         assert_eq!(sync.pending.len(), 1);
         sync.pending.clear();
 
         // Signal B at t=2 is valid (different signal)
-        sync.evaluate(Step {
-            signal: "B",
-            value: 20.0,
-            timestamp: Duration::from_secs(2),
-        });
+        sync.evaluate(Step::new("B", 20.0, Duration::from_secs(2)));
         assert_eq!(sync.pending.len(), 1);
         sync.pending.clear();
 
         // Signal A at t=3 is invalid (less than previous A timestamp)
-        sync.evaluate(Step {
-            signal: "A",
-            value: 15.0,
-            timestamp: Duration::from_secs(3),
-        });
+        sync.evaluate(Step::new("A", 15.0, Duration::from_secs(3)));
         assert_eq!(sync.pending.len(), 0, "Signal A timestamp must be > 5");
 
         // Signal B at t=3 is valid (greater than previous B timestamp)
-        sync.evaluate(Step {
-            signal: "B",
-            value: 25.0,
-            timestamp: Duration::from_secs(3),
-        });
+        sync.evaluate(Step::new("B", 25.0, Duration::from_secs(3)));
         assert_eq!(sync.pending.len(), 1);
     }
 
     #[test]
     fn heap_size_empty() {
-        let sync: Synchronizer<f64> = Synchronizer::new(SynchronizationStrategy::None);
+        let sync: Synchronizer<f64> = Synchronizer::new(SignalInterpolation::ZeroOrderHold);
         assert_eq!(sync.heap_size(), 0);
     }
 
     #[test]
     fn heap_size_after_evaluate() {
-        let mut sync = Synchronizer::new(SynchronizationStrategy::None);
-        sync.evaluate(Step {
-            signal: "A",
-            value: 1.0,
-            timestamp: Duration::from_secs(1),
-        });
+        let mut sync = Synchronizer::new(SignalInterpolation::ZeroOrderHold);
+        sync.evaluate(Step::new("A", 1.0, Duration::from_secs(1)));
         // pending queue holds at least one Step
         assert!(sync.heap_size() >= std::mem::size_of::<Step<f64>>());
     }
 
     #[test]
     fn heap_size_after_reset() {
-        let mut sync = Synchronizer::new(SynchronizationStrategy::ZeroOrderHold);
-        sync.evaluate(Step {
-            signal: "A",
-            value: 1.0,
-            timestamp: Duration::from_secs(1),
-        });
+        let mut sync = Synchronizer::new(SignalInterpolation::ZeroOrderHold);
+        sync.evaluate(Step::new("A", 1.0, Duration::from_secs(1)));
         let before = sync.heap_size();
         assert!(before > 0);
         sync.reset();

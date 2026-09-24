@@ -24,9 +24,12 @@ FIELDS = ["t", "phase", "timestamp_ns", "temperature", "heater_on", "lid_open",
           "max_T", "min_T", "phi_hi", "phi_hi_at", "phi_lo", "phi_lo_at"]
 
 
-def process(datadir, phases=MONITORED_PHASES):
+def process(datadir, outdir=None, phases=MONITORED_PHASES):
+    # The recording comes from datadir; the verdicts are replay.py's output and
+    # land beside the dataset, as in replay.py.
+    outdir = datadir if outdir is None else outdir
     signal = pd.read_csv(os.path.join(datadir, "signal.csv"))
-    verdicts = pd.read_csv(os.path.join(datadir, "verdicts.csv"))
+    verdicts = pd.read_csv(os.path.join(outdir, "verdicts.csv"))
     if "phase" in signal.columns and phases:
         signal = signal[signal["phase"].isin(phases)].reset_index(drop=True)
     else:
@@ -39,7 +42,8 @@ def process(datadir, phases=MONITORED_PHASES):
         out[f"{spec}_at"] = rows["emitted_at"]
     out = out.reset_index()
 
-    path = os.path.join(datadir, "dataset.csv")
+    os.makedirs(outdir, exist_ok=True)
+    path = os.path.join(outdir, "dataset.csv")
     out.to_csv(path, index=False, columns=FIELDS)
     report(out, path)
 
@@ -69,10 +73,13 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--datadir", default="data")
+    parser.add_argument("--outdir", default=None,
+                        help="where the verdicts are and the dataset goes; "
+                             "defaults to --datadir")
     parser.add_argument("--phases", nargs="*", default=list(MONITORED_PHASES),
                         help="phases to keep; empty keeps the whole session")
     args = parser.parse_args()
-    process(args.datadir, tuple(args.phases))
+    process(args.datadir, args.outdir, tuple(args.phases))
 
 
 if __name__ == "__main__":

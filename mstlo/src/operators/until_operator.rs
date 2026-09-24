@@ -8,10 +8,27 @@ use crate::core::{
     RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
     TimeInterval,
 };
+use crate::operators::unary_temporal_operators::enqueue_eval;
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
 use std::collections::{HashSet, VecDeque};
 use std::fmt::Display;
 use std::time::Duration;
+
+/// The value an operand holds at `t`, read off the cache entry in force there.
+///
+/// Under RoSI, a value carried forward past `settled_through` is still being refined, so it
+/// reads as `Y::unknown()`.
+fn held_value<Y: RobustnessSemantics, const IS_ROSI: bool>(
+    entry: &Step<Y>,
+    t: Duration,
+    settled_through: Duration,
+) -> Y {
+    if IS_ROSI && entry.timestamp < t && t > settled_through {
+        Y::unknown()
+    } else {
+        entry.value.clone()
+    }
+}
 
 #[derive(Clone)]
 /// Temporal until operator `φ U[a,b] ψ`.
@@ -29,10 +46,16 @@ pub struct Until<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_cache: C,
     right_cache: C,
     t_max: (Duration, Duration), // (left t_max, right t_max)
+    /// Newest timestamp for which each operand has reported a final value.
+    settled: (Duration, Duration),
     eval_buffer: VecDeque<Duration>,
     left_signals_set: HashSet<&'static str>,
     right_signals_set: HashSet<&'static str>,
     max_lookahead: Duration,
+    /// Timestamp of the first operand output. Earlier evaluation timestamps are dropped.
+    first_ts: Option<Duration>,
+    /// Newest evaluation timestamp with a final answer. Earlier ones are not re-queued.
+    finalized_ts: Option<Duration>,
 }
 
 impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER, IS_ROSI> {
@@ -69,10 +92,13 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
                 left_cache: l_cache,
                 right_cache: r_cache,
                 t_max: (Duration::ZERO, Duration::ZERO),
+                settled: (Duration::ZERO, Duration::ZERO),
                 eval_buffer: VecDeque::new(),
                 left_signals_set: HashSet::new(),
                 right_signals_set: HashSet::new(),
                 max_lookahead,
+                first_ts: None,
+                finalized_ts: None,
             }
         }
         #[cfg(not(feature = "track-cache-size"))]
@@ -84,30 +110,31 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
                 left_cache: left_cache.unwrap_or_else(|| C::new()),
                 right_cache: right_cache.unwrap_or_else(|| C::new()),
                 t_max: (Duration::ZERO, Duration::ZERO),
+                settled: (Duration::ZERO, Duration::ZERO),
                 eval_buffer: VecDeque::new(),
                 left_signals_set: HashSet::new(),
                 right_signals_set: HashSet::new(),
                 max_lookahead,
+                first_ts: None,
+                finalized_ts: None,
             }
         }
     }
 
-    /// Adds a step to a cache.
+    /// Adds a step to a cache, in timestamp order.
     ///
-    /// In RoSI mode this performs update-or-insert by timestamp; otherwise it
-    /// appends the step.
-    fn add_to_cache<const ROSI: bool>(cache: &mut C, step: Step<Y>)
+    /// Returns `true` when the step landed *behind* the newest one already cached.
+    fn add_to_cache(cache: &mut C, step: Step<Y>) -> bool
     where
         C: RingBufferTrait<Value = Y>,
         Y: Clone,
     {
-        if ROSI {
-            if !cache.update_step(step.clone()) {
-                cache.add_step(step);
-            }
-        } else {
-            cache.add_step(step);
-        }
+        let is_late = cache
+            .get_back()
+            .is_some_and(|back| step.timestamp < back.timestamp);
+        // An eager child can emit out of order, so insert rather than append.
+        cache.insert_step(step);
+        is_late
     }
 }
 
@@ -140,8 +167,26 @@ where
         self.right_cache.clear();
         self.eval_buffer.clear();
         self.t_max = (Duration::ZERO, Duration::ZERO);
+        self.first_ts = None;
+        self.finalized_ts = None;
         self.left.reset();
         self.right.reset();
+    }
+
+    /// Eager output is gap-free up to `finalized_ts`, further capped by the operands' own
+    /// bounds shifted back by `interval.end`. Delayed and RoSI emit in order and have no gaps.
+    fn known_through(&self) -> Option<Duration> {
+        if !IS_EAGER || IS_ROSI {
+            return None;
+        }
+        let answered = self.finalized_ts.unwrap_or(Duration::ZERO);
+        let operand_bound = match (self.left.known_through(), self.right.known_through()) {
+            (None, None) => return Some(answered),
+            (left, right) => left
+                .unwrap_or(Duration::MAX)
+                .min(right.unwrap_or(Duration::MAX)),
+        };
+        Some(answered.min(operand_bound.saturating_sub(self.interval.end)))
     }
 
     /// Updates the operator with one input sample and emits newly available outputs.
@@ -181,6 +226,15 @@ where
             self.t_max.1 = self.t_max.1.max(last_right.timestamp);
         }
 
+        // Cap each frontier at how far the operand is gap-free. This bound can decrease,
+        // so it is applied after the `max`.
+        if let Some(bound) = self.left.known_through() {
+            self.t_max.0 = self.t_max.0.min(bound);
+        }
+        if let Some(bound) = self.right.known_through() {
+            self.t_max.1 = self.t_max.1.min(bound);
+        }
+
         let t_max_combined = self.t_max.0.min(self.t_max.1);
 
         // Add all updates to eval_buffer and caches.
@@ -188,22 +242,51 @@ where
         // in order so interleaved timestamps don't violate monotonicity.
         let mut all_ts: Vec<Duration> =
             Vec::with_capacity(left_updates.len() + right_updates.len());
+        // Breakpoints that arrived behind the cache back; they may re-open answered windows.
+        let mut late_ts: Vec<Duration> = Vec::new();
         for update in &right_updates {
             all_ts.push(update.timestamp);
-            Self::add_to_cache::<IS_ROSI>(&mut self.right_cache, update.clone());
+            if update.value.is_final() {
+                self.settled.1 = self.settled.1.max(update.timestamp);
+            }
+            if Self::add_to_cache(&mut self.right_cache, update.clone()) {
+                late_ts.push(update.timestamp);
+            }
         }
         for update in &left_updates {
             all_ts.push(update.timestamp);
-            Self::add_to_cache::<IS_ROSI>(&mut self.left_cache, update.clone());
+            if update.value.is_final() {
+                self.settled.0 = self.settled.0.max(update.timestamp);
+            }
+            if Self::add_to_cache(&mut self.left_cache, update.clone()) {
+                late_ts.push(update.timestamp);
+            }
         }
         all_ts.sort();
         all_ts.dedup();
+        // Each operand breakpoint `ts` queues `ts`, `ts - a` and `ts - b`: the output can
+        // only change where a window boundary crosses a breakpoint.
         for ts in all_ts {
-            if self.eval_buffer.back().is_none_or(|&b| ts > b) {
-                self.eval_buffer.push_back(ts);
+            let earliest = *self.first_ts.get_or_insert(ts);
+            for candidate in [
+                Some(ts),
+                ts.checked_sub(self.interval.start),
+                ts.checked_sub(self.interval.end),
+            ] {
+                // An answered window is re-opened only by a late breakpoint, and only if
+                // the window was not already fully covered by data.
+                let reopenable = late_ts.contains(&ts)
+                    && candidate.is_some_and(|t| t + self.interval.end > t_max_combined);
+                if let Some(t) = candidate
+                    && t >= earliest
+                    && (reopenable || self.finalized_ts.is_none_or(|answered| t > answered))
+                {
+                    enqueue_eval(&mut self.eval_buffer, t);
+                }
             }
         }
         let mut tasks_to_remove = Vec::new();
+        let mut newest_answered: Option<Duration> = None;
         // Finalized entries (Case 1) are always at the front — track separately
         // to use pop_front() instead of retain() in the common case.
         let mut n_front_to_pop: usize = 0;
@@ -214,74 +297,160 @@ where
             return output_robustness;
         }
 
+        let or_into = |acc: Option<Y>, value: Y| match acc {
+            Some(acc) => Some(Y::or(acc, value)),
+            None => Some(value),
+        };
+
+        // How far each operand's values are final. Outside RoSI that is the frontier.
+        let (left_settled, right_settled) = if IS_ROSI {
+            (
+                self.settled.0.min(self.t_max.0),
+                self.settled.1.min(self.t_max.1),
+            )
+        } else {
+            (self.t_max.0, self.t_max.1)
+        };
+
         // 2. Process the evaluation buffer for tasks
         for &t_eval in self.eval_buffer.iter() {
-            let window_start_t_eval = t_eval;
+            let window_start_t_eval = t_eval + self.interval.start;
+            // let window_start_t_eval = t_eval;
             let window_end_t_eval = t_eval + self.interval.end;
 
             // This is the outer `max` (Eventually)
-            let mut max_robustness_vec = Vec::new();
+            let mut max_robustness: Option<Y> = None;
             let mut falsified = false;
 
             // We can only evaluate up to the data we have.
             // We must use the minimum of the current time and the window end.
             let effective_end_time = current_time.min(window_end_t_eval);
 
-            // Iterate over all t' in [window_start_t_eval, effective_end_time].
-            // We use the eval_buffer as the source of t' timestamps.
-            let t_prime_iter = self
-                .eval_buffer
+            // Case 1 gate: both operands are settled through the end of the window.
+            let window_covered =
+                left_settled >= window_end_t_eval && right_settled >= window_end_t_eval;
+
+            // Delayed mode stops at the first uncovered window, so skip walking it.
+            if !IS_EAGER && !IS_ROSI && !window_covered {
+                break;
+            }
+
+            // The running infimum of phi starts at the value phi holds at t_eval. If phi is
+            // not known that far yet, neither this nor any later t_eval can be evaluated.
+            let phi_held = (t_eval <= self.t_max.0)
+                .then(|| self.left_cache.zoh_at(t_eval))
+                .flatten()
+                .map(|entry| held_value::<Y, IS_ROSI>(entry, t_eval, left_settled));
+            let Some(phi_held) = phi_held else { break };
+
+            // Candidate t' are the window start plus every operand breakpoint inside the
+            // window: the inner expression is piecewise constant and only changes there.
+            let left_from = self
+                .left_cache
+                .partition_point(|entry| entry.timestamp <= window_start_t_eval);
+            let right_from = self
+                .right_cache
+                .partition_point(|entry| entry.timestamp <= window_start_t_eval);
+            let mut left_ts = self
+                .left_cache
                 .iter()
-                .copied()
-                .skip_while(|s| s < &window_start_t_eval)
-                .take_while(|s| s <= &effective_end_time); // Only up to current time
-
-            let mut left_cache_t_prime_min = Y::globally_identity();
-            // Collect left_cache into a vector for progressive skipping
-            let left_cache_vec: Vec<_> = self.left_cache.iter().collect();
-            let right_cache_vec: Vec<_> = self.right_cache.iter().collect();
-
-            // Find how many elements to skip based on t_eval position
-            let skip_count = left_cache_vec
+                .skip(left_from)
+                .take_while(|entry| entry.timestamp <= effective_end_time)
+                .map(|entry| entry.timestamp)
+                .peekable();
+            let mut right_ts = self
+                .right_cache
                 .iter()
-                .take_while(|entry| entry.timestamp < t_eval)
-                .count();
+                .skip(right_from)
+                .take_while(|entry| entry.timestamp <= effective_end_time)
+                .map(|entry| entry.timestamp)
+                .peekable();
+            // Lazy, deduplicated merge of the window start and both breakpoint runs.
+            let t_primes = (window_start_t_eval <= effective_end_time)
+                .then_some(window_start_t_eval)
+                .into_iter()
+                .chain(std::iter::from_fn(|| {
+                    let next = match (left_ts.peek(), right_ts.peek()) {
+                        (Some(&l), Some(&r)) => l.min(r),
+                        (Some(&l), None) => l,
+                        (None, Some(&r)) => r,
+                        (None, None) => return None,
+                    };
+                    left_ts.next_if_eq(&next);
+                    right_ts.next_if_eq(&next);
+                    Some(next)
+                }));
 
-            let mut left_cache_iter = left_cache_vec.iter().skip(skip_count);
-            let mut right_cache_iter = right_cache_vec.iter().skip(skip_count);
+            // phi samples after t_eval, folded into the running min as t' reaches them. The
+            // obligation on phi is `inf over [t_eval, t']`, closed at t': phi must also hold
+            // where psi does.
+            let phi_from = self
+                .left_cache
+                .partition_point(|entry| entry.timestamp <= t_eval);
+            let mut left_cache_iter = self.left_cache.iter().skip(phi_from).peekable();
+            let mut left_cache_t_prime_min = phi_held;
 
-            for _ in t_prime_iter {
-                // 1. Get cumulative min of phi (left operand) up to t'
-                let left_step = match left_cache_iter.next() {
-                    Some(step) => step,
-                    None => break,
+            // The timestamp at which phi's running infimum reached `atomic_false`, if any.
+            let mut phi_died_at = (left_cache_t_prime_min == Y::atomic_false()).then_some(t_eval);
+
+            // Cursor over psi, starting at the entry in force at the window start.
+            let mut psi_iter = self
+                .right_cache
+                .iter()
+                .skip(right_from.saturating_sub(1))
+                .peekable();
+            let mut psi_held: Option<&Step<Y>> = None;
+
+            for t_prime in t_primes {
+                // 1. Fold phi samples in (t_eval, t'] into the cumulative min.
+                while let Some(left_step) = left_cache_iter.next_if(|s| s.timestamp <= t_prime) {
+                    left_cache_t_prime_min =
+                        Y::and(left_cache_t_prime_min, left_step.value.clone());
+                    if phi_died_at.is_none() && left_cache_t_prime_min == Y::atomic_false() {
+                        phi_died_at = Some(left_step.timestamp);
+                    }
+                }
+                let phi_known_min = left_cache_t_prime_min.clone();
+
+                // Past phi's settled mark the obligation is unknown. RoSI keeps the upper
+                // bound from the samples seen so far.
+                let robustness_phi_left = if t_prime <= left_settled {
+                    phi_known_min.clone()
+                } else if IS_ROSI {
+                    Y::and(phi_known_min.clone(), Y::unknown())
+                } else {
+                    Y::unknown()
                 };
-                left_cache_t_prime_min = Y::and(left_cache_t_prime_min, left_step.value.clone());
-                let robustness_phi_left = left_cache_t_prime_min.clone();
 
-                // 2. Get rho_psi(t') - the right operand at t'
-                let robustness_psi_right = match right_cache_iter.next() {
-                    Some(val) => val.value.clone(),
-                    None => Y::unknown(),
-                };
+                // 2. rho_psi(t'): the value psi holds at t', or unknown past its frontier.
+                while let Some(entry) = psi_iter.next_if(|entry| entry.timestamp <= t_prime) {
+                    psi_held = Some(entry);
+                }
+                let robustness_psi_right = (t_prime <= self.t_max.1)
+                    .then(|| psi_held.filter(|entry| entry.held_until > t_prime))
+                    .flatten()
+                    .map_or_else(Y::unknown, |entry| {
+                        held_value::<Y, IS_ROSI>(entry, t_prime, right_settled)
+                    });
 
-                // 3. Eager falsification check: if phi has become false, short-circuit
-                if IS_EAGER && robustness_phi_left == Y::atomic_false() && t_max_combined >= t_eval
-                {
+                // 3. Eager falsification: once phi has died at `d`, no witness at or after
+                //    `d` is possible. The window is false if psi is also known up to `d`,
+                //    ruling out earlier witnesses, or if `d` precedes the window start.
+                let psi_rules_out_earlier_witnesses = phi_died_at
+                    .is_some_and(|died| died < window_start_t_eval || self.t_max.1 >= died);
+                if IS_EAGER && psi_rules_out_earlier_witnesses && t_max_combined >= t_eval {
                     falsified = true;
-                    max_robustness_vec.push(Y::atomic_false());
+                    max_robustness = or_into(max_robustness, Y::atomic_false());
                     break;
                 }
 
                 // 4. Combine: min(rho_psi(t'), robustness_phi_left)
                 let robustness_t_prime = Y::and(robustness_psi_right, robustness_phi_left);
-                max_robustness_vec.push(robustness_t_prime);
+                max_robustness = or_into(max_robustness, robustness_t_prime);
             }
 
-            let max_robustness = if max_robustness_vec.is_empty() {
+            let Some(max_robustness) = max_robustness else {
                 break; // No data to evaluate yet
-            } else {
-                max_robustness_vec.into_iter().reduce(Y::or).unwrap()
             };
 
             // ---
@@ -290,8 +459,8 @@ where
             let final_value: Option<Y>;
             let mut remove_task = false;
 
-            if current_time >= t_eval + self.get_max_lookahead() {
-                // Case 1: Full window *and* child lookaheads have passed.
+            if window_covered {
+                // Case 1: Full window covered by both operands.
                 // This is a final, "closed" value for delayed mode.
                 // (This also captures Eager results that were `false` until the end)
                 final_value = Some(max_robustness);
@@ -326,11 +495,23 @@ where
 
             if remove_task {
                 tasks_to_remove.push(t_eval);
+                newest_answered = Some(t_eval);
             }
         }
 
+        if let Some(answered) = newest_answered {
+            self.finalized_ts = Some(answered);
+        }
+
         // 3. Prune the caches and remove completed tasks from the buffer.
-        let protected_ts = self.eval_buffer.front().copied().unwrap_or(Duration::ZERO);
+        //
+        // Any timestamp after `finalized_ts` can still become a task, so pruning keeps
+        // the values in force from the older of that and the buffer front.
+        let task_floor = self.finalized_ts.unwrap_or(Duration::ZERO);
+        let protected_ts = self
+            .eval_buffer
+            .front()
+            .map_or(task_floor, |front| (*front).min(task_floor));
         let lookahead = self.max_lookahead;
         guarded_prune(&mut self.left_cache, lookahead, protected_ts);
         guarded_prune(&mut self.right_cache, lookahead, protected_ts);
@@ -628,6 +809,116 @@ mod tests {
             assert_eq!(output.timestamp, expected.timestamp);
             assert_eq!(output.value, expected.value);
         }
+    }
+    #[test]
+    fn until_operator_robustness_nonzero_lowbound() {
+        let interval = TimeInterval {
+            start: Duration::from_secs(3),
+            end: Duration::from_secs(4),
+        };
+        let atomic_left = Atomic::<bool>::new_less_than("x", 10.0);
+        let atomic_right = Atomic::<bool>::new_greater_than("x", 5.0);
+        let mut until = Until::<f64, RingBuffer<bool>, bool, false, false>::new(
+            interval,
+            Box::new(atomic_left),
+            Box::new(atomic_right),
+            None,
+            None,
+        );
+        until.get_signal_identifiers();
+        let signal_values = vec![2.0, 6.0, 2.0, 2.0, 6.0, 12.0];
+        let signal_timestamps = vec![0, 2, 3, 4, 6, 8];
+
+        let signal: Vec<_> = signal_values
+            .into_iter()
+            .zip(signal_timestamps)
+            .map(|(val, ts)| step!("x", val, Duration::from_secs(ts)))
+            .collect();
+
+        let expected_outputs = [
+            step!("output", false, Duration::from_secs(0)), // x>5 inbetween [3,4], which it isn't
+            // t = 1 is the breakpoint at 4s shifted by the lower bound. x holds at 2 over
+            // its window [4, 5].
+            step!("output", false, Duration::from_secs(1)),
+            step!("output", true, Duration::from_secs(2)),
+            step!("output", true, Duration::from_secs(3)),
+            step!("output", true, Duration::from_secs(4)),
+        ];
+
+        let mut all_outputs = Vec::new();
+        for s in &signal {
+            let up = until.update(s);
+            println!("Updates at t={:?}: {:?}", s.timestamp, up);
+            all_outputs.extend(up);
+        }
+
+        assert_eq!(all_outputs.len(), expected_outputs.len());
+        for (output, expected) in all_outputs.iter().zip(expected_outputs.iter()) {
+            assert_eq!(
+                output.timestamp, expected.timestamp,
+                "output timestamp: {:?} != expected timestamp: {:?}",
+                output.timestamp, expected.timestamp
+            );
+            assert_eq!(
+                output.value, expected.value,
+                "output value: {:?} != expected value: {:?}",
+                output.value, expected.value
+            );
+        }
+    }
+
+    /// A window must not be finalized while psi is still behind.
+    ///
+    /// `x > 0` holds throughout and `y > 5` becomes true at 1s, inside the window `[0, 2]`
+    /// of the evaluation at 0s. The answer at 0s must wait for `y` to cover the window,
+    /// and then be `true`.
+    #[test]
+    fn until_does_not_finalize_before_psi_frontier_covers_the_window() {
+        let interval = TimeInterval {
+            start: Duration::from_secs(0),
+            end: Duration::from_secs(2),
+        };
+        let mut until = Until::<f64, RingBuffer<bool>, bool, false, false>::new(
+            interval,
+            Box::new(Atomic::<bool>::new_greater_than("x", 0.0)),
+            Box::new(Atomic::<bool>::new_greater_than("y", 5.0)),
+            None,
+            None,
+        );
+        until.get_signal_identifiers();
+
+        let at_zero = |outputs: &[Step<bool>]| {
+            outputs
+                .iter()
+                .find(|s| s.timestamp == Duration::from_secs(0))
+                .map(|s| s.value)
+        };
+
+        let mut all_outputs = Vec::new();
+        // `x` runs ahead to 3s while `y` is still at 0s.
+        for step in [
+            step!("x", 1.0, Duration::from_secs(0)),
+            step!("y", 0.0, Duration::from_secs(0)),
+            step!("x", 1.0, Duration::from_secs(3)),
+            step!("y", 10.0, Duration::from_secs(1)),
+        ] {
+            all_outputs.extend(until.update(&step));
+        }
+
+        // `y` has only reached 1s, short of the window end at 2s, so 0s is undecided.
+        assert_eq!(
+            at_zero(&all_outputs),
+            None,
+            "0s was finalized while psi only reached 1s; got {all_outputs:?}"
+        );
+
+        // `y` now covers the window end, so the window closes.
+        all_outputs.extend(until.update(&step!("y", 10.0, Duration::from_secs(5))));
+        assert_eq!(
+            at_zero(&all_outputs),
+            Some(true),
+            "psi becomes true at 1s, inside the window [0, 2]; got {all_outputs:?}"
+        );
     }
 
     #[test]

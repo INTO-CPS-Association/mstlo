@@ -61,6 +61,15 @@ pub trait StlOperatorTrait<T: Clone>: DynClone + Display + SignalIdentifier {
     /// The default implementation is a no-op, suitable for stateless operators like `Atomic`.
     fn reset(&mut self) {}
 
+    /// The timestamp through which this operator's output stream is gap-free, or `None`
+    /// if it has no gaps.
+    ///
+    /// Eager `And`/`Or` can emit ahead of an earlier breakpoint that arrives later.
+    /// Consumers only close windows up to this bound.
+    fn known_through(&self) -> Option<Duration> {
+        None
+    }
+
     /// Returns estimated total memory (stack + heap) in bytes consumed by this
     /// operator and all its children recursively.
     ///
@@ -233,6 +242,12 @@ pub trait RobustnessSemantics: Clone + PartialEq {
     /// Used by incremental temporal operators where windows are not yet closed.
     fn unknown() -> Self;
 
+    /// Whether the value is final, i.e. no later update can change it. Only RoSI
+    /// intervals can be non-final.
+    fn is_final(&self) -> bool {
+        true
+    }
+
     /// Returns true if 'old' is strictly dominated by 'new' such that 'old'
     /// can be safely discarded from a Lemire sliding window.
     ///
@@ -381,6 +396,11 @@ impl RobustnessSemantics for RobustnessInterval {
     fn unknown() -> Self {
         RobustnessInterval(f64::NEG_INFINITY, f64::INFINITY)
     }
+
+    fn is_final(&self) -> bool {
+        self.0 == self.1
+    }
+
     fn prune_dominated(old: Self, new: Self, is_max: bool) -> bool {
         // example: F[a,b] x>0
         // x0 = -2, x1 = 2

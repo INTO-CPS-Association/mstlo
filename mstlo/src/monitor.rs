@@ -4,7 +4,7 @@
 //! its builder ([`StlMonitorBuilder`]). It bridges:
 //! - formula definitions ([`FormulaDefinition`]),
 //! - executable operator trees (incremental is strictly recommended, naive is mostly for testing), and
-//! - optional multi-signal synchronization.
+//! - the selected signal interpolation ([`SignalInterpolation`]).
 //!
 //! It also defines output containers ([`MonitorOutput`], [`SyncStepResult`]) and
 //! semantic selection markers used for type-driven output inference.
@@ -20,7 +20,10 @@ use crate::operators::not_operator::Not;
 use crate::operators::unary_temporal_operators::{Eventually, Globally};
 use crate::operators::until_operator::Until;
 use crate::ring_buffer::{RingBuffer, Step};
-use crate::synchronizer::{Interpolatable, SynchronizationStrategy, Synchronizer};
+#[allow(deprecated)]
+use crate::synchronizer::SynchronizationStrategy;
+use crate::synchronizer::{Interpolatable, SignalInterpolation, Synchronizer};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::time::Duration;
@@ -29,6 +32,9 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Algorithm {
     /// Recursive naive evaluator (`naive_operators`) without incremental caches. (not recommended).
+    ///
+    /// NOTE: This backend is pointwise, not dense-time, so it disagrees with
+    /// [`Algorithm::Incremental`] on traces with gaps. See `naive_operators`.
     Naive,
     /// Incremental streaming evaluator (default).
     #[default]
@@ -132,7 +138,7 @@ pub struct MonitorOutput<T, Y> {
     /// This is `None` only for an output produced from an empty batch
     /// (see [`StlMonitor::update_batch`]), which never carries evaluations either.
     pub input: Option<Step<T>>,
-    /// Internal per-synchronized-step evaluations (synchronization detail).
+    /// Internal per-input-step evaluations.
     evaluations: Vec<SyncStepResult<T, Y>>,
 }
 
@@ -158,21 +164,21 @@ where
 }
 
 #[derive(Clone, Debug, PartialEq)]
-/// Result of evaluating one synchronized step through the root operator.
+/// Result of evaluating one input step through the root operator.
 pub struct SyncStepResult<T, Y> {
-    /// Synchronized input step presented to the operator tree.
+    /// Input step presented to the operator tree.
     pub sync_step: Step<T>,
-    /// Output steps emitted for this synchronized input step.
+    /// Output steps emitted for this input step.
     pub outputs: Vec<Step<Y>>,
 }
 
 impl<T, Y> SyncStepResult<T, Y> {
-    /// Creates a new synchronized-step evaluation result.
+    /// Creates a new per-step evaluation result.
     pub fn new(sync_step: Step<T>, outputs: Vec<Step<Y>>) -> Self {
         SyncStepResult { sync_step, outputs }
     }
 
-    /// Returns `true` if this synchronized step produced any outputs.
+    /// Returns `true` if this step produced any outputs.
     pub fn has_outputs(&self) -> bool {
         !self.outputs.is_empty()
     }
@@ -302,7 +308,7 @@ impl<T, Y> MonitorOutput<T, Y> {
         self.raw_outputs().last()
     }
 
-    /// Returns `true` if no synchronized evaluations occurred
+    /// Returns `true` if no evaluations occurred
     /// (e.g. a multi-signal formula waiting for the other signal).
     pub fn is_pending(&self) -> bool {
         self.evaluations.is_empty()
@@ -336,9 +342,9 @@ impl<T, Y> MonitorOutput<T, Y> {
             .collect()
     }
 
-    /// Provides read-only access to the per-sync-step evaluation results.
+    /// Provides read-only access to the per-step evaluation results.
     ///
-    /// Each [`SyncStepResult`] pairs a synchronized input step with
+    /// Each [`SyncStepResult`] pairs an input step with
     /// the output(s) produced by the formula for that step.
     /// This is useful for advanced diagnostics or when building custom
     /// output formats (e.g., the Python bindings' `to_dict()`).
@@ -388,10 +394,19 @@ impl<T, Y> IntoIterator for MonitorOutput<T, Y> {
 /// though valid monitors will always have Y: RobustnessSemantics.
 pub struct StlMonitor<T: Clone + Interpolatable, Y> {
     root_operator: Box<dyn StlOperatorTrait<T, Output = Y>>,
+    /// Timestamp of the first input sample. Nothing before it is reported.
+    first_timestamp: Option<Duration>,
     synchronizer: Synchronizer<T>,
     variables: Variables,
     algorithm: Algorithm,
     semantics: Semantics,
+}
+
+/// The timestamp a monitor reports from, or `None` to report from its first input.
+///
+/// Initialized signals are defined from `t=0`, so the whole trace is worth reporting.
+fn reported_from<T: Interpolatable>(synchronizer: &Synchronizer<T>) -> Option<Duration> {
+    synchronizer.has_initial_values().then_some(Duration::ZERO)
 }
 
 /// Entry point for the builder.
@@ -405,8 +420,10 @@ impl StlMonitor<f64, f64> {
             formula: None,
             algorithm: Algorithm::default(),
             semantics: Semantics::DelayedQuantitative, // Default, but will be overwritten if semantics() is called
-            synchronization_strategy: SynchronizationStrategy::default(),
+            signal_interpolation: SignalInterpolation::default(),
             variables: Variables::new(),
+            initial_values: BTreeMap::new(),
+            initialize_rest_to_zero: false,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -416,18 +433,24 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
     /// Processes a single input step through the monitor's evaluation pipeline.
     ///
     /// This is the core evaluation logic shared by both single and batch updates.
-    /// It synchronizes the input, evaluates all pending synchronized steps, and
-    /// collects the results.
+    /// It validates the input, evaluates all pending steps, and collects the
+    /// results.
     fn process_step(&mut self, step: &Step<T>) -> MonitorOutput<T, Y>
     where
         Y: RobustnessSemantics + Debug,
     {
         self.synchronizer.evaluate(step.clone());
+        let first_timestamp = *self.first_timestamp.get_or_insert(step.timestamp);
 
         let evaluations = std::iter::from_fn(|| self.synchronizer.pending.pop_front())
             .map(|sync_step| {
-                let op_res = self.root_operator.update(&sync_step);
-                SyncStepResult::new(sync_step, op_res)
+                let outputs = self
+                    .root_operator
+                    .update(&sync_step)
+                    .into_iter()
+                    .filter(|output| output.timestamp >= first_timestamp)
+                    .collect();
+                SyncStepResult::new(sync_step, outputs)
             })
             .collect();
 
@@ -436,8 +459,8 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
 
     /// Updates the monitor with a single input step and returns the evaluation output.
     ///
-    /// This method processes the input through synchronization and evaluates all
-    /// pending synchronized steps against the STL formula.
+    /// This method validates the input and evaluates all pending steps against
+    /// the STL formula.
     ///
     /// # Arguments
     ///
@@ -503,6 +526,7 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
     /// let mut monitor = StlMonitor::builder()
     ///     .formula(stl!(G[0, 1](temperature < 30.0) && (pressure > 100.0)))
     ///     .semantics(DelayedQuantitative)
+    ///     .initialize_signals([("temperature", 21.4), ("pressure", 101.3)])
     ///     .build()
     ///     .unwrap();
     ///
@@ -562,9 +586,19 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
         self.semantics
     }
 
-    /// Returns the synchronization strategy used by this monitor.
+    /// Returns the [`Self::signal_interpolation`] under its old name.
+    #[deprecated(since = "0.2.0", note = "use `signal_interpolation`")]
+    #[allow(deprecated)]
     pub fn synchronization_strategy(&self) -> SynchronizationStrategy {
-        self.synchronizer.strategy()
+        match self.signal_interpolation() {
+            SignalInterpolation::ZeroOrderHold => SynchronizationStrategy::ZeroOrderHold,
+            SignalInterpolation::Linear => SynchronizationStrategy::Linear,
+        }
+    }
+
+    /// Returns how this monitor reads input signals between samples.
+    pub fn signal_interpolation(&self) -> SignalInterpolation {
+        self.synchronizer.interpolation()
     }
 
     /// Returns the signal identifiers used in the formula.
@@ -586,7 +620,7 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
     /// Resets the monitor to its initial state, clearing all internal caches and
     /// evaluation buffers.
     ///
-    /// The formula, semantics, algorithm, synchronization strategy, and variables
+    /// The formula, semantics, algorithm, signal interpolation, and variables
     /// are preserved. Use this to reuse a monitor across multiple independent
     /// traces without rebuilding it from scratch.
     ///
@@ -614,6 +648,7 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
     {
         self.root_operator.reset();
         self.synchronizer.reset();
+        self.first_timestamp = reported_from(&self.synchronizer);
     }
 
     #[allow(rustdoc::private_intra_doc_links)]
@@ -637,7 +672,11 @@ impl<T: Clone + Interpolatable, Y> Display for StlMonitor<T, Y> {
         writeln!(f, "  Specification: {}", self.root_operator)?;
         writeln!(f, "  Algorithm: {:?}", self.algorithm)?;
         writeln!(f, "  Semantics: {:?}", self.semantics)?;
-        writeln!(f, "  Synchronization: {:?}", self.synchronizer.strategy())?;
+        writeln!(
+            f,
+            "  Signal interpolation: {:?}",
+            self.signal_interpolation()
+        )?;
         writeln!(
             f,
             "  Temporal Depth: {:?}",
@@ -663,8 +702,12 @@ pub struct StlMonitorBuilder<T, Y> {
     algorithm: Algorithm,
     /// We store the enum value for logic, and use Y for type safety
     semantics: Semantics,
-    synchronization_strategy: SynchronizationStrategy,
+    signal_interpolation: SignalInterpolation,
     variables: Variables,
+    /// Value each signal takes from `t=0` until its own first sample.
+    initial_values: BTreeMap<&'static str, T>,
+    /// Whether the signals left over are initialized to `T::zero()`.
+    initialize_rest_to_zero: bool,
     _phantom: std::marker::PhantomData<(T, Y)>,
 }
 
@@ -681,9 +724,21 @@ impl<T, Y> StlMonitorBuilder<T, Y> {
         self
     }
 
-    /// Configures the synchronization strategy for signal synchronization.
-    pub fn synchronization_strategy(mut self, strategy: SynchronizationStrategy) -> Self {
-        self.synchronization_strategy = strategy;
+    /// Configures the signal interpolation under its old name; forwards to
+    /// [`Self::signal_interpolation`].
+    #[deprecated(
+        since = "0.2.0",
+        note = "use `signal_interpolation`; `SynchronizationStrategy::None` and \
+                `::ZeroOrderHold` both mean `SignalInterpolation::ZeroOrderHold`"
+    )]
+    #[allow(deprecated)]
+    pub fn synchronization_strategy(self, strategy: SynchronizationStrategy) -> Self {
+        self.signal_interpolation(strategy.interpolation())
+    }
+
+    /// Configures how input signals are read *between* their own samples.
+    pub fn signal_interpolation(mut self, interpolation: SignalInterpolation) -> Self {
+        self.signal_interpolation = interpolation;
         self
     }
 
@@ -708,6 +763,34 @@ impl<T, Y> StlMonitorBuilder<T, Y> {
         self
     }
 
+    /// Defines `signal` from `t=0` by `value`, until its own first sample arrives.
+    ///
+    /// Required for every signal of a multi-signal formula. Unused if the signal's first
+    /// sample is at `t=0`.
+    pub fn initialize_signal(mut self, signal: &'static str, value: T) -> Self {
+        self.initial_values.insert(signal, value);
+        self
+    }
+
+    /// Defines several signals from `t=0`; see [`Self::initialize_signal`].
+    pub fn initialize_signals(
+        mut self,
+        signals: impl IntoIterator<Item = (&'static str, T)>,
+    ) -> Self {
+        self.initial_values.extend(signals);
+        self
+    }
+
+    /// Defines every signal not given its own value from `t=0` by zero; see
+    /// [`Self::initialize_signal`].
+    pub fn initialize_signals_to_zero(mut self) -> Self
+    where
+        T: Interpolatable,
+    {
+        self.initialize_rest_to_zero = true;
+        self
+    }
+
     /// Applies the semantics, switching the Builder's generic type `Y` to match the semantics.
     /// This allows inference of the output type (bool, f64, RobustnessInterval).
     ///
@@ -727,8 +810,10 @@ impl<T, Y> StlMonitorBuilder<T, Y> {
             formula: self.formula,
             algorithm: self.algorithm,
             semantics: S::as_enum(),
-            synchronization_strategy: self.synchronization_strategy,
+            signal_interpolation: self.signal_interpolation,
             variables: self.variables,
+            initial_values: self.initial_values,
+            initialize_rest_to_zero: self.initialize_rest_to_zero,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -756,10 +841,32 @@ where
     /// Returns an error if no formula was provided or when an unsupported
     /// algorithm/semantics combination is requested.
     pub fn build(self) -> Result<StlMonitor<T, Y>, &'static str> {
-        let mut formula_def = self
+        let formula_def = self
             .formula
             .clone()
             .ok_or("Formula definition is required")?;
+
+        let signal_interpolation = self.signal_interpolation;
+
+        // Linear interpolation is only supported for qualitative semantics.
+        if signal_interpolation == SignalInterpolation::Linear {
+            match self.semantics {
+                Semantics::DelayedQuantitative => {
+                    return Err(
+                        "Linear signal interpolation is not supported for DelayedQuantitative. Use a qualitative semantics for linear interpolation or ZeroOrderHold otherwise.",
+                    );
+                }
+                Semantics::RobustnessInterval => {
+                    return Err(
+                        "Linear signal interpolation is not supported for RobustnessInterval. Use a qualitative semantics for linear interpolation or ZeroOrderHold otherwise",
+                    );
+                }
+                Semantics::DelayedQualitative | Semantics::EagerQualitative => {}
+            }
+            if self.algorithm == Algorithm::Naive {
+                return Err("Linear signal interpolation is not supported by the Naive algorithm.");
+            }
+        }
 
         let root_operator = match (self.algorithm, self.semantics) {
             (Algorithm::Incremental, _) => {
@@ -767,6 +874,7 @@ where
                     formula_def.clone(),
                     self.semantics,
                     self.variables.clone(),
+                    signal_interpolation,
                 );
                 self.initialize_operator(operator)
             }
@@ -778,14 +886,29 @@ where
             }
         };
 
-        let synchronizer = if formula_def.get_signal_identifiers().len() <= 1 {
-            Synchronizer::new(SynchronizationStrategy::None)
-        } else {
-            Synchronizer::new(self.synchronization_strategy)
-        };
+        let mut synchronizer = Synchronizer::new(signal_interpolation);
+        // Multi-signal formulas require an initial value for every signal.
+        let signals = formula_def.clone().get_signal_identifiers();
+        if signals.len() > 1 {
+            let mut initial_values = self.initial_values.clone();
+            if self.initialize_rest_to_zero {
+                for signal in &signals {
+                    initial_values.entry(signal).or_insert_with(T::zero);
+                }
+            }
+            if signals.iter().any(|s| !initial_values.contains_key(s)) {
+                return Err(
+                    "Every signal of a formula over more than one signal must be given an \
+                     initial value: use initialize_signal, initialize_signals, or \
+                     initialize_signals_to_zero.",
+                );
+            }
+            synchronizer.set_initial_values(initial_values);
+        }
 
         Ok(StlMonitor {
             root_operator,
+            first_timestamp: reported_from(&synchronizer),
             synchronizer,
             variables: self.variables.clone(),
             algorithm: self.algorithm,
@@ -854,6 +977,7 @@ fn build_incremental_operator<T, Y>(
     formula: FormulaDefinition,
     semantics: Semantics,
     variables: Variables,
+    interpolation: SignalInterpolation,
 ) -> Box<dyn StlOperatorAndSignalIdentifier<T, Y>>
 where
     T: Into<f64> + Copy + 'static,
@@ -880,31 +1004,36 @@ where
     }
 
     match formula {
-        FormulaDefinition::GreaterThan(s, c) => Box::new(Atomic::new_greater_than(s, c)),
-        FormulaDefinition::LessThan(s, c) => Box::new(Atomic::new_less_than(s, c)),
-        FormulaDefinition::GreaterThanVar(s, var) => {
-            Box::new(Atomic::new_greater_than_var(s, var, variables.clone()))
+        FormulaDefinition::GreaterThan(s, c) => {
+            Box::new(Atomic::new_greater_than(s, c).with_interpolation(interpolation))
         }
-        FormulaDefinition::LessThanVar(s, var) => {
-            Box::new(Atomic::new_less_than_var(s, var, variables.clone()))
+        FormulaDefinition::LessThan(s, c) => {
+            Box::new(Atomic::new_less_than(s, c).with_interpolation(interpolation))
         }
+        FormulaDefinition::GreaterThanVar(s, var) => Box::new(
+            Atomic::new_greater_than_var(s, var, variables.clone())
+                .with_interpolation(interpolation),
+        ),
+        FormulaDefinition::LessThanVar(s, var) => Box::new(
+            Atomic::new_less_than_var(s, var, variables.clone()).with_interpolation(interpolation),
+        ),
         FormulaDefinition::True => Box::new(Atomic::new_true()),
         FormulaDefinition::False => Box::new(Atomic::new_false()),
 
         FormulaDefinition::Not(op) => {
-            let child = build_incremental_operator(*op, semantics, variables);
+            let child = build_incremental_operator(*op, semantics, variables, interpolation);
             Box::new(Not::new(child))
         }
 
         FormulaDefinition::And(l, r) => {
-            let left = build_incremental_operator(*l, semantics, variables.clone());
-            let right = build_incremental_operator(*r, semantics, variables);
+            let left = build_incremental_operator(*l, semantics, variables.clone(), interpolation);
+            let right = build_incremental_operator(*r, semantics, variables, interpolation);
             dispatch_operator!(And, left, right, None, None)
         }
 
         FormulaDefinition::Or(l, r) => {
-            let left = build_incremental_operator(*l, semantics, variables.clone());
-            let right = build_incremental_operator(*r, semantics, variables);
+            let left = build_incremental_operator(*l, semantics, variables.clone(), interpolation);
+            let right = build_incremental_operator(*r, semantics, variables, interpolation);
             dispatch_operator!(Or, left, right, None, None)
         }
 
@@ -913,24 +1042,25 @@ where
                 *l,
                 semantics,
                 variables.clone(),
+                interpolation,
             )));
-            let right = build_incremental_operator(*r, semantics, variables);
+            let right = build_incremental_operator(*r, semantics, variables, interpolation);
             dispatch_operator!(Or, not_left, right, None, None)
         }
 
         FormulaDefinition::Eventually(i, op) => {
-            let child = build_incremental_operator(*op, semantics, variables);
+            let child = build_incremental_operator(*op, semantics, variables, interpolation);
             dispatch_operator!(Eventually, i, child, None, None)
         }
 
         FormulaDefinition::Globally(i, op) => {
-            let child = build_incremental_operator(*op, semantics, variables);
+            let child = build_incremental_operator(*op, semantics, variables, interpolation);
             dispatch_operator!(Globally, i, child, None, None)
         }
 
         FormulaDefinition::Until(i, l, r) => {
-            let left = build_incremental_operator(*l, semantics, variables.clone());
-            let right = build_incremental_operator(*r, semantics, variables);
+            let left = build_incremental_operator(*l, semantics, variables.clone(), interpolation);
+            let right = build_incremental_operator(*r, semantics, variables, interpolation);
             dispatch_operator!(Until, i, left, right, None, None)
         }
     }
@@ -985,6 +1115,7 @@ mod tests {
             .formula(formula.clone())
             .algorithm(Algorithm::Incremental)
             .semantics(DelayedQuantitative)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -992,6 +1123,7 @@ mod tests {
             .formula(formula)
             .algorithm(Algorithm::Naive)
             .semantics(DelayedQuantitative)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -1098,6 +1230,7 @@ mod tests {
             .semantics(DelayedQualitative)
             .algorithm(Algorithm::Incremental)
             .variables(variables)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -1135,6 +1268,7 @@ mod tests {
             .formula(formula)
             .semantics(Rosi)
             .algorithm(Algorithm::Incremental)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
@@ -1146,6 +1280,8 @@ mod tests {
         let output = monitor.update_batch(&steps);
         let verdicts = output.verdicts();
 
+        // Verdicts land on the union of both conjuncts' breakpoints, {0,2,3,4}. `t=3` and
+        // `t=4` are non-final since `x` is unknown past 4s.
         assert_eq!(verdicts.len(), 4);
         assert!(verdicts[0].timestamp == Duration::from_secs(0));
         assert!(verdicts[0].value.0 == verdicts[0].value.1); // final
@@ -1174,6 +1310,7 @@ mod tests {
             StlMonitor::builder()
                 .formula(stl!(G[0,2] (x > 10.0) && F[0,3] (y < 20.0)))
                 .semantics(Rosi)
+                .initialize_signals_to_zero()
                 .build()
                 .unwrap()
         };
@@ -1252,22 +1389,21 @@ mod tests {
         let variables = Variables::new();
         variables.set("threshold", 10.0);
 
+        // Qualitative, since `Linear` is refused for the quantitative semantics.
         let mut monitor = StlMonitor::builder()
             .formula(formula)
-            .semantics(DelayedQuantitative)
+            .semantics(DelayedQualitative)
             .algorithm(Algorithm::Incremental)
-            .synchronization_strategy(SynchronizationStrategy::Linear)
+            .signal_interpolation(SignalInterpolation::Linear)
             .variables(variables)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
 
         // Test getters
         assert_eq!(monitor.algorithm(), Algorithm::Incremental);
-        assert_eq!(monitor.semantics(), Semantics::DelayedQuantitative);
-        assert_eq!(
-            monitor.synchronization_strategy(),
-            SynchronizationStrategy::Linear
-        );
+        assert_eq!(monitor.semantics(), Semantics::DelayedQualitative);
+        assert_eq!(monitor.signal_interpolation(), SignalInterpolation::Linear);
         assert_eq!(monitor.temporal_depth(), Duration::from_secs(5));
 
         // Test specification getter
@@ -1289,8 +1425,8 @@ mod tests {
         let display_output = format!("{}", monitor);
         assert!(display_output.contains("STL Monitor Configuration"));
         assert!(display_output.contains("Algorithm: Incremental"));
-        assert!(display_output.contains("Semantics: DelayedQuantitative"));
-        assert!(display_output.contains("Synchronization: Linear"));
+        assert!(display_output.contains("Semantics: DelayedQualitative"));
+        assert!(display_output.contains("Signal interpolation: Linear"));
         assert!(display_output.contains("Temporal Depth: 5s"));
         assert!(display_output.contains("Variables:"));
         assert!(display_output.contains("$threshold = 10"));
@@ -1566,7 +1702,6 @@ mod tests {
     mod reset_tests {
         use super::*;
         use crate::monitor::{Algorithm, Rosi, StlMonitor};
-        use crate::synchronizer::SynchronizationStrategy;
         use crate::{step, stl};
         use std::time::Duration;
 
@@ -1613,9 +1748,9 @@ mod tests {
 
             let mut monitor = StlMonitor::builder()
                 .formula(formula.clone())
-                .semantics(DelayedQuantitative)
+                .semantics(DelayedQualitative)
                 .algorithm(Algorithm::Incremental)
-                .synchronization_strategy(SynchronizationStrategy::Linear)
+                .signal_interpolation(SignalInterpolation::Linear)
                 .build()
                 .unwrap();
 
@@ -1623,7 +1758,7 @@ mod tests {
             let depth_before = monitor.temporal_depth();
             let algo_before = monitor.algorithm();
             let sem_before = monitor.semantics();
-            let sync_before = monitor.synchronization_strategy();
+            let interpolation_before = monitor.signal_interpolation();
 
             monitor.reset();
 
@@ -1631,7 +1766,7 @@ mod tests {
             assert_eq!(monitor.temporal_depth(), depth_before);
             assert_eq!(monitor.algorithm(), algo_before);
             assert_eq!(monitor.semantics(), sem_before);
-            assert_eq!(monitor.synchronization_strategy(), sync_before);
+            assert_eq!(monitor.signal_interpolation(), interpolation_before);
         }
 
         #[test]
@@ -1780,7 +1915,8 @@ mod tests {
                 .formula(formula)
                 .semantics(DelayedQuantitative)
                 .algorithm(Algorithm::Incremental)
-                .synchronization_strategy(SynchronizationStrategy::ZeroOrderHold)
+                .signal_interpolation(SignalInterpolation::ZeroOrderHold)
+                .initialize_signals_to_zero()
                 .build()
                 .unwrap();
 
@@ -1880,7 +2016,8 @@ mod tests {
             .formula(formula)
             .semantics(DelayedQuantitative)
             .algorithm(Algorithm::Incremental)
-            .synchronization_strategy(SynchronizationStrategy::ZeroOrderHold)
+            .signal_interpolation(SignalInterpolation::ZeroOrderHold)
+            .initialize_signals_to_zero()
             .build()
             .unwrap();
         let before = monitor.total_size();

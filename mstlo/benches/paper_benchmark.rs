@@ -42,6 +42,16 @@ impl SemanticsKind {
             Self::Rosi => "Rosi",
         }
     }
+
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "DelayedQuantitative" => Some(Self::DelayedQuantitative),
+            "DelayedQualitative" => Some(Self::DelayedQualitative),
+            "EagerQualitative" => Some(Self::EagerQualitative),
+            "Rosi" => Some(Self::Rosi),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -122,6 +132,38 @@ fn parse_formula_ids_from_env() -> io::Result<Option<HashSet<usize>>> {
     }
 
     Ok(Some(ids))
+}
+
+fn parse_semantics_from_env() -> io::Result<Option<Vec<SemanticsKind>>> {
+    let Ok(raw) = std::env::var("SEMANTICS") else {
+        return Ok(None);
+    };
+
+    let mut kinds: Vec<SemanticsKind> = Vec::new();
+
+    for token in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let kind = SemanticsKind::from_name(token).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "Invalid SEMANTICS entry '{token}'. Expected a comma-separated list of DelayedQuantitative, DelayedQualitative, EagerQualitative, Rosi"
+                ),
+            )
+        })?;
+
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+
+    if kinds.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SEMANTICS was set but no valid entries were provided.",
+        ));
+    }
+
+    Ok(Some(kinds))
 }
 
 fn read_signal_from_csv<P>(filename: P) -> io::Result<Vec<Step<f64>>>
@@ -710,6 +752,9 @@ fn main() -> io::Result<()> {
     if std::env::var("FORMULA_IDS").is_ok() {
         println!("Using formula filter from FORMULA_IDS");
     }
+    if std::env::var("SEMANTICS").is_ok() {
+        println!("Using semantics filter from SEMANTICS");
+    }
     println!(
         "Averaging over M = {} runs (+ {} warmup)",
         m_runs, warmup_runs
@@ -725,12 +770,14 @@ fn main() -> io::Result<()> {
     let mut raw_writer = BufWriter::new(raw_file);
     write_raw_csv_header(&mut raw_writer)?;
 
-    let semantics = [
-        SemanticsKind::DelayedQuantitative,
-        SemanticsKind::DelayedQualitative,
-        SemanticsKind::EagerQualitative,
-        SemanticsKind::Rosi,
-    ];
+    let semantics = parse_semantics_from_env()?.unwrap_or_else(|| {
+        vec![
+            SemanticsKind::DelayedQuantitative,
+            SemanticsKind::DelayedQualitative,
+            SemanticsKind::EagerQualitative,
+            SemanticsKind::Rosi,
+        ]
+    });
 
     for sem in semantics {
         println!("\n--- Semantics: {} ---", sem.name());

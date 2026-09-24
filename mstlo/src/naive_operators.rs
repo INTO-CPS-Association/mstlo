@@ -1,8 +1,7 @@
 //! Naive STL operator backend.
 //!
-//! This module provides a straightforward recursive evaluator used mainly for:
-//! - correctness comparison against the incremental engine, and
-//! - tests/debugging.
+//! This module provides a straightforward recursive evaluator used mainly for performance comparison
+//! with the incremental engine.
 //!
 //! ## Recommendation
 //! This backend is **not recommended** for production monitoring workloads.
@@ -12,6 +11,13 @@
 //! ## Limitations
 //! - No RoSI (`RobustnessInterval`) mode in the monitor builder.
 //! - No eager short-circuit evaluation mode (only delayed-style evaluation).
+//!
+//! ## NOTE: This backend is pointwise, not dense-time
+//!
+//! It evaluates only at timestamps where a sample exists and never reads a
+//! zero-order-held value; the `G`, `F` and `U` folds range over the samples inside the
+//! window. It therefore agrees with `Algorithm::Incremental` only on a gapless uniform
+//! grid.
 
 use crate::core::{RobustnessSemantics, SignalIdentifier, StlOperatorTrait, TimeInterval};
 use crate::ring_buffer::RingBufferTrait;
@@ -441,7 +447,8 @@ impl StlOperator {
 
                 let robustness_phi_g = signal
                     .iter()
-                    .filter(|s| s.timestamp >= lower_bound_t_prime && s.timestamp < t_prime) // G is up to t_prime
+                    // `inf over [t_eval, t']`, closed at t' as in `until_operator.rs`.
+                    .filter(|s| s.timestamp >= t_eval && s.timestamp <= t_prime)
                     .map(|s| phi.robustness_naive(signal, s.timestamp))
                     .try_fold(Y::globally_identity(), |acc, item| {
                         item.map(|step| Y::and(acc, step.value))
