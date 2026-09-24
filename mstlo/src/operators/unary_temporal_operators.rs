@@ -16,18 +16,10 @@ use std::time::Duration;
 /// Time-window parameters passed to [`process_eval_buffer`].
 struct WindowParams<'a> {
     interval: &'a TimeInterval,
-    /// Newest timestamp the operand has produced a value for. The operand's signal is
-    /// known up to here and no further, which is what decides whether a window is
-    /// closed.
+    /// Newest timestamp the operand has produced a value for.
     frontier: Duration,
-    /// Newest timestamp the operand has stopped refining. Equal to `frontier` in the
-    /// delayed and eager modes, where a value is emitted only once it is final. Under RoSI
-    /// the operand keeps refining timestamps it has already emitted, so a window finalized
-    /// as soon as the frontier covers it would freeze an intermediate value.
-    ///
-    /// Read off the values themselves rather than assumed to trail `frontier` by the
-    /// operand's lookahead: an operand whose own frontier is held back by a slow signal is
-    /// settled much closer to it than its lookahead suggests.
+    /// Newest timestamp for which the operand's value is final. Equal to `frontier`
+    /// outside RoSI. A window closes once this reaches its end.
     settled: Duration,
     upper_bound: Option<Duration>,
     dominated_through: Option<Duration>,
@@ -46,17 +38,12 @@ where
 
 /// Aggregates the operand's cached values over `[window_start, window_end]`.
 ///
-/// `None` means the cache holds nothing that bears on the window -- neither a value in
-/// force at `window_start` nor an entry inside it. Callers give that their own reading:
-/// the identity for [`process_eval_buffer`], "nothing known" for a still-open window.
+/// `None` if the cache has neither a value in force at `window_start` nor an entry inside
+/// the window.
 ///
-/// A window starting after `dominated_through` lies where the cache is a monotone Lemire
-/// deque, so its first entry is the extremum. Any other window, and every RoSI window
-/// (interval domination is not a total order), is aggregated.
-///
-/// The unbounded read is the fallback for an empty window: with no entry inside
-/// `[window_start, window_end]`, a surviving entry past `window_end` still carries the
-/// extremum, and bounding the scan would lose it.
+/// Past `dominated_through` the cache is monotone, so the first entry is the extremum.
+/// Otherwise, and always under RoSI, the window is aggregated. An empty window falls back
+/// to the next surviving entry, which carries the extremum.
 fn window_value<C, Y, FCombine, const IS_ROSI: bool>(
     cache: &C,
     window_start: Duration,
@@ -77,9 +64,7 @@ where
         .peekable();
     let before = entries.next_if(|entry| entry.timestamp < window_start);
 
-    // The value held at `window_start`, i.e. `zoh_at` without a second search. `None` only
-    // where a dominating entry inside the window already carries it. Only up to the
-    // frontier: past it the newest entry would read as holding indefinitely.
+    // The value held at `window_start`, if within the frontier.
     let in_range = window_start <= window.frontier;
     let held_entry = in_range
         .then(|| match entries.peek() {
@@ -88,10 +73,7 @@ where
         })
         .flatten();
 
-    // Past the settled mark the read is unusable: under RoSI the operand is still refining
-    // there, so a cached value is stale, and how its interval widens inside the stretch is
-    // its own aggregation's business. Nothing is known at the window start. `settled` is
-    // the frontier outside RoSI, so this never fires there.
+    // Under RoSI the value past the settled mark is still being refined, so it is unknown.
     let unknown_at_start = IS_ROSI && in_range && window_start > window.settled;
     let held_at_start = if unknown_at_start {
         Some(Y::unknown())
@@ -184,8 +166,7 @@ where
     }
 
     if n_finalized > 0 {
-        // Newest timestamp answered for good, so a shifted timestamp derived later from a
-        // sample that has only just arrived cannot re-open a window already closed.
+        // Record the newest final answer so closed windows are not re-opened.
         *finalized_ts = Some(eval_buffer[n_finalized - 1]);
     }
     eval_buffer.drain(..n_finalized);
@@ -193,14 +174,8 @@ where
     output_robustness
 }
 
-/// Newest timestamp the cache holds a value for, i.e. how far the operand's signal is
-/// known. `Duration::ZERO` before the operand has produced anything, which is only
-/// reached with an empty `eval_buffer` and therefore never used.
-///
-/// `known_through` caps it. The newest cached timestamp reads as "known continuously up
-/// to here" only for a gap-free operand; an eager binary can put a hole behind its newest
-/// step, and closing a window inside that hole reads a value the operand never asserted.
-/// See [`StlOperatorTrait::known_through`].
+/// Newest timestamp the cache holds a value for, capped by `known_through`.
+/// `Duration::ZERO` for an empty cache.
 fn cache_frontier<C, Y>(cache: &C, known_through: Option<Duration>) -> Duration
 where
     C: RingBufferTrait<Value = Y>,
@@ -217,10 +192,7 @@ where
 
 /// How far a window operator's own output is gap-free, given how far its operand is.
 ///
-/// `answered` is the operator's `finalized_ts`, and over a gap-free operand it is the whole
-/// answer: breakpoints arrive in ascending order, so the answered prefix stays solid. An
-/// operand with holes can deliver a breakpoint behind its newest, which opens a window as
-/// far back as `ts - interval_end`; only below that is the output still solid.
+/// That is `answered`, capped by the operand's bound shifted back by `interval_end`.
 fn window_known_through(
     answered: Option<Duration>,
     operand_known: Option<Duration>,
@@ -235,15 +207,11 @@ fn window_known_through(
 
 /// Inserts an evaluation timestamp, keeping `eval_buffer` strictly ascending and unique.
 ///
-/// A shifted timestamp is earlier than the sample that produced it, so it interleaves with
-/// entries already pending rather than extending the buffer. It can never precede one that
-/// has already been finalized: a window closes only once the frontier reaches `t + b`, and
-/// a new sample at `ts` is past the previous frontier, so `ts - b` is past every closed
-/// evaluation timestamp.
+/// Shifted timestamps can land between pending entries, so this inserts in order.
 pub(crate) fn enqueue_eval(eval_buffer: &mut VecDeque<Duration>, t: Duration) {
     match eval_buffer.back() {
         Some(&back) if t <= back => {
-            // On a regular grid a shifted timestamp is already at one end.
+            // Cheap checks first: on a regular grid `t` is usually at one end.
             if t != back
                 && eval_buffer.front() != Some(&t)
                 && let Err(pos) = eval_buffer.binary_search(&t)
@@ -257,9 +225,8 @@ pub(crate) fn enqueue_eval(eval_buffer: &mut VecDeque<Duration>, t: Duration) {
 
 /// Queues the evaluation timestamps that a new operand breakpoint at `ts` opens.
 ///
-/// That is `ts` itself, plus the window starts `ts - a` and `ts - b` that reach it. A shift
-/// landing before the operand's first sample, or at a window already answered for good, is
-/// dropped.
+/// That is `ts`, `ts - a` and `ts - b`. Shifts before `earliest` or at or before
+/// `finalized_ts` are dropped.
 fn enqueue_eval_windows(
     eval_buffer: &mut VecDeque<Duration>,
     ts: Duration,
@@ -291,15 +258,8 @@ fn enqueue_eval_windows(
 /// `false` means the entry was already evicted by domination, so the refinement is
 /// subsumed by the surviving value and can be dropped.
 ///
-/// A step at `ts` queues up to three evaluation timestamps. The satisfaction signal of
-/// `F[a,b] phi` or `G[a,b] phi` changes only where a window boundary crosses a breakpoint
-/// of `phi`, which is at `ts - a` and `ts - b`; evaluating only at `ts` misses an interval
-/// of satisfaction that opens and closes between two breakpoints. `ts` itself is kept so
-/// the operator still answers at the timestamps that were submitted to it.
-///
-/// A shifted timestamp before the operand's first sample is dropped, since the operand has
-/// no value to report there, as is one at or before `finalized_ts`, which would re-open a
-/// window already answered.
+/// A step at `ts` queues `ts`, `ts - a` and `ts - b`, since the output can only change
+/// where a window boundary crosses a breakpoint.
 #[allow(clippy::too_many_arguments)]
 fn register_sub_steps<C, Y, const IS_ROSI: bool>(
     cache: &mut C,
@@ -316,14 +276,9 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
     Y: RobustnessSemantics + Debug,
 {
     for sub_step in sub_steps {
-        // An operand that emits in ascending order takes the fast path: append, and let
-        // Lemire eviction keep the deque monotone.
-        //
-        // An eager `And`/`Or` does not: it is required to emit a breakpoint behind one it
-        // has already answered rather than strand it, so a step older than the cache back
-        // is an ordinary arrival, not a stale duplicate. Such a step is inserted in place,
-        // skipping `pop_dominated_values`, which reasons about a *newest* arrival. That
-        // leaves the deque locally non-monotone, which `dominated_through` records.
+        // Ascending steps are appended with Lemire eviction. Late steps (from an eager
+        // `And`/`Or`) are inserted in place, and `dominated_through` records where the
+        // cache may no longer be monotone.
         let is_ascending = cache
             .get_back()
             .is_none_or(|back| sub_step.timestamp > back.timestamp);
@@ -336,8 +291,6 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
                 interval,
                 finalized_ts,
             );
-            // After `enqueue_eval`, the front of the buffer is the oldest window still
-            // waiting for an answer, which is what bounds the eviction below.
             let oldest_pending = eval_buffer.front().copied();
             pop_dominated_values(
                 cache,
@@ -355,10 +308,8 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
             }
             cache.add_step(sub_step);
         } else {
-            // A value re-reported at a timestamp already stored is not a new breakpoint and
-            // needs no window queued. `finalized_ts` is not passed: it gates windows behind
-            // the newest answered one, and this step legitimately re-opens one, having
-            // landed inside a stretch the operand had not reported when they were answered.
+            // A late breakpoint may re-open answered windows, so `finalized_ts` is not
+            // passed. A re-reported timestamp queues nothing.
             if cache
                 .zoh_at(sub_step.timestamp)
                 .is_none_or(|held| held.timestamp != sub_step.timestamp)
@@ -377,16 +328,8 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
 ///
 /// `is_max = true` is used for `Eventually`; `is_max = false` for `Globally`.
 ///
-/// A dominated entry may be dropped only once the step that dominates it stands in for it
-/// in every window that could still ask for it. The windows still to be answered are those
-/// of `oldest_pending` onwards, the earliest of which ends at `oldest_pending +
-/// interval_end`, so the dominating step has to fall at or before that.
-///
-/// `known_through` adds a second bound, for an operand whose stream still has holes. The
-/// windows that could ask for an entry are not only the ones already pending: a breakpoint
-/// arriving later inside a hole opens a *new* window there, and that window needs the
-/// detail between the hole and the dominator. Nothing at or after `known_through` may be
-/// compacted away while that is still possible. See [`StlOperatorTrait::known_through`].
+/// An entry is dropped only if the dominating step falls inside the window of
+/// `oldest_pending`, and the entry is before `known_through`.
 fn pop_dominated_values<C, Y>(
     cache: &mut C,
     sub_step: &Step<Y>,
@@ -549,10 +492,7 @@ where
         let sub_robustness_vec = self.operand.update(step);
         let operand_known_through = self.operand.known_through();
         let mut output_robustness = Vec::new();
-        // See [`WindowParams::settled`]. The operand refines from the oldest timestamp
-        // forward, so the ones it is still working on are a suffix and the newest final
-        // value marks where that suffix starts. Outside RoSI every value is final, and the
-        // frontier is the mark.
+        // Track the newest final operand value; see [`WindowParams::settled`].
         for sub_step in &sub_robustness_vec {
             if sub_step.value.is_final() {
                 self.operand_settled = self.operand_settled.max(sub_step.timestamp);
@@ -564,9 +504,7 @@ where
         if let Some(first) = sub_robustness_vec.first()
             && let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead)
         {
-            // The operand has just reported at `first.timestamp`, so its signal is known
-            // up to there even though the step is not registered yet -- as far as the
-            // operand admits to being gap-free, at least.
+            // The operand is known up to `first.timestamp`, capped by `known_through`.
             let frontier = match operand_known_through {
                 Some(bound) => first.timestamp.min(bound),
                 None => first.timestamp,
@@ -625,12 +563,8 @@ where
 
         // Prune the cache.
         //
-        // a sample still to arrive at `ts` queues the shifted timestamp `ts - interval.end`,
-        // whose window opens at `ts - interval.end + interval.start`. The earliest such window
-        // start still reachable is the one derived from a sample just past the frontier, so the value
-        // in force there has to survive even though nothing pending asks for it yet.
-        // Under RoSI a breakpoint arrives anywhere back to the settled mark, not just past
-        // the frontier, so the reachable window start reaches `settle` further back too.
+        // Also keep the value in force at the earliest window start a future sample could
+        // queue, measured from the settled mark.
         let earliest_future_window_start = cache_frontier(&self.cache, operand_known_through)
             .min(self.operand_settled)
             .saturating_sub(self.interval.end.saturating_sub(self.interval.start));
@@ -792,10 +726,7 @@ where
         let sub_robustness_vec = self.operand.update(step);
         let operand_known_through = self.operand.known_through();
         let mut output_robustness = Vec::new();
-        // See [`WindowParams::settled`]. The operand refines from the oldest timestamp
-        // forward, so the ones it is still working on are a suffix and the newest final
-        // value marks where that suffix starts. Outside RoSI every value is final, and the
-        // frontier is the mark.
+        // Track the newest final operand value; see [`WindowParams::settled`].
         for sub_step in &sub_robustness_vec {
             if sub_step.value.is_final() {
                 self.operand_settled = self.operand_settled.max(sub_step.timestamp);
@@ -807,9 +738,7 @@ where
         if let Some(first) = sub_robustness_vec.first()
             && let Some(split_key) = first.timestamp.checked_sub(self.max_lookahead)
         {
-            // The operand has just reported at `first.timestamp`, so its signal is known
-            // up to there even though the step is not registered yet -- as far as the
-            // operand admits to being gap-free, at least.
+            // The operand is known up to `first.timestamp`, capped by `known_through`.
             let frontier = match operand_known_through {
                 Some(bound) => first.timestamp.min(bound),
                 None => first.timestamp,
@@ -868,16 +797,8 @@ where
 
         // Prune the cache.
         //
-        // The evaluation buffer is not the whole story: a sample still to arrive at `ts`
-        // queues the shifted timestamp `ts - interval.end`, whose window opens at
-        // `ts - interval.end + interval.start`. The earliest such window start still
-        // reachable is the one derived from a sample just past the frontier, so the value
-        // in force there has to survive even though nothing pending asks for it yet.
-        // Pruning it away leaves the window-start ZOH read empty and the window is then
-        // aggregated without the value it opens on -- reporting, for `F`, a violation over
-        // an interval where the operand is in force and satisfied.
-        // Under RoSI a breakpoint arrives anywhere back to the settled mark, not just past
-        // the frontier, so the reachable window start reaches `settle` further back too.
+        // Also keep the value in force at the earliest window start a future sample could
+        // queue, measured from the settled mark.
         let earliest_future_window_start = cache_frontier(&self.cache, operand_known_through)
             .min(self.operand_settled)
             .saturating_sub(self.interval.end.saturating_sub(self.interval.start));
@@ -1337,10 +1258,8 @@ mod sparse_timestamp_tests {
                             "t_eval={t_eval} expected RoSI to collapse to [13, 13], got {iv:?}"
                         );
                     }
-                    // x = 2 violates the atom, so eager cannot conclude for t_eval = 5 and
-                    // must wait. It does conclude for t_eval = 3, the breakpoint at 5s
-                    // shifted by the window length: the window [3, 5] still lies inside the
-                    // segment that the sample at 2s holds at 16.
+                    // x = 2 violates the atom, so eager must wait for t_eval = 5. It
+                    // concludes for t_eval = 3, whose window [3, 5] is held at 16.
                     assert!(
                         !out_eager.iter().any(|s| s.timestamp == secs(5)),
                         "t=5 eager must stay pending for t_eval=5, got {out_eager:?}"
@@ -1782,8 +1701,7 @@ mod sparse_timestamp_tests {
                     even_rosi_val_3
                 );
                 // t_eval = 1500 is the breakpoint at 3.5s shifted by the window length.
-                // Its window [1.5, 3.5] opens inside the segment held by the sample at 1s,
-                // where x = 1, so G is 1 and F is 3 over it.
+                // x = 1 at its window start, so G is 1 and F is 3.
                 let glob_rosi_val_1500 = find_output_millis(&globally_rosi_out, 1500);
                 let even_rosi_val_1500 = find_output_millis(&eventually_rosi_out, 1500);
                 assert!(

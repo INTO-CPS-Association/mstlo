@@ -62,13 +62,10 @@ pub trait StlOperatorTrait<T: Clone>: DynClone + Display + SignalIdentifier {
     fn reset(&mut self) {}
 
     /// The timestamp through which this operator's output stream is gap-free, or `None`
-    /// if it has no holes at all.
+    /// if it has no gaps.
     ///
-    /// A consumer reads an operand as piecewise constant, so its newest emitted timestamp
-    /// doubles as "known this far". Eager `And`/`Or` breaks that: it may answer from one
-    /// operand alone and afterwards receive an *earlier* breakpoint from the other. Such
-    /// an operator keeps emitting early but reports here how far it is really covered, and
-    /// consumers close windows only over that.
+    /// Eager `And`/`Or` can emit ahead of an earlier breakpoint that arrives later.
+    /// Consumers only close windows up to this bound.
     fn known_through(&self) -> Option<Duration> {
         None
     }
@@ -245,10 +242,8 @@ pub trait RobustnessSemantics: Clone + PartialEq {
     /// Used by incremental temporal operators where windows are not yet closed.
     fn unknown() -> Self;
 
-    /// Whether the value is final, i.e. no later update can change it.
-    ///
-    /// Only RoSI reports values that are not, and it widens an interval solely through
-    /// [`Self::unknown`], so a degenerate interval has none folded in and is settled.
+    /// Whether the value is final, i.e. no later update can change it. Only RoSI
+    /// intervals can be non-final.
     fn is_final(&self) -> bool {
         true
     }

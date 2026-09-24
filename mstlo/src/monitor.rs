@@ -33,11 +33,8 @@ use std::time::Duration;
 pub enum Algorithm {
     /// Recursive naive evaluator (`naive_operators`) without incremental caches. (not recommended).
     ///
-    /// NOTE: This backend is **pointwise, not dense-time**: it only evaluates at timestamps
-    /// where a sample physically exists and never reads a zero-order-held value. On a
-    /// trace with gaps it will disagree with [`Algorithm::Incremental`], and that
-    /// disagreement is a difference in signal model rather than a bug. See the
-    /// `naive_operators` module documentation.
+    /// NOTE: This backend is pointwise, not dense-time, so it disagrees with
+    /// [`Algorithm::Incremental`] on traces with gaps. See `naive_operators`.
     Naive,
     /// Incremental streaming evaluator (default).
     #[default]
@@ -590,10 +587,6 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
     }
 
     /// Returns the [`Self::signal_interpolation`] under its old name.
-    ///
-    /// The strategy was only ever a name for an interpolation, so this reports the
-    /// interpolation in force: `ZeroOrderHold` or `Linear`, never `None`, whichever
-    /// spelling was used to configure it.
     #[deprecated(since = "0.2.0", note = "use `signal_interpolation`")]
     #[allow(deprecated)]
     pub fn synchronization_strategy(&self) -> SynchronizationStrategy {
@@ -731,12 +724,8 @@ impl<T, Y> StlMonitorBuilder<T, Y> {
         self
     }
 
-    /// Configures the signal interpolation under its old name.
-    ///
-    /// Does nothing beyond forwarding to [`Self::signal_interpolation`]: `None` and
-    /// `ZeroOrderHold` both select [`SignalInterpolation::ZeroOrderHold`], `Linear`
-    /// selects [`SignalInterpolation::Linear`]. Whichever of the two setters is called
-    /// last wins.
+    /// Configures the signal interpolation under its old name; forwards to
+    /// [`Self::signal_interpolation`].
     #[deprecated(
         since = "0.2.0",
         note = "use `signal_interpolation`; `SynchronizationStrategy::None` and \
@@ -776,12 +765,8 @@ impl<T, Y> StlMonitorBuilder<T, Y> {
 
     /// Defines `signal` from `t=0` by `value`, until its own first sample arrives.
     ///
-    /// Every signal of a formula over more than one signal must be initialized, so that the
-    /// formula is defined from the start. A monitor over a signal that only begins later is
-    /// asked about time where that signal does not exist, and answers from the others alone.
-    ///
-    /// A signal whose own first sample is at `t=0` is defined by it, and the initial value
-    /// is never used.
+    /// Required for every signal of a multi-signal formula. Unused if the signal's first
+    /// sample is at `t=0`.
     pub fn initialize_signal(mut self, signal: &'static str, value: T) -> Self {
         self.initial_values.insert(signal, value);
         self
@@ -863,10 +848,7 @@ where
 
         let signal_interpolation = self.signal_interpolation;
 
-        // Crossings at the predicate layer give the exact *qualitative* answer, because the
-        // satisfaction signal of a signal-vs-constant predicate stays piecewise constant
-        // however the input is read. The robustness signal does not: it is piecewise linear
-        // between samples, which is not implemented.
+        // Linear interpolation is only supported for qualitative semantics.
         if signal_interpolation == SignalInterpolation::Linear {
             match self.semantics {
                 Semantics::DelayedQuantitative => {
@@ -905,9 +887,7 @@ where
         };
 
         let mut synchronizer = Synchronizer::new(signal_interpolation);
-        // A formula over one signal is defined wherever that signal is, so it needs no
-        // initial value; over several, an uninitialized one leaves a prefix where the
-        // formula is read from the others alone.
+        // Multi-signal formulas require an initial value for every signal.
         let signals = formula_def.clone().get_signal_identifiers();
         if signals.len() > 1 {
             let mut initial_values = self.initial_values.clone();
@@ -1300,11 +1280,8 @@ mod tests {
         let output = monitor.update_batch(&steps);
         let verdicts = output.verdicts();
 
-        // Verdicts land on the union of both conjuncts' breakpoints. `G[0,2]` changes where
-        // `x` does and two seconds ahead of that, giving {0,2,4}; `F[0,3]` where `y` does
-        // and three seconds ahead, giving {0,2,3,5}. Inside the trace that is {0,2,3,4}.
-        //
-        // `t=3` and `t=4` are non-final: `G[0,2]` reads `x` past 4s, where it is not known.
+        // Verdicts land on the union of both conjuncts' breakpoints, {0,2,3,4}. `t=3` and
+        // `t=4` are non-final since `x` is unknown past 4s.
         assert_eq!(verdicts.len(), 4);
         assert!(verdicts[0].timestamp == Duration::from_secs(0));
         assert!(verdicts[0].value.0 == verdicts[0].value.1); // final
@@ -1412,8 +1389,7 @@ mod tests {
         let variables = Variables::new();
         variables.set("threshold", 10.0);
 
-        // Qualitative: `Linear` is refused for the quantitative semantics, since a window
-        // sup/inf over a piecewise-linear robustness is not recovered from crossings.
+        // Qualitative, since `Linear` is refused for the quantitative semantics.
         let mut monitor = StlMonitor::builder()
             .formula(formula)
             .semantics(DelayedQualitative)

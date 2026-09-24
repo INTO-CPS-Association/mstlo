@@ -1,15 +1,9 @@
 //! Input admission and the signal model.
 //!
-//! Every sample that reaches the operator tree passes through here first. Two things
-//! happen: timestamps are checked to be strictly increasing per signal, and
-//! the [`SignalInterpolation`] the monitor was configured with is held so the layers that
-//! act on it can read it back.
-//!
-//! Reading a signal between its own samples is applied at the predicate layer instead; see
-//! [`SignalInterpolation`]. The one sample synthesized here is a signal's initial value at
-//! `t=0`, so that a formula over several signals is defined from the start rather than over
-//! whatever prefix the slowest signal leaves undefined; see
-//! [`Synchronizer::set_initial_values`].
+//! Every sample passes through here before reaching the operator tree. Timestamps are
+//! checked to be strictly increasing per signal, and each signal's initial value is
+//! emitted at `t=0`; see [`Synchronizer::set_initial_values`]. The configured
+//! [`SignalInterpolation`] is stored here but applied at the predicate layer.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ops::{Add, Mul, Sub};
@@ -30,12 +24,8 @@ pub enum SignalInterpolation {
     Linear,
 }
 
-/// Deprecated configuration surface, superseded by [`SignalInterpolation`].
-///
-/// It asked how several signals are aligned onto a common timeline, which has no
-/// well-defined answer: the result depended on the sample rates of signals the formula
-/// never mentioned. What callers meant by it was always how a signal is read between its
-/// own samples, so each variant now simply selects the interpolation of the same name.
+/// Deprecated; superseded by [`SignalInterpolation`]. Each variant selects the
+/// interpolation of the same name.
 #[deprecated(
     since = "0.2.0",
     note = "use `SignalInterpolation`; `None` and `ZeroOrderHold` both mean \
@@ -89,12 +79,10 @@ impl Interpolatable for f64 {
 
 /// Admits input steps on their way to the operator tree.
 ///
-/// Holds the [`SignalInterpolation`] in force and the last timestamp seen per signal, so
-/// that a signal cannot go backwards in time. Admitted steps are placed on [`Self::pending`]
-/// unchanged and in arrival order; nothing else is ever put there.
+/// Rejects steps that go backwards in time per signal, and places admitted steps on
+/// [`Self::pending`] in arrival order, preceded by any initial values.
 pub struct Synchronizer<T> {
-    /// How signals are read between their own samples. Acted on at the predicate layer,
-    /// recorded here because this is where the input model is decided.
+    /// How signals are read between their own samples. Applied at the predicate layer.
     interpolation: SignalInterpolation,
     /// Timestamp of the last admitted step per signal.
     last_timestamps: HashMap<&'static str, Duration>,
@@ -123,14 +111,8 @@ where
 
     /// Defines each of `initial_values` from `t=0`, until its own first sample arrives.
     ///
-    /// A signal's initial value is emitted as a step at `t=0`, but only once it is needed:
-    /// when the first sample past `t=0` is admitted. A signal whose own first sample is at
-    /// `t=0` therefore never gets one, and a trace that already defines every signal at
-    /// `t=0` is admitted unchanged.
-    ///
-    /// The flush is what fixes the prefix, so a real `t=0` sample overrides an initial value
-    /// only while it arrives before the first sample past `t=0`; after that it is a repeated
-    /// timestamp like any other.
+    /// Initial values are emitted as steps at `t=0` when the first sample past `t=0` is
+    /// admitted. A signal with its own sample at `t=0` before then gets none.
     pub fn set_initial_values(
         &mut self,
         initial_values: impl IntoIterator<Item = (&'static str, T)>,

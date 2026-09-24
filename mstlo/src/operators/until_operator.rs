@@ -16,10 +16,8 @@ use std::time::Duration;
 
 /// The value an operand holds at `t`, read off the cache entry in force there.
 ///
-/// Under RoSI an entry carried forward from an earlier timestamp is the operand's value at
-/// `t` only where the operand has settled. Past `settled_through` it is still refining, and
-/// how its interval widens inside the stretch depends on its own aggregation, which is not
-/// something the reader can reconstruct -- so nothing is known there.
+/// Under RoSI, a value carried forward past `settled_through` is still being refined, so it
+/// reads as `Y::unknown()`.
 fn held_value<Y: RobustnessSemantics, const IS_ROSI: bool>(
     entry: &Step<Y>,
     t: Duration,
@@ -48,17 +46,15 @@ pub struct Until<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_cache: C,
     right_cache: C,
     t_max: (Duration, Duration), // (left t_max, right t_max)
-    /// Newest timestamp each operand has stopped refining, i.e. reported a final value for.
+    /// Newest timestamp for which each operand has reported a final value.
     settled: (Duration, Duration),
     eval_buffer: VecDeque<Duration>,
     left_signals_set: HashSet<&'static str>,
     right_signals_set: HashSet<&'static str>,
     max_lookahead: Duration,
-    /// Timestamp of the first operand output ever seen. A shifted evaluation timestamp
-    /// earlier than this is dropped: neither operand has a value to report there.
+    /// Timestamp of the first operand output. Earlier evaluation timestamps are dropped.
     first_ts: Option<Duration>,
-    /// Newest evaluation timestamp already answered for good; a shifted timestamp at or
-    /// before it is dropped rather than re-queued into a window that has closed.
+    /// Newest evaluation timestamp with a final answer. Earlier ones are not re-queued.
     finalized_ts: Option<Duration>,
 }
 
@@ -136,10 +132,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
         let is_late = cache
             .get_back()
             .is_some_and(|back| step.timestamp < back.timestamp);
-        // Not `add_step`: an eager child emits a short-circuit ahead of its joint frontier
-        // and fills the gap behind it later, so a breakpoint can arrive earlier than one
-        // already cached. Appending it there would leave the cache unsorted, and every
-        // `zoh_at` read after that answers from the wrong step.
+        // An eager child can emit out of order, so insert rather than append.
         cache.insert_step(step);
         is_late
     }
@@ -180,18 +173,8 @@ where
         self.right.reset();
     }
 
-    /// A hole in this operator's output is a window start that has not been answered yet but
-    /// still lies below one that has. `finalized_ts` is that upper mark, and over gap-free
-    /// operands it is the whole answer: their breakpoints arrive in ascending order, every
-    /// window start they open below the mark is refused, and the answered prefix stays solid.
-    ///
-    /// Over an operand with holes it is not. A breakpoint arriving behind that operand's
-    /// newest is let through that gate, precisely so the window it opens is not lost, and it
-    /// opens one as far back as `ts - interval.end`. Only the stretch below the earliest such
-    /// window start is settled.
-    ///
-    /// Delayed and RoSI emit windows in order and have no holes. See
-    /// [`StlOperatorTrait::known_through`].
+    /// Eager output is gap-free up to `finalized_ts`, further capped by the operands' own
+    /// bounds shifted back by `interval.end`. Delayed and RoSI emit in order and have no gaps.
     fn known_through(&self) -> Option<Duration> {
         if !IS_EAGER || IS_ROSI {
             return None;
@@ -243,12 +226,8 @@ where
             self.t_max.1 = self.t_max.1.max(last_right.timestamp);
         }
 
-        // An operand is known only as far as it is gap-free. `t_max` gates both the
-        // `phi_held` read and the window-close test, and holding phi or psi across a hole
-        // an eager binary left behind would close a window against a value that operand
-        // never asserted. See [`StlOperatorTrait::known_through`].
-        //
-        // Applied after the `max`, since this bound can fall as well as rise.
+        // Cap each frontier at how far the operand is gap-free. This bound can decrease,
+        // so it is applied after the `max`.
         if let Some(bound) = self.left.known_through() {
             self.t_max.0 = self.t_max.0.min(bound);
         }
@@ -263,9 +242,7 @@ where
         // in order so interleaved timestamps don't violate monotonicity.
         let mut all_ts: Vec<Duration> =
             Vec::with_capacity(left_updates.len() + right_updates.len());
-        // A breakpoint arriving behind one already cached lands inside a stretch the
-        // operand had not reported when the windows there were answered, so those windows
-        // have to be opened again. `finalized_ts` must not veto it.
+        // Breakpoints that arrived behind the cache back; they may re-open answered windows.
         let mut late_ts: Vec<Duration> = Vec::new();
         for update in &right_updates {
             all_ts.push(update.timestamp);
@@ -287,12 +264,8 @@ where
         }
         all_ts.sort();
         all_ts.dedup();
-        // A breakpoint `ts` of either operand queues up to three evaluation timestamps. The
-        // satisfaction signal of `phi U[a,b] psi` changes only where a window boundary
-        // crosses an operand breakpoint, which is at `ts - a` and `ts - b`; evaluating only
-        // at `ts` misses an interval of satisfaction that opens and closes between two
-        // breakpoints. `ts` itself is kept so the operator still answers at the timestamps
-        // that were submitted to it.
+        // Each operand breakpoint `ts` queues `ts`, `ts - a` and `ts - b`: the output can
+        // only change where a window boundary crosses a breakpoint.
         for ts in all_ts {
             let earliest = *self.first_ts.get_or_insert(ts);
             for candidate in [
@@ -300,14 +273,8 @@ where
                 ts.checked_sub(self.interval.start),
                 ts.checked_sub(self.interval.end),
             ] {
-                // Re-opening a window already answered is worth it only when this
-                // breakpoint could change the answer. That needs both: it has to have
-                // arrived behind the operand's newest, landing inside a stretch that was
-                // unknown when the window was answered, and the window must not already
-                // have been decided on data covering it in full.
-                //
-                // Without the first condition an eager short-circuit is re-answered with
-                // the same value on every later sample, for the rest of the trace.
+                // An answered window is re-opened only by a late breakpoint, and only if
+                // the window was not already fully covered by data.
                 let reopenable = late_ts.contains(&ts)
                     && candidate.is_some_and(|t| t + self.interval.end > t_max_combined);
                 if let Some(t) = candidate
@@ -335,11 +302,7 @@ where
             None => Some(value),
         };
 
-        // Under RoSI an operand keeps refining timestamps it has already emitted, so each
-        // side is settled only up to its newest final value. Past that mark its value moves
-        // *inside* a stretch, where there is no entry to carry it, so a held read there is
-        // not the operand's value. Outside RoSI an operand emits nothing until it is final,
-        // so the mark is the frontier.
+        // How far each operand's values are final. Outside RoSI that is the frontier.
         let (left_settled, right_settled) = if IS_ROSI {
             (
                 self.settled.0.min(self.t_max.0),
@@ -363,26 +326,7 @@ where
             // We must use the minimum of the current time and the window end.
             let effective_end_time = current_time.min(window_end_t_eval);
 
-            // Case 1 gate: both operands are known through the end of the window.
-            //
-            // This must be tested per operand. `step.timestamp` is the arrival clock of
-            // *whichever* signal moved last, so with phi and psi on different signals a
-            // burst on phi's signal drives it past the horizon while psi is still behind.
-            // The tail of the window then reads as `Y::unknown()` -- which for `bool` is
-            // `false` (`core.rs`, `impl RobustnessSemantics for bool`) -- and folds into
-            // the outer `or` as a genuine `false`. Case 1 would close the window on that,
-            // and `finalized_ts` would refuse to re-open it when psi finally arrived.
-            //
-            // `t_max` carries each operand's own output frontier, so requiring both to
-            // reach the window end closes it exactly when the data to decide it is in
-            // hand, and no earlier. Child lookaheads need no separate term: a child's
-            // frontier only advances when that child could answer.
-            //
-            // phi is read over `[t_eval, t']` and psi over `[t_eval + a, t']`, with t' up
-            // to the window end, so the window end is the bound for both.
-            // Under RoSI an operand keeps refining timestamps it has already emitted, and is
-            // done one of its own lookaheads later, so each side must reach that much past
-            // the window end before the values inside it stop moving.
+            // Case 1 gate: both operands are settled through the end of the window.
             let window_covered =
                 left_settled >= window_end_t_eval && right_settled >= window_end_t_eval;
 
@@ -391,34 +335,22 @@ where
                 break;
             }
 
-            // phi must hold from t_eval onwards, so the running infimum starts at the value
-            // phi holds *at* t_eval. That value is generally carried by an earlier sample:
-            // a shifted evaluation timestamp need not be a breakpoint of phi at all. If phi
-            // is not known that far yet this t_eval cannot be evaluated, and neither can any
-            // later one, so stop.
+            // The running infimum of phi starts at the value phi holds at t_eval. If phi is
+            // not known that far yet, neither this nor any later t_eval can be evaluated.
             let phi_held = (t_eval <= self.t_max.0)
                 .then(|| self.left_cache.zoh_at(t_eval))
                 .flatten()
                 .map(|entry| held_value::<Y, IS_ROSI>(entry, t_eval, left_settled));
             let Some(phi_held) = phi_held else { break };
 
-            // Candidate t'. Both operands are piecewise constant, so
-            // `min(psi(t'), inf over [t_eval, t') of phi)` is piecewise constant too, and its
-            // supremum over the window is attained either at the window start or at an
-            // operand breakpoint inside it. The candidates therefore come from the caches
-            // and not from `eval_buffer`: a t' matters because an operand changes there, not
-            // because a verdict happens to have been asked for there.
-            // Both caches are ascending, so the breakpoints inside the window form a
-            // contiguous run -- binary search for its start, and stop at its end.
+            // Candidate t' are the window start plus every operand breakpoint inside the
+            // window: the inner expression is piecewise constant and only changes there.
             let left_from = self
                 .left_cache
                 .partition_point(|entry| entry.timestamp <= window_start_t_eval);
             let right_from = self
                 .right_cache
                 .partition_point(|entry| entry.timestamp <= window_start_t_eval);
-            // Each side is ascending, so their union is a merge of the two runs, dropping
-            // duplicates as they appear. The window start comes first: every breakpoint
-            // taken is strictly after it.
             let mut left_ts = self
                 .left_cache
                 .iter()
@@ -433,8 +365,7 @@ where
                 .take_while(|entry| entry.timestamp <= effective_end_time)
                 .map(|entry| entry.timestamp)
                 .peekable();
-            // Merged lazily rather than collected. Each run is strictly ascending and starts
-            // past the window start, so no candidate repeats.
+            // Lazy, deduplicated merge of the window start and both breakpoint runs.
             let t_primes = (window_start_t_eval <= effective_end_time)
                 .then_some(window_start_t_eval)
                 .into_iter()
@@ -450,36 +381,19 @@ where
                     Some(next)
                 }));
 
-            // phi samples after t_eval, folded into the running min as t' reaches them.
-            //
-            // The obligation on phi is `inf over [t_eval, t']`, **closed at t'**: phi is
-            // required to hold at the very time-point where psi holds. This is the STL
-            // convention of Maler-Nickovic and Donze-Maler, and it differs deliberately
-            // from the conventional LTL/MTL until, which uses the half-open `[t, t')`.
-            // The two diverge whenever a breakpoint of phi lands exactly on the witness --
-            // with sample-aligned breakpoints that is common, not measure-zero.
-            //
-            // Flip to the half-open form by seeding with `Y::globally_identity()`, folding
-            // `phi_held` in only once `t_prime > t_eval`, and changing the `<= t_prime`
-            // fold below to `< t_prime`.
+            // phi samples after t_eval, folded into the running min as t' reaches them. The
+            // obligation on phi is `inf over [t_eval, t']`, closed at t': phi must also hold
+            // where psi does.
             let phi_from = self
                 .left_cache
                 .partition_point(|entry| entry.timestamp <= t_eval);
             let mut left_cache_iter = self.left_cache.iter().skip(phi_from).peekable();
             let mut left_cache_t_prime_min = phi_held;
 
-            // The instant phi's running infimum died, or `None` while it still holds.
-            //
-            // `atomic_false` is the absorbing element of `and` in every semantics
-            // (`false`, `-inf`, the empty interval), so once the fold reaches it the
-            // infimum stays there and this is recorded exactly once. It is the timestamp
-            // the eager falsification check needs -- not the `t'` the walk happens to have
-            // reached when it notices, which can be arbitrarily later.
+            // The timestamp at which phi's running infimum reached `atomic_false`, if any.
             let mut phi_died_at = (left_cache_t_prime_min == Y::atomic_false()).then_some(t_eval);
 
-            // Cursor over psi, positioned at the entry in force at the window start:
-            // `right_from` is the first entry strictly after it, so its predecessor is
-            // the one holding there.
+            // Cursor over psi, starting at the entry in force at the window start.
             let mut psi_iter = self
                 .right_cache
                 .iter()
@@ -488,8 +402,7 @@ where
             let mut psi_held: Option<&Step<Y>> = None;
 
             for t_prime in t_primes {
-                // 1. Fold phi samples in (t_eval, t'] into the cumulative min. Inclusive of
-                //    t' itself: phi must hold where psi does.
+                // 1. Fold phi samples in (t_eval, t'] into the cumulative min.
                 while let Some(left_step) = left_cache_iter.next_if(|s| s.timestamp <= t_prime) {
                     left_cache_t_prime_min =
                         Y::and(left_cache_t_prime_min, left_step.value.clone());
@@ -497,28 +410,10 @@ where
                         phi_died_at = Some(left_step.timestamp);
                     }
                 }
-                // The min over the phi samples that have actually arrived.
                 let phi_known_min = left_cache_t_prime_min.clone();
 
-                // phi is known only as far as `t_max.0`. Past that the newest cache entry
-                // reads as holding indefinitely, because a piecewise-constant signal has no
-                // way to say "and then nothing" -- so an obligation nobody has verified
-                // would be accepted as satisfied, and a witness admitted on it. That is the
-                // same unsoundness `t_max.1` already guards against for psi on the line
-                // below, and it is the direction eager short-circuits on, so it decides a
-                // whole `Until` true off the strength of it.
-                //
-                // Substituted exactly the way psi is on the line below, a bare
-                // `Y::unknown()`, because what that value means is semantics-specific and
-                // only the semantics knows it: `false` for the qualitative ones, `NaN` for
-                // `DelayedQuantitative`, the unbounded interval for RoSI. Folding it in
-                // with `and` instead would push RoSI's lower bound to negative infinity and
-                // take a min against `NaN`, neither of which says "not known yet".
-                //
-                // RoSI folds `unknown()` in rather than substituting it. Its domain can say
-                // "no more than this, and no lower bound", so the obligation keeps the bound
-                // the arrived samples give it instead of going blank; substituting outright
-                // would leave the enclosing `and` with nothing to report.
+                // Past phi's settled mark the obligation is unknown. RoSI keeps the upper
+                // bound from the samples seen so far.
                 let robustness_phi_left = if t_prime <= left_settled {
                     phi_known_min.clone()
                 } else if IS_ROSI {
@@ -527,11 +422,7 @@ where
                     Y::unknown()
                 };
 
-                // 2. rho_psi(t'): the value psi holds at t'. t' is as often a breakpoint of
-                //    phi, or a bare window start, as it is a sample of psi.
-                // `t_primes` ascends, so a cursor over the cache tracks the entry psi
-                // holds at t'. The `held_until` test is the one `zoh_at` makes: a sample
-                // that has been superseded no longer answers.
+                // 2. rho_psi(t'): the value psi holds at t', or unknown past its frontier.
                 while let Some(entry) = psi_iter.next_if(|entry| entry.timestamp <= t_prime) {
                     psi_held = Some(entry);
                 }
@@ -542,35 +433,9 @@ where
                         held_value::<Y, IS_ROSI>(entry, t_prime, right_settled)
                     });
 
-                // 3. Eager falsification check: if phi has become false, short-circuit.
-                //
-                //    phi dying at `d` rules out every witness from `d` onwards -- the
-                //    obligation `inf over [t_eval, t'']` is closed at `t''` and monotone
-                //    non-increasing in `t''`, so it is false for all `t'' >= d`. It says
-                //    nothing about the witnesses *before* `d`: phi's obligation runs up to
-                //    each witness separately, and an earlier one is unaffected by a later
-                //    failure. So falsifying the window means ruling those out too, and that
-                //    needs psi to have actually reported across `[window_start, d)`. Where
-                //    it has not, `robustness_psi_right` falls back to `Y::unknown()`, which
-                //    for `bool` is `false` and is indistinguishable here from a psi that
-                //    genuinely does not hold.
-                //
-                //    Hence the gate is on `d` and not on `t_prime`. Gating on `t_prime` --
-                //    the point the walk has reached when it *notices* -- is sound but
-                //    needlessly strong, and it deadlocks: the check would wait on psi data
-                //    from beyond the stretch it actually has to rule out, the task would
-                //    stay in `eval_buffer` unanswered, the front prefix would block behind
-                //    it, and eager would go quiet while its last verdict went stale. That
-                //    measured a net loss (24 wrong -> 36). Gating on `d` asks for exactly
-                //    the data the conclusion rests on, so the wait is bounded by it.
-                //
-                //    `d < window_start_t_eval` needs no psi at all: phi died before the
-                //    first admissible witness, so there is no witness to rule out. This is
-                //    the run-up `[t_eval, t_eval + a)`, empty whenever `a == 0`.
-                //
-                //    The death is read off the *known* min, not the frontier-gated one: a
-                //    phi that is merely unverified past `t_max.0` must not read as a
-                //    violation.
+                // 3. Eager falsification: once phi has died at `d`, no witness at or after
+                //    `d` is possible. The window is false if psi is also known up to `d`,
+                //    ruling out earlier witnesses, or if `d` precedes the window start.
                 let psi_rules_out_earlier_witnesses = phi_died_at
                     .is_some_and(|died| died < window_start_t_eval || self.t_max.1 >= died);
                 if IS_EAGER && psi_rules_out_earlier_witnesses && t_max_combined >= t_eval {
@@ -634,31 +499,14 @@ where
             }
         }
 
-        // A shifted timestamp derived later from a sample that has only just arrived must
-        // not re-open a window that has already been answered for good. A breakpoint
-        // arriving *behind* the operand's newest is the exception, and is let through at the
-        // enqueue site above.
         if let Some(answered) = newest_answered {
             self.finalized_ts = Some(answered);
         }
 
         // 3. Prune the caches and remove completed tasks from the buffer.
         //
-        // Protecting only `eval_buffer.front()` is not enough. Any timestamp above
-        // `finalized_ts` can still *become* a task: a breakpoint that has not arrived yet
-        // queues `ts - a` and `ts - b` as well as `ts`, and those shifts can land earlier
-        // than anything currently in the buffer. Eager makes this routine -- it finalizes
-        // windows in whatever order they resolve, so the front runs ahead of the floor --
-        // but it is not eager-specific.
-        //
-        // What such a task needs is the phi/psi sample *in force* at it, which may predate
-        // it by any amount. Pruned, `zoh_at` returns `None`, the `phi_held` guard above
-        // breaks out of the loop, and because the buffer is processed front-first every
-        // later task stalls behind the unanswerable one: the operator goes quiet for good
-        // and its last verdict is held stale by anything reading the stream.
-        //
-        // Both bounds advance, so this stays bounded. It also *tightens* the empty-buffer
-        // case, which used to fall back to `ZERO` and suppress pruning entirely.
+        // Any timestamp after `finalized_ts` can still become a task, so pruning keeps
+        // the values in force from the older of that and the buffer front.
         let task_floor = self.finalized_ts.unwrap_or(Duration::ZERO);
         let protected_ts = self
             .eval_buffer
@@ -989,9 +837,8 @@ mod tests {
 
         let expected_outputs = [
             step!("output", false, Duration::from_secs(0)), // x>5 inbetween [3,4], which it isn't
-            // t = 1 is the breakpoint at 4s shifted by the lower bound. Its window is
-            // [4, 5], over which x is held at 2 by the sample at 4s, so x > 5 is false
-            // throughout. No sample of the signal lies in that window.
+            // t = 1 is the breakpoint at 4s shifted by the lower bound. x holds at 2 over
+            // its window [4, 5].
             step!("output", false, Duration::from_secs(1)),
             step!("output", true, Duration::from_secs(2)),
             step!("output", true, Duration::from_secs(3)),
@@ -1022,21 +869,9 @@ mod tests {
 
     /// A window must not be finalized while psi is still behind.
     ///
-    /// Case 1 closes a window on `current_time >= t_eval + max_lookahead`, where
-    /// `current_time` is the timestamp of whichever signal just arrived. With phi on `x`
-    /// and psi on `y`, an `x` sample can therefore close a window that `y` has not yet
-    /// reached. Every `t_prime` past `t_max.1` then reads as `Y::unknown()`, which is
-    /// `false` for `bool`, and the verdict is finalized on that substitution -- with
-    /// `finalized_ts` refusing to re-open it once `y` does arrive.
-    ///
-    /// Here `x > 0` holds throughout and `y > 5` becomes true at 1s, inside the window
-    /// `[0, 2]` of the evaluation at 0s, so the answer at 0s is `true`.
-    ///
-    /// The test pins both halves, because passing only the first would be trivial -- an
-    /// operator that never finalizes anything would satisfy it:
-    ///
-    /// 1. while `y`'s frontier is short of the window end, 0s must not be answered at all;
-    /// 2. once `y` covers the window end, 0s must be answered `true`.
+    /// `x > 0` holds throughout and `y > 5` becomes true at 1s, inside the window `[0, 2]`
+    /// of the evaluation at 0s. The answer at 0s must wait for `y` to cover the window,
+    /// and then be `true`.
     #[test]
     fn until_does_not_finalize_before_psi_frontier_covers_the_window() {
         let interval = TimeInterval {
@@ -1060,8 +895,7 @@ mod tests {
         };
 
         let mut all_outputs = Vec::new();
-        // `x` runs ahead to 3s while `y` is still at 0s, which is what drags
-        // `current_time` past the horizon of the window opening at 0s.
+        // `x` runs ahead to 3s while `y` is still at 0s.
         for step in [
             step!("x", 1.0, Duration::from_secs(0)),
             step!("y", 0.0, Duration::from_secs(0)),
@@ -1072,14 +906,13 @@ mod tests {
         }
 
         // `y` has only reached 1s, short of the window end at 2s, so 0s is undecided.
-        // Answering it here means answering it on `unknown()`, i.e. on `false`.
         assert_eq!(
             at_zero(&all_outputs),
             None,
             "0s was finalized while psi only reached 1s; got {all_outputs:?}"
         );
 
-        // `y` now covers the window end, so the window closes -- on real data this time.
+        // `y` now covers the window end, so the window closes.
         all_outputs.extend(until.update(&step!("y", 10.0, Duration::from_secs(5))));
         assert_eq!(
             at_zero(&all_outputs),

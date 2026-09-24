@@ -14,20 +14,16 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
-/// The timestamp up to which both operands have reported, if they both have.
-///
-/// `None` for an operand that has produced nothing yet is what separates it from one that
-/// has reported at time zero: the first cannot answer anywhere, the second answers there.
+/// The timestamp up to which both operands have reported, or `None` if either has not.
 fn joint_frontier(left: Option<Duration>, right: Option<Duration>) -> Option<Duration> {
     Some(left?.min(right?))
 }
 
 /// Caps a frontier by what the operand reports as gap-free; see
-/// [`StlOperatorTrait::known_through`]. A `None` bound means no holes, so no cap.
+/// [`StlOperatorTrait::known_through`].
 ///
-/// Apply this after taking the max with the newest emitted timestamp: unlike that
-/// timestamp this bound does not only rise, and must be able to pull the frontier back
-/// when a hole opens.
+/// This bound can decrease, so apply it after taking the max with the newest emitted
+/// timestamp.
 fn clamp_to_known(frontier: Option<Duration>, known: Option<Duration>) -> Option<Duration> {
     match known {
         Some(bound) => Some(frontier?.min(bound)),
@@ -42,17 +38,15 @@ fn within(joint: Option<Duration>, ts: Duration) -> bool {
 
 /// Settles the emission watermark for eager mode after a batch of output.
 ///
-/// Advances it to the newest output at or below the joint frontier, and records the
-/// timestamps short-circuited past that frontier separately. Those answers are final, but
-/// must not move the watermark: the lagging operand can still deliver a breakpoint earlier
-/// in time, and the watermark is what would drop it.
+/// Advances it to the newest output at or below the joint frontier. Timestamps
+/// short-circuited past that frontier are recorded separately, since the lagging operand
+/// can still deliver an earlier breakpoint.
 fn settle_eager_watermark<Y>(
     output: &[Step<Y>],
     joint: Option<Duration>,
     last_eval_time: &mut Option<Duration>,
     answered_beyond_joint: &mut VecDeque<Duration>,
 ) {
-    // Only timestamps both operands could answer finalize in the ordinary sense.
     if let Some(eval_time) = output
         .iter()
         .map(|step| step.timestamp)
@@ -68,34 +62,25 @@ fn settle_eager_watermark<Y>(
             .filter(|ts| !within(joint, *ts)),
     );
 
-    // Once the watermark reaches a remembered timestamp it suppresses re-emission on its
-    // own, so the queue only ever holds the genuinely-ahead ones and stays bounded by the
-    // frontier gap rather than by the length of the trace.
+    // Timestamps the watermark has caught up with no longer need tracking.
     if let Some(last) = *last_eval_time {
         answered_beyond_joint.retain(|ts| *ts > last);
     }
 }
 
-/// One side of a binary operator: the cache of what that operand has emitted, plus what is
-/// needed to read a value back out of it correctly.
+/// One side of a binary operator: the cache of what that operand has emitted.
 struct Operand<'a, C> {
     cache: &'a C,
-    /// Newest timestamp the operand has produced a value for. Its output is known up to
-    /// here and no further.
+    /// Newest timestamp the operand has produced a value for.
     frontier: Option<Duration>,
-    /// The operand's [`StlOperatorTrait::get_max_lookahead`], which for a temporal operator
-    /// is exactly the distance from its window end back to the evaluation timestamp.
+    /// The operand's [`StlOperatorTrait::get_max_lookahead`].
     lookahead: Duration,
 }
 
-/// Reads what an operand is worth at `ts`, through the cache of its emissions.
+/// Reads the operand's value at `ts` from its cache under zero-order hold.
 ///
-/// An operand's output is piecewise constant with breakpoints exactly where it emits, so a
-/// zero-order-hold read of the cache is exact -- but only up to `frontier - lookahead`.
-/// Past that mark the operand's own window is still open at `ts`, so the value it emitted
-/// below `ts` is refinable, and holding it forward would pass on a finality the operand
-/// never claimed. `ts` is then simply outside what this operand is known over, which is the
-/// `[f_inf, f_sup]` case of the RoSI atomic rule: [`RobustnessSemantics::unknown`].
+/// `None` past the operand's frontier. Under RoSI, a `ts` within `lookahead` of the
+/// frontier may still be refined and reads as [`RobustnessSemantics::unknown`].
 ///
 /// `newest` is the operand's newest entry at or before `ts`, tracked by the caller's walk.
 fn read_operand<C, Y, const IS_ROSI: bool>(
@@ -124,19 +109,11 @@ where
 
 /// A unified binary processor that handles Delayed, Eager, and Refinable (RoSI) semantics correctly.
 ///
-/// Both operands are piecewise constant between the steps they emit, so the combination is
-/// piecewise constant too and its breakpoints are the union of theirs. Each operand is
-/// therefore read at the breakpoints of the *other* under zero-order hold. That is what lets
-/// two operands with unrelated breakpoint sets be combined at all: a temporal operand
-/// answers at its own window boundaries, which are generally not timestamps the other one
-/// ever reports, so matching the streams on equal timestamps would leave both sides unread.
+/// The output is evaluated at the union of both operands' breakpoints, reading each
+/// operand under zero-order hold.
 ///
-/// A timestamp is answered once both operands are known there, i.e. up to the older of the
-/// two frontiers. Eager mode may decide a timestamp from one operand alone, but only while
-/// the other has reported nothing at all: once both are running, answers are emitted in
-/// timestamp order like in every other mode. Short-circuiting a later timestamp ahead of an
-/// earlier one that is merely still pending would push the watermark past that earlier
-/// timestamp and strand its answer.
+/// A timestamp is answered once both operands are known there. Eager mode may also
+/// short-circuit on one operand alone past the joint frontier, in timestamp order.
 fn process_binary<C, Y, F, const IS_EAGER: bool, const IS_ROSI: bool>(
     left: &Operand<'_, C>,
     right: &Operand<'_, C>,
@@ -151,8 +128,7 @@ where
 {
     let mut output_robustness = Vec::new();
     let joint = joint_frontier(left.frontier, right.frontier);
-    // `None` orders below every `Some`, so the maximum is the operand that has reported the
-    // furthest, and is `None` only while neither has reported at all.
+    // Eager can run ahead to the furthest operand; other modes stop at the joint frontier.
     let horizon = if IS_EAGER && !IS_ROSI {
         left.frontier.max(right.frontier)
     } else {
@@ -162,9 +138,7 @@ where
         return output_robustness;
     };
 
-    // Breakpoints at or before `start_after` have been answered already, and outside RoSI
-    // an operand never revises them, so the walk can start past them and cost only what is
-    // new. RoSI passes `None`: a refinement rewrites timestamps that were already emitted.
+    // Skip breakpoints already answered. RoSI passes `None`, since it refines past outputs.
     let l_skip = start_after.map_or(0, |ts| {
         left.cache.partition_point(|entry| entry.timestamp <= ts)
     });
@@ -204,14 +178,9 @@ where
             (Some(l), Some(r)) => {
                 output_robustness.push(Step::new("output", combine_op(l, r), ts));
             }
-            // Both operands have reported at `ts`, but one cache no longer holds the value
-            // in force there: it was pruned, which happens only once `ts` was answered.
+            // One side was pruned, so `ts` was already answered.
             (Some(_), None) | (None, Some(_)) if joint.is_some_and(|frontier| ts <= frontier) => {}
-            // Past the joint frontier, so this is eager mode running ahead on one operand.
-            // A conjunction is already false, and a disjunction already true, if that
-            // operand is; the one still missing cannot change it. Otherwise the answer has
-            // to wait -- and so does every later one, which would otherwise be reported
-            // ahead of it.
+            // Eager past the joint frontier: short-circuit if possible, otherwise wait.
             (Some(value), None) | (None, Some(value)) => {
                 if short_circuit_val != Some(value) {
                     break;
@@ -235,12 +204,10 @@ pub struct And<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_cache: C,
     right_cache: C,
     last_eval_time: Option<Duration>,
-    /// Timestamps eager answered ahead of the joint frontier. Held apart from
-    /// `last_eval_time` so a short-circuit cannot strand a later-arriving earlier
-    /// breakpoint; see [`settle_eager_watermark`].
+    /// Timestamps eager answered ahead of the joint frontier; see
+    /// [`settle_eager_watermark`].
     answered_beyond_joint: VecDeque<Duration>,
-    /// Newest timestamp each operand has produced a value for. Its signal is known up to
-    /// here and no further, which is what decides how far the combination can be answered.
+    /// Newest timestamp each operand has produced a value for.
     left_frontier: Option<Duration>,
     right_frontier: Option<Duration>,
     left_signals_set: HashSet<&'static str>,
@@ -293,9 +260,7 @@ where
         self.max_lookahead
     }
 
-    /// Eager short-circuiting past the joint frontier is what puts holes in this stream, so
-    /// the joint frontier is exactly how far it is gap-free. Every other mode answers a
-    /// timestamp only once both operands are known there, and has no holes to declare.
+    /// Eager output is gap-free up to the joint frontier. Other modes have no gaps.
     fn known_through(&self) -> Option<Duration> {
         if !IS_EAGER || IS_ROSI {
             return None;
@@ -406,9 +371,7 @@ where
             output.retain(|step| step.timestamp > last_time);
         }
 
-        // A timestamp short-circuited beyond the joint frontier is re-walked on every later
-        // update, because the watermark deliberately stops short of it. Drop the repeats:
-        // the value is final and was already reported.
+        // Drop repeats of timestamps already short-circuited beyond the joint frontier.
         if IS_EAGER && !IS_ROSI && !self.answered_beyond_joint.is_empty() {
             output.retain(|step| !self.answered_beyond_joint.contains(&step.timestamp));
         }
@@ -473,12 +436,10 @@ pub struct Or<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_cache: C,
     right_cache: C,
     last_eval_time: Option<Duration>,
-    /// Timestamps eager answered ahead of the joint frontier. Held apart from
-    /// `last_eval_time` so a short-circuit cannot strand a later-arriving earlier
-    /// breakpoint; see [`settle_eager_watermark`].
+    /// Timestamps eager answered ahead of the joint frontier; see
+    /// [`settle_eager_watermark`].
     answered_beyond_joint: VecDeque<Duration>,
-    /// Newest timestamp each operand has produced a value for. Its signal is known up to
-    /// here and no further, which is what decides how far the combination can be answered.
+    /// Newest timestamp each operand has produced a value for.
     left_frontier: Option<Duration>,
     right_frontier: Option<Duration>,
     left_signals_set: HashSet<&'static str>,
@@ -531,9 +492,7 @@ where
         self.max_lookahead
     }
 
-    /// Eager short-circuiting past the joint frontier is what puts holes in this stream, so
-    /// the joint frontier is exactly how far it is gap-free. Every other mode answers a
-    /// timestamp only once both operands are known there, and has no holes to declare.
+    /// Eager output is gap-free up to the joint frontier. Other modes have no gaps.
     fn known_through(&self) -> Option<Duration> {
         if !IS_EAGER || IS_ROSI {
             return None;
@@ -644,9 +603,7 @@ where
             output.retain(|step| step.timestamp > last_time);
         }
 
-        // A timestamp short-circuited beyond the joint frontier is re-walked on every later
-        // update, because the watermark deliberately stops short of it. Drop the repeats:
-        // the value is final and was already reported.
+        // Drop repeats of timestamps already short-circuited beyond the joint frontier.
         if IS_EAGER && !IS_ROSI && !self.answered_beyond_joint.is_empty() {
             output.retain(|step| !self.answered_beyond_joint.contains(&step.timestamp));
         }

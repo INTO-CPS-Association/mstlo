@@ -13,10 +13,8 @@ use std::time::Duration;
 
 /// The comparison an [`Atomic`] performs.
 ///
-/// Every variant compares one signal against a *constant* -- there is no signal-vs-signal
-/// form. That is what makes [`SignalInterpolation::Linear`] exact at this layer: the
-/// satisfaction signal of such a predicate is piecewise constant even when the input is
-/// read as piecewise linear.
+/// Every variant compares one signal against a constant, so its satisfaction signal stays
+/// piecewise constant under [`SignalInterpolation::Linear`].
 #[derive(Clone)]
 pub enum Predicate {
     /// Signal less than constant: signal < value
@@ -47,12 +45,7 @@ impl Predicate {
 
     /// The threshold in force right now, or `None` for the constants.
     ///
-    /// For the `…Var` forms this reads the variables context, so it is the threshold as of
-    /// *this* call. A variable retuned between two samples therefore takes effect at the
-    /// newer sample, and a crossing computed across that segment uses the newer threshold
-    /// for both endpoints. The alternative -- pinning the threshold each sample arrived
-    /// under -- would make the predicate's own history disagree with its current
-    /// definition, which is harder to reason about, not easier.
+    /// For the `…Var` forms this is read from the variables context on every call.
     fn threshold(&self) -> Option<f64> {
         match self {
             Predicate::LessThan(_, c) | Predicate::GreaterThan(_, c) => Some(*c),
@@ -65,12 +58,7 @@ impl Predicate {
         }
     }
 
-    /// Whether the predicate holds at `value`, as a plain truth value.
-    ///
-    /// Crossings are detected by comparing *truth values* across a segment rather than the
-    /// sign of `value - c`. A tangential touch -- the signal reaching the threshold and
-    /// retreating without passing it -- then needs no special case: both endpoints have the
-    /// same truth value, so no crossing is reported.
+    /// Whether the predicate holds at `value`. Used to detect crossings between samples.
     fn holds(&self, value: f64) -> bool {
         match self {
             Predicate::True => true,
@@ -90,25 +78,17 @@ impl Predicate {
 /// Supports both constant thresholds (e.g., `x > 5.0`) and variable thresholds
 /// (e.g., `x > $A` where `A` is looked up from a `Variables` context at runtime).
 ///
-/// Under [`SignalInterpolation::Linear`] this is also where the input's between-sample
-/// behaviour is resolved, by emitting a breakpoint at each exact threshold crossing.
+/// Under [`SignalInterpolation::Linear`] it also emits a breakpoint at each threshold
+/// crossing between samples.
 #[derive(Clone)]
 pub struct Atomic<Y> {
     predicate: Predicate,
     interpolation: SignalInterpolation,
     /// The previous sample of the referenced signal, under `Linear` only.
-    ///
-    /// One slot suffices: an atomic reads exactly one signal.
     prev: Option<(Duration, f64)>,
-    /// Set when `prev` sits exactly on the threshold and its verdict was withheld.
-    ///
-    /// A value emitted at `t` denotes the truth on `[t, next breakpoint)`, not the
-    /// pointwise truth at `t`. The two differ only at a sample sitting exactly on the
-    /// threshold, where the pointwise answer is decided by the strictness of the
-    /// comparison but the half-open answer is decided by the direction the signal then
-    /// takes -- which the next sample reveals. So that one verdict is held back for one
-    /// sample rather than emitted and later contradicted, which nothing downstream of a
-    /// non-RoSI operator could absorb.
+    /// Set when `prev` sits exactly on the threshold. Its verdict holds on
+    /// `[prev, next breakpoint)`, so it is withheld until the next sample shows which way
+    /// the signal goes.
     deferred: bool,
     _phantom: std::marker::PhantomData<Y>,
 }
@@ -125,8 +105,6 @@ impl<Y> Atomic<Y> {
     }
 
     /// Selects how the input signal is read between samples.
-    ///
-    /// Chainable so the existing `new_*` constructors keep their signatures.
     pub fn with_interpolation(mut self, interpolation: SignalInterpolation) -> Self {
         self.interpolation = interpolation;
         self
@@ -177,9 +155,8 @@ impl<Y> Atomic<Y> {
 
 /// The instant a straight segment from `(t0, v0)` to `(t1, v1)` meets the threshold `c`.
 ///
-/// Returns `None` when the crossing cannot be placed strictly inside the segment, which at
-/// nanosecond resolution means the segment is too short to hold a distinct breakpoint. The
-/// verdict already emitted at `t0` then covers it, off by less than one tick.
+/// Returns `None` when the crossing does not fall strictly inside the segment at
+/// nanosecond resolution.
 fn crossing_time(t0: Duration, v0: f64, t1: Duration, v1: f64, c: f64) -> Option<Duration> {
     let span = t1.checked_sub(t0)?;
     let alpha = (c - v0) / (v1 - v0);
@@ -233,9 +210,7 @@ where
         let mut output = Vec::new();
         if let Some((prev_ts, prev_value)) = self.prev {
             if self.deferred {
-                // `prev` sat exactly on the threshold, so its verdict is whichever way the
-                // signal has now gone: the truth on `[prev_ts, step.timestamp)`. The
-                // crossing is `prev_ts` itself, so there is no second breakpoint to place.
+                // `prev` sat on the threshold: emit its verdict now that the direction is known.
                 output.push(Step::new("output", result.clone(), prev_ts));
             } else if self.predicate.holds(prev_value) != self.predicate.holds(value)
                 && let Some(t_c) =

@@ -14,24 +14,10 @@
 //!
 //! ## NOTE: This backend is pointwise, not dense-time
 //!
-//! Unlike the incremental engine, this evaluator does **not** read signals as
-//! piecewise-constant functions of continuous time. It only ever looks at timestamps
-//! where a sample physically exists:
-//!
-//! - [`StlOperator::eval_greater_than`] and [`StlOperator::eval_less_than`] require an *exact* sample
-//!   at the evaluation timestamp and return `None` otherwise — they never read a
-//!   zero-order-held value.
-//! - The `G`, `F` and `U` folds range over the samples that happen to fall inside the
-//!   window, not over the window's whole extent.
-//!
-//! So a sample's value is invisible over the stretch of time it holds across a gap. On a
-//! trace with gaps, this backend therefore answers a *different question* than
-//! `Algorithm::Incremental` does, and the two legitimately disagree. They coincide only
-//! when every timestamp the windows can reach carries its own sample, i.e. on a gapless
-//! uniform grid.
-//!
-//! **Do not use this backend as a correctness oracle on gapped or asynchronous traces.**
-//! See `tests/semantics_agreement_test.rs` for a sweep that respects this.
+//! It evaluates only at timestamps where a sample exists and never reads a
+//! zero-order-held value; the `G`, `F` and `U` folds range over the samples inside the
+//! window. It therefore agrees with `Algorithm::Incremental` only on a gapless uniform
+//! grid.
 
 use crate::core::{RobustnessSemantics, SignalIdentifier, StlOperatorTrait, TimeInterval};
 use crate::ring_buffer::RingBufferTrait;
@@ -461,13 +447,7 @@ impl StlOperator {
 
                 let robustness_phi_g = signal
                     .iter()
-                    // `inf over [t_eval, t']`. Two endpoints worth stating:
-                    // - it starts at `t_eval`, not at `t_eval + a`: phi is obliged from the
-                    //   evaluation point onwards, including the run-up to the window.
-                    // - it is closed at `t'`: STL requires phi to hold at the very
-                    //   time-point where psi holds.
-                    // Both match `operators/until_operator.rs`; see the note on the same
-                    // fold there.
+                    // `inf over [t_eval, t']`, closed at t' as in `until_operator.rs`.
                     .filter(|s| s.timestamp >= t_eval && s.timestamp <= t_prime)
                     .map(|s| phi.robustness_naive(signal, s.timestamp))
                     .try_fold(Y::globally_identity(), |acc, item| {

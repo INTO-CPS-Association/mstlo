@@ -31,18 +31,12 @@ pub struct Step<T> {
     /// Timestamp of the next sample of the same signal, or [`Duration::MAX`] while no
     /// later sample has been seen.
     ///
-    /// Crate-internal bookkeeping a buffer maintains for the steps it stores:
-    /// a step on its own holds its value indefinitely, and a step handed back
-    /// to a caller carries no claim about when its value stopped being in force. It
-    /// records the next sample *admitted*, which is not always the next one still stored
-    /// -- a monotone (Lemire) cache evicts dominated entries, and this is what lets a
-    /// reader tell "this entry is still the value in force" from "a later sample replaced
-    /// it and was then evicted". See [`RingBufferTrait::zoh_at`].
+    /// Maintained by the buffer holding the step. It survives eviction of that next
+    /// sample, so [`RingBufferTrait::zoh_at`] can tell whether this value is still in force.
     pub(crate) held_until: Duration,
 }
 
-/// Prints the sample only. `held_until` is bookkeeping the holding buffer maintains, not
-/// something the step itself reports.
+/// Prints the sample only, without `held_until`.
 impl<T: std::fmt::Debug> std::fmt::Debug for Step<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Step")
@@ -53,8 +47,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Step<T> {
     }
 }
 
-/// Two steps are equal when they are the same sample, regardless of what any buffer has
-/// since learned about how long the value stayed in force.
+/// Compares the sample only, ignoring `held_until`.
 impl<T: PartialEq> PartialEq for Step<T> {
     fn eq(&self, other: &Self) -> bool {
         self.signal == other.signal
@@ -119,10 +112,8 @@ pub trait RingBufferTrait {
     fn add_step(&mut self, step: Step<Self::Value>);
     /// Inserts a step at its timestamp-ordered position.
     ///
-    /// [`Self::add_step`] is the fast path and assumes the step is newer than everything
-    /// stored. Use this when it may not be: an eager `And`/`Or` is required to emit a
-    /// breakpoint behind one it has already answered, rather than strand it, so a consumer
-    /// caching that stream cannot assume ascending arrival.
+    /// Use this instead of [`Self::add_step`] when steps may arrive out of order, as they
+    /// can from an eager `And`/`Or`.
     fn insert_step(&mut self, step: Step<Self::Value>);
     /// Replaces a step with matching timestamp.
     ///
@@ -152,19 +143,10 @@ pub trait RingBufferTrait {
     /// buffer still knows it.
     ///
     /// That is the newest step at or before `ts` whose hold interval has not ended by
-    /// `ts`. `None` means the buffer cannot answer: either `ts` precedes every step it
-    /// holds, or the sample in force at `ts` was evicted.
+    /// `ts`. `None` if `ts` precedes every step or the step in force was evicted.
     ///
-    /// This answers from the steps the buffer holds, which says nothing about how far the
-    /// signal is *known*: the newest step has no successor yet, so it reads as holding
-    /// indefinitely. Callers that can look past the end of the signal must bound `ts` by
-    /// their own frontier first -- a value is in force only until the next sample, and a
-    /// sample that has not arrived could carry anything.
-    ///
-    /// A monotone cache may evict it. That is not a loss for a window opening at `ts`:
-    /// eviction is guarded so that the evicting step -- which dominates the evicted one --
-    /// falls inside every window still to be answered, and so carries its contribution
-    /// already.
+    /// The newest step holds indefinitely, so callers must bound `ts` by their own
+    /// frontier.
     fn zoh_at(&self, ts: Duration) -> Option<&Step<Self::Value>> {
         let index = self.partition_point(|step| step.timestamp <= ts);
         let step = self.iter().take(index).last()?;
@@ -206,11 +188,7 @@ where
         }
     }
 
-    /// Appends a new step, closing the previous one's hold interval.
-    ///
-    /// Only a step that is still open is closed: once a sample's successor has been
-    /// recorded, a later append cannot change when the value stopped being in force,
-    /// even if everything in between has since been evicted.
+    /// Appends a new step, closing the previous one's hold interval if still open.
     pub fn add_step(&mut self, step: Step<T>) {
         if let Some(back) = self.steps.back_mut()
             && back.held_until == Duration::MAX
@@ -227,10 +205,6 @@ where
 
     /// Inserts a step at its timestamp-ordered position, repairing the hold intervals
     /// around it.
-    ///
-    /// The step lands between two samples whose values were until now held straight
-    /// across it, so the predecessor stops being in force here and this step holds until
-    /// the successor. Appending is the common case and stays on [`Self::add_step`].
     pub fn insert_step(&mut self, step: Step<T>) {
         if self
             .steps
@@ -247,9 +221,7 @@ where
         }
         let held_until = self.steps[index].timestamp;
         if index > 0 {
-            // the predecessor may already have been closed by a
-            // step that has since been evicted, and this one landing after that point does
-            // not put it back in force. Same rule as [`Self::add_step`].
+            // Keep an earlier close from a since-evicted step.
             let previous = &mut self.steps[index - 1];
             previous.held_until = previous.held_until.min(step.timestamp);
         }
@@ -277,8 +249,7 @@ where
         self.steps
             .binary_search_by(|s| s.timestamp.cmp(&step.timestamp))
             .map(|index| {
-                // A refinement replaces the value, not the hold interval: when the value
-                // stopped being in force is a property of the sample times.
+                // Replace the value but keep the hold interval.
                 let held_until = self.steps[index].held_until;
                 self.steps[index] = Step { held_until, ..step };
             })
@@ -431,8 +402,7 @@ where
     fn drain(&mut self, range: std::ops::Range<usize>) {
         self.drain(range)
     }
-    /// Indexed form of the trait's default, which has to walk the buffer to reach the
-    /// entry it finds.
+    /// Indexed form of the trait's default.
     fn zoh_at(&self, ts: Duration) -> Option<&Step<T>> {
         let index = self.steps.partition_point(|step| step.timestamp <= ts);
         let step = self.steps.get(index.checked_sub(1)?)?;
@@ -465,9 +435,7 @@ impl<T> Drop for RingBuffer<T> {
 /// * `lookahead` - The normal lookahead duration for pruning
 /// * `protected_ts` - Timestamp to protect; entries at or after this will not be pruned
 ///
-/// The entry immediately *before* `protected_ts` is preserved too. Under zero-order hold
-/// it is the value in force at `protected_ts`, so dropping it would lose the signal over
-/// the start of the oldest window still pending. See [`RingBufferTrait::zoh_at`].
+/// The entry in force at `protected_ts` under zero-order hold is preserved too.
 pub fn guarded_prune<C>(cache: &mut C, lookahead: Duration, protected_ts: Duration)
 where
     C: RingBufferTrait,
