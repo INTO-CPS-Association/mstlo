@@ -6,8 +6,14 @@
 //! For a predicate `p` and consecutive samples `(t₀, v₀)`, `(t₁, v₁)`:
 //!
 //! * If `p(v₀) == p(v₁)` the segment holds no crossing: emit only at `t₁`.
-//! * Otherwise emit `p(v₁)` at `t_c = t₀ + (c − v₀)/(v₁ − v₀) · (t₁ − t₀)`, then again
-//!   at `t₁`.
+//! * Otherwise the signal meets `c` at `t_c = t₀ + (c − v₀)/(v₁ − v₀) · (t₁ − t₀)`. `p` is
+//!   strict, so it fails at `t_c` itself: emit `p(v₁)` at `t_c` if that is `false`, and at
+//!   `t_c + 1ns` if it is `true`. Then emit again at `t₁`.
+//! * A sample exactly on `c` is emitted as `false` at once. If the next segment holds, it is
+//!   emitted as `true` at `t₀ + 1ns` when the next sample arrives.
+//!
+//! So a verdict stream read as a step signal gives the value at every instant, including
+//! the single instants where `==`, `>=` and `<=` hold only on the threshold.
 //!
 use mstlo::monitor::{
     Algorithm, DelayedQualitative, DelayedQuantitative, EagerQualitative, Rosi, StlMonitor,
@@ -71,26 +77,71 @@ fn expect(pairs: &[(u64, bool)]) -> BTreeMap<Duration, bool> {
     pairs.iter().map(|&(t, v)| (secs(t), v)).collect()
 }
 
+/// `t` seconds plus one nanosecond: where a segment that holds starts after the threshold.
+fn after(t: u64) -> Duration {
+    secs(t) + Duration::from_nanos(1)
+}
+
 // ── A. Atomic exactness ───────────────────────────────────────────────────────
 
 /// A crossing at `t_c = t₀ + (c − v₀)/(v₁ − v₀) · (t₁ − t₀)` is emitted exactly, and a segment
 /// that does not change the predicate's truth emits no extra breakpoint.
 #[rstest]
-#[case::falling_crossing(stl! {x > 4}, &[(0, 6.0), (4, 2.0)], &[(0, true), (2, false), (4, false)])]
-#[case::rising_crossing(stl! {x > 4}, &[(0, 2.0), (4, 6.0)], &[(0, false), (2, true), (4, true)])]
-#[case::no_crossing(stl! {x > 4}, &[(0, 5.0), (4, 6.0)], &[(0, true), (4, true)])]
-// `x = 4` is not `> 4`, but the rising segment makes `[0s, 4s)` true: the verdict at 0s is
-// refined rather than duplicated.
-#[case::crossing_at_left_sample(stl! {x > 4}, &[(0, 4.0), (4, 8.0)], &[(0, true), (4, true)])]
+// `x = 4` at 2s is not `> 4`, so the predicate becomes false exactly at the crossing...
+#[case::falling_crossing(stl! {x > 4}, &[(0, 6.0), (4, 2.0)], &[(secs(0), true), (secs(2), false), (secs(4), false)])]
+// ...but only becomes true just after it.
+#[case::rising_crossing(stl! {x > 4}, &[(0, 2.0), (4, 6.0)], &[(secs(0), false), (after(2), true), (secs(4), true)])]
+#[case::no_crossing(stl! {x > 4}, &[(0, 5.0), (4, 6.0)], &[(secs(0), true), (secs(4), true)])]
+#[case::crossing_at_left_sample(stl! {x > 4}, &[(0, 4.0), (4, 8.0)], &[(secs(0), false), (after(0), true), (secs(4), true)])]
 // Touching the threshold without exceeding it is no crossing.
-#[case::tangential_touch(stl! {x > 4}, &[(0, 2.0), (2, 4.0), (4, 2.0)], &[(0, false), (2, false), (4, false)])]
-#[case::less_than(stl! {x < 4}, &[(0, 6.0), (4, 2.0)], &[(0, false), (2, true), (4, true)])]
+#[case::tangential_touch(stl! {x > 4}, &[(0, 2.0), (2, 4.0), (4, 2.0)], &[(secs(0), false), (secs(2), false), (secs(4), false)])]
+// Touching it from above makes the predicate fail for that instant only.
+#[case::touch_from_above(stl! {x > 4}, &[(0, 6.0), (2, 4.0), (4, 6.0)], &[(secs(0), true), (secs(2), false), (after(2), true), (secs(4), true)])]
+#[case::less_than(stl! {x < 4}, &[(0, 6.0), (4, 2.0)], &[(secs(0), false), (after(2), true), (secs(4), true)])]
+// The verdict of a sample on the threshold is not held back for the next sample.
+#[case::last_sample_on_threshold(stl! {x > 4}, &[(0, 6.0), (2, 4.0)], &[(secs(0), true), (secs(2), false)])]
 fn atomic_crossings(
     #[case] formula: FormulaDefinition,
     #[case] points: &[(u64, f64)],
-    #[case] expected: &[(u64, bool)],
+    #[case] expected: &[(Duration, bool)],
 ) {
-    assert_eq!(linear(formula, &x_trace(points)), expect(expected));
+    assert_eq!(
+        linear(formula, &x_trace(points)),
+        expected.iter().copied().collect()
+    );
+}
+
+/// `==` holds only on the threshold, so under `Linear` its verdict is often a single instant.
+#[rstest]
+#[case::touch(stl! {x == 5}, &[(0, 4.0), (1, 5.0), (2, 4.0)], &[(secs(0), false), (secs(1), true), (after(1), false), (secs(2), false)])]
+#[case::crossing(stl! {x == 5}, &[(0, 4.0), (2, 6.0)], &[(secs(0), false), (secs(1), true), (after(1), false), (secs(2), false)])]
+#[case::leaves_threshold(stl! {x == 5}, &[(0, 5.0), (1, 7.0)], &[(secs(0), true), (after(0), false), (secs(1), false)])]
+#[case::stays_on_threshold(stl! {x == 5}, &[(0, 5.0), (1, 5.0), (2, 5.0)], &[(secs(0), true), (secs(1), true), (secs(2), true)])]
+#[case::greater_equal_touch(stl! {x >= 5}, &[(0, 4.0), (1, 5.0), (2, 4.0)], &[(secs(0), false), (secs(1), true), (after(1), false), (secs(2), false)])]
+#[case::less_equal_touch(stl! {x <= 5}, &[(0, 6.0), (1, 5.0), (2, 6.0)], &[(secs(0), false), (secs(1), true), (after(1), false), (secs(2), false)])]
+fn equality_holds_at_single_instants(
+    #[case] formula: FormulaDefinition,
+    #[case] points: &[(u64, f64)],
+    #[case] expected: &[(Duration, bool)],
+) {
+    assert_eq!(
+        linear(formula, &x_trace(points)),
+        expected.iter().copied().collect()
+    );
+}
+
+/// A temporal operator sees the single instant: the line passes 5 at 1s, between samples.
+#[test]
+fn eventually_finds_an_equality_between_samples() {
+    let trace = x_trace(&[(0, 4.0), (2, 6.0), (4, 6.0), (6, 6.0)]);
+    let formula = stl! {F[0,4] (x == 5)};
+
+    assert_eq!(linear(formula.clone(), &trace).get(&secs(0)), Some(&true));
+    assert_eq!(
+        zoh(formula, &trace).get(&secs(0)),
+        Some(&false),
+        "held zero-order, x jumps from 4 to 6 and is never 5"
+    );
 }
 
 /// Control: held zero-order, the falling trace has no crossing, so the cases above pass
