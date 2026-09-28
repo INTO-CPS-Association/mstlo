@@ -407,6 +407,8 @@ For $x=6$ at $0$ and $x=2$ at $4$, $x$ crosses $4$ at $t=2$:
 
 Under linear interpolation, `G[0,2](x > 4)` is violated at $0$ because $x=4$ at the end of the closed window $[0,2]$.
 
+Predicates are strict, so a predicate fails exactly on its threshold. A predicate that becomes false at a crossing does so at $t_c$ itself. One that becomes true, as `x > 4` does on a rising line, only holds from just after $t_c$, so its verdict is emitted at $t_c + 1\,\text{ns}$. The same holds for a sample exactly on the threshold: its own verdict is emitted at once, and a verdict that differs for the segment after it is emitted 1 ns later. This way `x == 5` (and `x >= 5`, `x <= 5`) are also satisfied at the single instant where the line meets 5: for $x=4$ at $0$ and $x=6$ at $2$, `x == 5` is `true` at $1$ and `false` from $1\,\text{s} + 1\,\text{ns}$.
+
 Note that linear interpolation is only supported for the qualitative semantics (delayed and eager) with the incremental algorithm. Quantitative semantics (i.e. robustness values) are piecewise linear between samples, which is not implemented, so `build()` returns an error for delayed quantitative and RoSI semantics.
 
 > The deprecated `synchronization_strategy(..)` maps `None` and `ZeroOrderHold` to `SignalInterpolation::ZeroOrderHold`, and `Linear` to `SignalInterpolation::Linear`.

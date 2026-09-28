@@ -58,6 +58,15 @@ fn test_parity_less_equal() {
     assert_parser_parity!("x <= 5", x <= 5);
 }
 
+#[test]
+fn test_parity_equal() {
+    // == is sugar for !(x < v) && !(x > v)
+    assert_parser_parity!("x == 5", x == 5);
+    assert_parser_parity!("x==-2.5", x == -2.5);
+    assert_parser_parity!("x == $target", x == $target);
+    assert_parser_parity!("G[0,2](x == 5)", G[0, 2](x == 5));
+}
+
 // =========================================================================
 // Boolean Constants
 // =========================================================================

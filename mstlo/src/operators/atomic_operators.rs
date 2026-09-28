@@ -86,10 +86,9 @@ pub struct Atomic<Y> {
     interpolation: SignalInterpolation,
     /// The previous sample of the referenced signal, under `Linear` only.
     prev: Option<(Duration, f64)>,
-    /// Set when `prev` sits exactly on the threshold. Its verdict holds on
-    /// `[prev, next breakpoint)`, so it is withheld until the next sample shows which way
-    /// the signal goes.
-    deferred: bool,
+    /// Set when `prev` sits exactly on the threshold, where the strict predicate fails. The
+    /// verdict just after it is unknown until the next sample shows which way the signal goes.
+    on_threshold: bool,
     _phantom: std::marker::PhantomData<Y>,
 }
 
@@ -99,7 +98,7 @@ impl<Y> Atomic<Y> {
             predicate,
             interpolation: SignalInterpolation::default(),
             prev: None,
-            deferred: false,
+            on_threshold: false,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -207,24 +206,37 @@ where
             return vec![Step::new("output", result, step.timestamp)];
         };
 
+        // The predicate is strict, so it fails on the threshold itself. A segment that holds
+        // therefore starts 1ns after the point where the signal leaves the threshold, unless
+        // that reaches the new sample, which carries the verdict anyway.
+        let holds_after = self.predicate.holds(value);
+        let just_after = |t: Duration| {
+            let t = t + Duration::from_nanos(1);
+            (t < step.timestamp).then_some(t)
+        };
+
         let mut output = Vec::new();
         if let Some((prev_ts, prev_value)) = self.prev {
-            if self.deferred {
-                // `prev` sat on the threshold: emit its verdict now that the direction is known.
-                output.push(Step::new("output", result.clone(), prev_ts));
-            } else if self.predicate.holds(prev_value) != self.predicate.holds(value)
-                && let Some(t_c) =
-                    crossing_time(prev_ts, prev_value, step.timestamp, value, threshold)
-            {
-                output.push(Step::new("output", result.clone(), t_c));
+            let segment_start = if self.on_threshold {
+                holds_after.then(|| just_after(prev_ts)).flatten()
+            } else if self.predicate.holds(prev_value) != holds_after {
+                let t_c = crossing_time(prev_ts, prev_value, step.timestamp, value, threshold);
+                if holds_after {
+                    t_c.and_then(just_after)
+                } else {
+                    t_c
+                }
+            } else {
+                None
+            };
+            if let Some(t) = segment_start {
+                output.push(Step::new("output", result.clone(), t));
             }
         }
 
         self.prev = Some((step.timestamp, value));
-        self.deferred = value == threshold;
-        if !self.deferred {
-            output.push(Step::new("output", result, step.timestamp));
-        }
+        self.on_threshold = value == threshold;
+        output.push(Step::new("output", result, step.timestamp));
         output
     }
 
@@ -234,7 +246,7 @@ where
 
     fn reset(&mut self) {
         self.prev = None;
-        self.deferred = false;
+        self.on_threshold = false;
     }
 
     fn total_size(&self) -> usize {
