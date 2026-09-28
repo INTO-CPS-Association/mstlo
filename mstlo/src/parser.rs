@@ -12,6 +12,7 @@
 //! - `signal < value` - Signal less than value
 //! - `signal >= value` - Signal greater than or equal to value
 //! - `signal <= value` - Signal less than or equal to value
+//! - `signal == value` - Signal equal to value
 //!
 //! ## Boolean Constants
 //! - `true` - Always true
@@ -446,7 +447,10 @@ impl<'a> Parser<'a> {
                     self.skip_whitespace();
 
                     // Parse comparison operator
-                    let op = if self.remaining().starts_with(">=") {
+                    let op = if self.remaining().starts_with("==") {
+                        self.pos += 2;
+                        "=="
+                    } else if self.remaining().starts_with(">=") {
                         self.pos += 2;
                         ">="
                     } else if self.remaining().starts_with("<=") {
@@ -497,6 +501,17 @@ impl<'a> Parser<'a> {
                                         FormulaDefinition::GreaterThan(signal_static, value),
                                     )))
                                 }
+                                "==" => {
+                                    // x == v is equivalent to !(x < v) && !(x > v)
+                                    Ok(FormulaDefinition::And(
+                                        Box::new(FormulaDefinition::Not(Box::new(
+                                            FormulaDefinition::LessThan(signal_static, value),
+                                        ))),
+                                        Box::new(FormulaDefinition::Not(Box::new(
+                                            FormulaDefinition::GreaterThan(signal_static, value),
+                                        ))),
+                                    ))
+                                }
                                 _ => unreachable!(),
                             };
                         }
@@ -522,6 +537,17 @@ impl<'a> Parser<'a> {
                             Ok(FormulaDefinition::Not(Box::new(
                                 FormulaDefinition::GreaterThanVar(signal_static, var_static),
                             )))
+                        }
+                        "==" => {
+                            // x == var is equivalent to !(x < var) && !(x > var)
+                            Ok(FormulaDefinition::And(
+                                Box::new(FormulaDefinition::Not(Box::new(
+                                    FormulaDefinition::LessThanVar(signal_static, var_static),
+                                ))),
+                                Box::new(FormulaDefinition::Not(Box::new(
+                                    FormulaDefinition::GreaterThanVar(signal_static, var_static),
+                                ))),
+                            ))
                         }
                         _ => unreachable!(),
                     }
