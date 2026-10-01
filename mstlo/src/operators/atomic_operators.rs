@@ -244,6 +244,10 @@ where
         Duration::ZERO
     }
 
+    fn frontier_lag(&self) -> Duration {
+        Duration::ZERO
+    }
+
     fn reset(&mut self) {
         self.prev = None;
         self.on_threshold = false;

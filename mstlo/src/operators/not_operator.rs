@@ -46,6 +46,10 @@ where
         self.max_lookahead
     }
 
+    fn frontier_lag(&self) -> Duration {
+        self.operand.frontier_lag()
+    }
+
     fn total_size(&self) -> usize {
         std::mem::size_of::<Self>() + self.operand.total_size()
     }

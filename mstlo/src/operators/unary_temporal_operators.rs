@@ -21,6 +21,9 @@ struct WindowParams<'a> {
     /// Newest timestamp for which the operand's value is final. Equal to `frontier`
     /// outside RoSI. A window closes once this reaches its end.
     settled: Duration,
+    /// How far the operand's bounded output trails `frontier`.
+    /// See [`StlOperatorTrait::frontier_lag`].
+    operand_lag: Duration,
     upper_bound: Option<Duration>,
     dominated_through: Option<Duration>,
 }
@@ -158,7 +161,13 @@ where
             n_finalized += 1;
         } else if IS_ROSI {
             // Window still open: emit a refinable verdict and keep the entry pending.
-            let intermediate_value = (op.combine)(windowed_value, Y::unknown());
+            // The window is only partly unknown if the operand has not bounded all of it yet.
+            // If it has, the aggregate is already a valid interval.
+            let intermediate_value = if window.frontier >= window_end + window.operand_lag {
+                windowed_value
+            } else {
+                (op.combine)(windowed_value, Y::unknown())
+            };
             output_robustness.push(Step::new("output", intermediate_value, t_eval));
         } else {
             break;
@@ -453,6 +462,10 @@ where
         self.max_lookahead
     }
 
+    fn frontier_lag(&self) -> Duration {
+        self.interval.start + self.operand.frontier_lag()
+    }
+
     fn total_size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.cache.heap_size()
@@ -490,6 +503,7 @@ where
     /// - RoSI (`IS_ROSI = true`): can emit intermediate refinable values using `unknown()`.
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let sub_robustness_vec = self.operand.update(step);
+        let operand_lag = self.operand.frontier_lag();
         let operand_known_through = self.operand.known_through();
         let mut output_robustness = Vec::new();
         // Track the newest final operand value; see [`WindowParams::settled`].
@@ -520,6 +534,7 @@ where
                     } else {
                         frontier
                     },
+                    operand_lag,
                     upper_bound: Some(split_key),
                     dominated_through: self.dominated_through,
                 },
@@ -554,6 +569,7 @@ where
                 } else {
                     cache_frontier(&self.cache, operand_known_through)
                 },
+                operand_lag,
                 upper_bound: None,
                 dominated_through: self.dominated_through,
             },
@@ -687,6 +703,10 @@ where
         self.max_lookahead
     }
 
+    fn frontier_lag(&self) -> Duration {
+        self.interval.start + self.operand.frontier_lag()
+    }
+
     fn total_size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.cache.heap_size()
@@ -724,6 +744,7 @@ where
     /// - RoSI (`IS_ROSI = true`): can emit intermediate refinable values using `unknown()`.
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let sub_robustness_vec = self.operand.update(step);
+        let operand_lag = self.operand.frontier_lag();
         let operand_known_through = self.operand.known_through();
         let mut output_robustness = Vec::new();
         // Track the newest final operand value; see [`WindowParams::settled`].
@@ -754,6 +775,7 @@ where
                     } else {
                         frontier
                     },
+                    operand_lag,
                     upper_bound: Some(split_key),
                     dominated_through: self.dominated_through,
                 },
@@ -788,6 +810,7 @@ where
                 } else {
                     cache_frontier(&self.cache, operand_known_through)
                 },
+                operand_lag,
                 upper_bound: None,
                 dominated_through: self.dominated_through,
             },

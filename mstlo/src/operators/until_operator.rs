@@ -151,6 +151,13 @@ where
         self.max_lookahead
     }
 
+    /// `phi` is needed from the start of the window, `psi` from `start` on.
+    fn frontier_lag(&self) -> Duration {
+        self.left
+            .frontier_lag()
+            .max(self.interval.start + self.right.frontier_lag())
+    }
+
     fn total_size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.left_cache.heap_size()

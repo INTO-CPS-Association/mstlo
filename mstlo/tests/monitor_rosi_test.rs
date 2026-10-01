@@ -277,3 +277,27 @@ fn rosi_reads_operands_that_are_still_refining(
 ) {
     check_rosi(vec![formula], &signal);
 }
+
+/// `G[0, 2]` is bounded above by its own sample from the moment that sample arrives, so
+/// `F[0, 10]` collapses once the trace reaches `t = 10`, without waiting for `G`'s window at
+/// 10 to close. Agrees with stlrom's online robustness.
+#[test]
+fn eventually_globally_tightens_before_the_inner_window_closes() {
+    let signal = [
+        step!("x", 7.0, Duration::from_secs(0)),
+        step!("x", 4.0, Duration::from_secs(1)),
+        step!("x", 4.0, Duration::from_secs(5)),
+        step!("x", 4.0, Duration::from_secs(10)),
+        step!("x", 4.0, Duration::from_secs(11)),
+    ];
+    let verdict = common::verdict_at(
+        &stl!(F[0, 10](G[0, 2](x > 50.0))),
+        &signal,
+        Rosi,
+        Duration::ZERO,
+    );
+    assert_eq!(
+        verdict,
+        Some((signal[3].clone(), RobustnessInterval(-46.0, -46.0)))
+    );
+}

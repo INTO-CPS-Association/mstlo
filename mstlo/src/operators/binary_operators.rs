@@ -260,6 +260,11 @@ where
         self.max_lookahead
     }
 
+    /// Bounded only where both operands are bounded.
+    fn frontier_lag(&self) -> Duration {
+        self.left.frontier_lag().max(self.right.frontier_lag())
+    }
+
     /// Eager output is gap-free up to the joint frontier. Other modes have no gaps.
     fn known_through(&self) -> Option<Duration> {
         if !IS_EAGER || IS_ROSI {
@@ -490,6 +495,11 @@ where
 
     fn get_max_lookahead(&self) -> Duration {
         self.max_lookahead
+    }
+
+    /// Bounded only where both operands are bounded.
+    fn frontier_lag(&self) -> Duration {
+        self.left.frontier_lag().max(self.right.frontier_lag())
     }
 
     /// Eager output is gap-free up to the joint frontier. Other modes have no gaps.

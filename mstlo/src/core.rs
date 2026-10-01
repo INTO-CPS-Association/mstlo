@@ -55,6 +55,16 @@ pub trait StlOperatorTrait<T: Clone>: DynClone + Display + SignalIdentifier {
     /// lookahead; for atomic operators this is zero.
     fn get_max_lookahead(&self) -> Duration;
 
+    /// How far the output's bounded part trails the newest timestamp seen.
+    ///
+    /// Under RoSI, an output at time `s` gets a bound once data for it starts to arrive.
+    /// For `F[a, b]` and `G[a, b]` that is at `s + a`. Until then it is unknown, so the
+    /// bounded part of the output ends `frontier_lag` before the newest timestamp.
+    /// The default is [`Self::get_max_lookahead`]: safe, but never tight.
+    fn frontier_lag(&self) -> Duration {
+        self.get_max_lookahead()
+    }
+
     /// Resets all internal caches and evaluation state to their initial (empty) values.
     ///
     /// Configuration (interval bounds, signal identifiers, max lookahead) is preserved.

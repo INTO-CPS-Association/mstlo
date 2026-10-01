@@ -124,8 +124,9 @@ fn nested_window_satisfied() {
     assert_verdict_at(eventually_globally(), &signal, secs(0.0), 4.0, &signal[2]);
 }
 
-/// Control: with a zero lower bound the inner window starts on a sample. Eager decides on
-/// `x @1s`, where every inner window from `s` in `[0, 1]` already contains `x = 1`.
+/// Control: with a zero lower bound the inner window starts on a sample. Eager and RoSI
+/// decide on `x @1s`, where every inner window from `s` in `[0, 1]` already contains
+/// `x = 1`.
 #[test]
 fn nested_window_with_zero_lower_bound() {
     let signal = [
@@ -133,7 +134,7 @@ fn nested_window_with_zero_lower_bound() {
         step!("x", 1.0, secs(1.0)),
         step!("x", 7.0, secs(2.0)),
     ];
-    assert_verdict_at_eager_on(
+    assert_verdict_at_early_on(
         stl!(F[0, 1](G[0, 1](x > 3.0))),
         &signal,
         secs(0.0),
