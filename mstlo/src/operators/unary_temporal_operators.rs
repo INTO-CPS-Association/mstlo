@@ -23,9 +23,6 @@ struct WindowParams<'a> {
     settled: Duration,
     /// How far the operand's bounds trail `frontier`. See [`StlOperatorTrait::reach`].
     operand_reach: Reach,
-    /// The lag of the bound the aggregate needs to be bounded: the upper one for `F`, the
-    /// lower one for `G`.
-    operand_lag: Duration,
     upper_bound: Option<Duration>,
     dominated_through: Option<Duration>,
 }
@@ -78,8 +75,8 @@ where
         })
         .flatten();
 
-    // Under RoSI a value past the settled mark is still being refined. It is held across the
-    // stretch only on the sides the operand has bounded that far; the other side is unknown.
+    // Under RoSI a value past the settled mark can still be split by a late breakpoint, so
+    // only the bounds the operand has already reached at `window_start` carry over.
     let unsettled_at_start = IS_ROSI && in_range && window_start > window.settled;
     let held_at_start = if unsettled_at_start {
         Some(held_entry.map_or_else(Y::unknown, |entry| {
@@ -167,14 +164,15 @@ where
             output_robustness.push(Step::new("output", windowed_value, t_eval));
             n_finalized += 1;
         } else if IS_ROSI {
-            // Window still open: emit a refinable verdict and keep the entry pending.
-            // The window is only partly unknown if the operand has not bounded all of it yet.
-            // If it has, the aggregate is already a valid interval.
-            let intermediate_value = if window.frontier >= window_end + window.operand_lag {
-                windowed_value
-            } else {
-                (op.combine)(windowed_value, Y::unknown())
-            };
+            // Window still open: emit a refinable verdict and keep the entry pending. The
+            // unseen rest of the window is read like a held value: it contributes only the
+            // bounds the operand has reached at `window_end`. Whichever side the aggregate
+            // depends on (upper for `F`, lower for `G`) widens until that bound is reached.
+            let unseen =
+                window
+                    .operand_reach
+                    .mask(windowed_value.clone(), window_end, window.frontier);
+            let intermediate_value = (op.combine)(windowed_value, unseen);
             output_robustness.push(Step::new("output", intermediate_value, t_eval));
         } else {
             break;
@@ -469,7 +467,8 @@ where
         self.max_lookahead
     }
 
-    /// The output is bounded below from the window start and above once the window closes.
+    /// One sample in the window already lower-bounds the supremum, but only the whole window
+    /// bounds it from above.
     fn reach(&self) -> Reach {
         self.operand
             .reach()
@@ -514,7 +513,6 @@ where
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let sub_robustness_vec = self.operand.update(step);
         let operand_reach = self.operand.reach();
-        let operand_lag = operand_reach.upper; // `F` needs the upper bound
         let operand_known_through = self.operand.known_through();
         let mut output_robustness = Vec::new();
         // Track the newest final operand value; see [`WindowParams::settled`].
@@ -546,7 +544,6 @@ where
                         frontier
                     },
                     operand_reach,
-                    operand_lag,
                     upper_bound: Some(split_key),
                     dominated_through: self.dominated_through,
                 },
@@ -582,7 +579,6 @@ where
                     cache_frontier(&self.cache, operand_known_through)
                 },
                 operand_reach,
-                operand_lag,
                 upper_bound: None,
                 dominated_through: self.dominated_through,
             },
@@ -716,7 +712,8 @@ where
         self.max_lookahead
     }
 
-    /// The output is bounded above from the window start and below once the window closes.
+    /// One sample in the window already upper-bounds the infimum, but only the whole window
+    /// bounds it from below.
     fn reach(&self) -> Reach {
         self.operand
             .reach()
@@ -761,7 +758,6 @@ where
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let sub_robustness_vec = self.operand.update(step);
         let operand_reach = self.operand.reach();
-        let operand_lag = operand_reach.lower; // `G` needs the lower bound
         let operand_known_through = self.operand.known_through();
         let mut output_robustness = Vec::new();
         // Track the newest final operand value; see [`WindowParams::settled`].
@@ -793,7 +789,6 @@ where
                         frontier
                     },
                     operand_reach,
-                    operand_lag,
                     upper_bound: Some(split_key),
                     dominated_through: self.dominated_through,
                 },
@@ -829,7 +824,6 @@ where
                     cache_frontier(&self.cache, operand_known_through)
                 },
                 operand_reach,
-                operand_lag,
                 upper_bound: None,
                 dominated_through: self.dominated_through,
             },

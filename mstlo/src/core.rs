@@ -55,10 +55,9 @@ pub trait StlOperatorTrait<T: Clone>: DynClone + Display + SignalIdentifier {
     /// lookahead; for atomic operators this is zero.
     fn get_max_lookahead(&self) -> Duration;
 
-    /// How far the output's bounds are trustworthy, relative to the newest timestamp seen.
+    /// How far each bound of the output trails the newest timestamp seen. See [`Reach`].
     ///
-    /// See [`Reach`]. The default is [`Reach::from_lookahead`] of
-    /// [`Self::get_max_lookahead`]: safe, but never tight.
+    /// The default assumes both bounds need the full lookahead: always sound, never tight.
     fn reach(&self) -> Reach {
         Reach::from_lookahead(self.get_max_lookahead())
     }
@@ -217,11 +216,13 @@ impl Max for RobustnessInterval {
 }
 
 /// How far the bounds of an operator's output trail the newest timestamp seen. Only RoSI
-/// reads it: its intervals have a lower and an upper bound that arrive at different times.
+/// reads it: the two bounds of an interval can settle at different times, and tracking
+/// them separately lets one bound tighten while the other is still open.
 ///
 /// An output at time `s` is bounded on a side once the newest timestamp reaches `s` plus that
-/// side's lag. `G[a, b]` has a lower lag of `b` (the whole window) and an upper lag of `a`;
-/// `F[a, b]` is the mirror image.
+/// side's lag. For instance, `G[a, b]` has a lower lag of `b`, since any later sample can still lower the
+/// infimum, but an upper lag of only `a`, since the first sample caps it. `F[a, b]` is the
+/// mirror image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Reach {
     /// Lag of the lower bound.
@@ -266,8 +267,8 @@ impl Reach {
         }
     }
 
-    /// Reads `value` at time `at` given the newest timestamp `frontier`. Bounds not yet
-    /// reached by `at` read as unbounded.
+    /// Reads a value carried forward to time `at`, given the newest timestamp `frontier`.
+    /// A side the operand has not reached at `at` could still move, so it reads as unbounded.
     pub fn mask<Y: RobustnessSemantics>(self, value: Y, at: Duration, frontier: Duration) -> Y {
         // `and` with unknown drops the lower bound, `or` drops the upper one.
         match (at + self.lower <= frontier, at + self.upper <= frontier) {
@@ -401,7 +402,8 @@ impl RobustnessSemantics for bool {
         value < c
     }
     fn unknown() -> Self {
-        // In the boolean case, we can represent "unknown" as false
+        // In the boolean case, we can represent "unknown" as false,
+        // although a 3-value logic would probably be better
         false
     }
     fn prune_dominated(old: Self, new: Self, is_max: bool) -> bool {

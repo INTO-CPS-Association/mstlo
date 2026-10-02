@@ -280,7 +280,7 @@ fn rosi_reads_operands_that_are_still_refining(
 
 /// `G[0, 2]` is bounded above by its own sample from the moment that sample arrives, so
 /// `F[0, 10]` collapses once the trace reaches `t = 10`, without waiting for `G`'s window at
-/// 10 to close. Agrees with stlrom's online robustness.
+/// 10 to close.
 #[test]
 fn eventually_globally_tightens_before_the_inner_window_closes() {
     let signal = [
@@ -325,7 +325,6 @@ fn rosi_at_zero_after_each(
 
 /// An `Until` witness that has not arrived yet still needs `phi` to hold over everything
 /// seen so far, so the upper bound follows phi's running minimum instead of staying at +inf.
-/// Expected values are stlrom's online robustness (`[lower, upper]`) at `t = 0`.
 #[test]
 fn until_upper_bound_follows_the_running_minimum_of_phi() {
     let at_zero = rosi_at_zero_after_each(
@@ -343,7 +342,7 @@ fn until_upper_bound_follows_the_running_minimum_of_phi() {
 }
 
 /// Same as above, but `phi` dips below zero at 1s, so the upper bound goes negative: the
-/// formula is already known to be violated at 0s. stlrom agrees.
+/// formula is already known to be violated at 0s.
 #[test]
 fn until_upper_bound_goes_negative_once_phi_is_violated() {
     let at_zero = rosi_at_zero_after_each(
@@ -361,7 +360,7 @@ fn until_upper_bound_goes_negative_once_phi_is_violated() {
 }
 
 /// `psi = G[0, 10]` is bounded above as soon as it has data, so `Until` keeps that bound
-/// instead of discarding it. Expected values are stlrom's `[lower, upper]` at `t = 0`.
+/// instead of discarding it, while the lower bound waits for `G`'s window at 0 to close.
 #[test]
 fn until_keeps_the_upper_bound_of_a_globally_psi() {
     let at_zero = rosi_at_zero_after_each(

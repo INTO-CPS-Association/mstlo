@@ -16,9 +16,9 @@ use std::time::Duration;
 
 /// The value an operand holds at `t`, read off the cache entry in force there.
 ///
-/// Under RoSI, a value carried forward past `settled_through` is still being refined. It
-/// is only trusted on the sides the operand has bounded as far as `t`, given its `reach` and
-/// newest timestamp `frontier`. See [`RobustnessSemantics::mask`].
+/// Under RoSI, a value carried forward past `settled_through` can still be split by a late
+/// breakpoint, so only the bounds the operand has reached at `t` carry over. See
+/// [`Reach::mask`].
 fn held_value<Y: RobustnessSemantics, const IS_ROSI: bool>(
     entry: &Step<Y>,
     t: Duration,
@@ -154,8 +154,8 @@ where
         self.max_lookahead
     }
 
-    /// `phi` is needed from the start of the window, `psi` from `start` on. Each operand's
-    /// two bounds are merged into one lag, so this is safe but not tight.
+    /// `phi` is read from `t`, `psi` from `t + start`. Each operand's two lags are merged
+    /// into one: sound, but looser than tracking the sides separately.
     fn reach(&self) -> Reach {
         let (left, right) = (self.left.reach(), self.right.reach());
         let lag = left
@@ -326,7 +326,6 @@ where
             (self.t_max.0, self.t_max.1)
         };
 
-        // How far each operand's bounds reach, for reading values carried past the settled mark.
         let (left_reach, right_reach) = (self.left.reach(), self.right.reach());
 
         // 2. Process the evaluation buffer for tasks
@@ -501,10 +500,10 @@ where
                 remove_task = true;
             } else if IS_ROSI {
                 // Case 3: Intermediate ROSI. Window is still open, no short-circuit.
-                // A witness that has not arrived yet has an unknown psi, but it still needs
-                // phi to hold over everything seen so far. So the unknown part is capped
-                // by phi's running minimum, not left fully unbounded. It can only raise the
-                // upper bound, and is not needed once psi's upper bound covers the window.
+                // A witness yet to arrive has an unknown psi, but phi must still hold up to
+                // it, so phi's running minimum caps what it can add. Such a witness can only
+                // raise the upper bound, so it is ignored once psi's upper bound covers the
+                // whole window.
                 let upper_covered = self.t_max.1 >= window_end_t_eval + right_reach.upper;
                 let intermediate_value = if upper_covered {
                     max_robustness
