@@ -301,3 +301,119 @@ fn eventually_globally_tightens_before_the_inner_window_closes() {
         Some((signal[3].clone(), RobustnessInterval(-46.0, -46.0)))
     );
 }
+
+/// Replays `samples` of `x` and returns the interval RoSI reports at `t = 0` after each one.
+fn rosi_at_zero_after_each(
+    formula: FormulaDefinition,
+    samples: &[(u64, f64)],
+) -> Vec<Option<RobustnessInterval>> {
+    let mut monitor = StlMonitor::builder()
+        .formula(formula)
+        .semantics(Rosi)
+        .build()
+        .expect("Failed to build monitor");
+    samples
+        .iter()
+        .map(|&(t, value)| {
+            monitor
+                .update(&step!("x", value, Duration::from_secs(t)))
+                .verdict_at(Duration::ZERO)
+                .copied()
+        })
+        .collect()
+}
+
+/// An `Until` witness that has not arrived yet still needs `phi` to hold over everything
+/// seen so far, so the upper bound follows phi's running minimum instead of staying at +inf.
+/// Expected values are stlrom's online robustness (`[lower, upper]`) at `t = 0`.
+#[test]
+fn until_upper_bound_follows_the_running_minimum_of_phi() {
+    let at_zero = rosi_at_zero_after_each(
+        stl!((x > 0.0) U[0, 2] (x > 50.0)),
+        &[(0, 7.0), (1, 4.0), (5, 4.0)],
+    );
+    assert_eq!(
+        at_zero,
+        [
+            Some(RobustnessInterval(-43.0, 7.0)),
+            Some(RobustnessInterval(-43.0, 4.0)),
+            Some(RobustnessInterval(-43.0, -43.0)),
+        ]
+    );
+}
+
+/// Same as above, but `phi` dips below zero at 1s, so the upper bound goes negative: the
+/// formula is already known to be violated at 0s. stlrom agrees.
+#[test]
+fn until_upper_bound_goes_negative_once_phi_is_violated() {
+    let at_zero = rosi_at_zero_after_each(
+        stl!((x > 0.0) U[0, 2] (x > 50.0)),
+        &[(0, 7.0), (1, -4.0), (5, 4.0)],
+    );
+    assert_eq!(
+        at_zero,
+        [
+            Some(RobustnessInterval(-43.0, 7.0)),
+            Some(RobustnessInterval(-43.0, -4.0)),
+            Some(RobustnessInterval(-43.0, -43.0)),
+        ]
+    );
+}
+
+/// `psi = G[0, 10]` is bounded above as soon as it has data, so `Until` keeps that bound
+/// instead of discarding it. Expected values are stlrom's `[lower, upper]` at `t = 0`.
+#[test]
+fn until_keeps_the_upper_bound_of_a_globally_psi() {
+    let at_zero = rosi_at_zero_after_each(
+        stl!((x > 0.0) U[0, 2] (G[0, 10](x > 50.0))),
+        &[(0, 7.0), (1, 4.0), (5, 4.0), (10, 4.0)],
+    );
+    assert_eq!(
+        at_zero,
+        [
+            Some(RobustnessInterval(f64::NEG_INFINITY, 7.0)),
+            Some(RobustnessInterval(f64::NEG_INFINITY, 4.0)),
+            Some(RobustnessInterval(f64::NEG_INFINITY, -46.0)),
+            Some(RobustnessInterval(-46.0, -46.0)),
+        ]
+    );
+}
+
+/// Operands whose lower and upper bounds are reached at different times: `G` is bounded above
+/// as soon as it has data and below once its window closes, `F` the other way round. Nesting
+/// them, and negating them, exercises reading one bound of an operand while the other is open.
+#[rstest]
+#[case::until_over_globally(stl!((x > 0) U[0, 2] (G[0, 10](x > 1))))]
+#[case::until_over_eventually(stl!((x > 0) U[0, 2] (F[0, 3](x > 1))))]
+#[case::until_with_offset_windows(stl!((G[0, 2](x > 0)) U[0.5, 3] (G[0.2, 1](x > 1))))]
+#[case::until_over_negated_globally(stl!((x > 0) U[0.5, 2] (!(G[0, 4](x > 1)))))]
+#[case::until_with_negated_phi(stl!((!(G[0, 3](x > 1))) U[0, 2] (F[0, 2](x > 0))))]
+#[case::eventually_over_globally(stl!(F[0, 10](G[0, 2](x > 1))))]
+#[case::globally_over_eventually(stl!(G[0, 10](F[0, 2](x > 1))))]
+#[case::eventually_over_globally_offsets(stl!(F[1, 5](G[0.5, 2](x > 0))))]
+#[case::globally_over_eventually_offsets(stl!(G[0.5, 4](F[0.2, 1](x > 0))))]
+#[case::until_inside_eventually(stl!(F[0, 3]((x > 0) U[0, 2] (G[0, 3](x > 1)))))]
+fn rosi_stays_sound_when_the_bounds_of_an_operand_differ(
+    #[case] formula: FormulaDefinition,
+    #[values(
+        monotonic_increasing(),
+        monotonic_decreasing(),
+        sinusoid(),
+        sparse_timestamps()
+    )]
+    signal: Vec<Step<f64>>,
+) {
+    check_rosi(vec![formula], &signal);
+}
+
+/// The same, with the operands on different signals that run at different rates.
+#[rstest]
+#[case::until_over_globally(stl!((x > 0) U[0, 2] (G[0, 5](y > 0))))]
+#[case::until_over_eventually(stl!((y > 0) U[0.5, 3] (F[0, 2](x > 0))))]
+#[case::response_over_globally(stl!(G[0, 3]((x > 0) -> F[0, 2](G[0, 1](y > 0)))))]
+fn rosi_stays_sound_when_the_bounds_of_an_operand_differ_over_two_signals(
+    #[case] formula: FormulaDefinition,
+    #[values(signal_5(), x_leads_y())] signal: Vec<Step<f64>>,
+) {
+    check_rosi(vec![formula], &signal);
+}

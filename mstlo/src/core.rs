@@ -55,14 +55,12 @@ pub trait StlOperatorTrait<T: Clone>: DynClone + Display + SignalIdentifier {
     /// lookahead; for atomic operators this is zero.
     fn get_max_lookahead(&self) -> Duration;
 
-    /// How far the output's bounded part trails the newest timestamp seen.
+    /// How far the output's bounds are trustworthy, relative to the newest timestamp seen.
     ///
-    /// Under RoSI, an output at time `s` gets a bound once data for it starts to arrive.
-    /// For `F[a, b]` and `G[a, b]` that is at `s + a`. Until then it is unknown, so the
-    /// bounded part of the output ends `frontier_lag` before the newest timestamp.
-    /// The default is [`Self::get_max_lookahead`]: safe, but never tight.
-    fn frontier_lag(&self) -> Duration {
-        self.get_max_lookahead()
+    /// See [`Reach`]. The default is [`Reach::from_lookahead`] of
+    /// [`Self::get_max_lookahead`]: safe, but never tight.
+    fn reach(&self) -> Reach {
+        Reach::from_lookahead(self.get_max_lookahead())
     }
 
     /// Resets all internal caches and evaluation state to their initial (empty) values.
@@ -215,6 +213,69 @@ impl Min for RobustnessInterval {
 impl Max for RobustnessInterval {
     fn max(self, other: Self) -> Self {
         RobustnessInterval(self.0.max(other.0), self.1.max(other.1))
+    }
+}
+
+/// How far the bounds of an operator's output trail the newest timestamp seen. Only RoSI
+/// reads it: its intervals have a lower and an upper bound that arrive at different times.
+///
+/// An output at time `s` is bounded on a side once the newest timestamp reaches `s` plus that
+/// side's lag. `G[a, b]` has a lower lag of `b` (the whole window) and an upper lag of `a`;
+/// `F[a, b]` is the mirror image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reach {
+    /// Lag of the lower bound.
+    pub lower: Duration,
+    /// Lag of the upper bound.
+    pub upper: Duration,
+}
+
+impl Reach {
+    /// An operator that needs no data to be bounded, like an atomic predicate.
+    pub const ZERO: Self = Self::from_lookahead(Duration::ZERO);
+
+    /// Both sides lag by `lookahead`. Safe for any operator, tight for none.
+    pub const fn from_lookahead(lookahead: Duration) -> Self {
+        Reach {
+            lower: lookahead,
+            upper: lookahead,
+        }
+    }
+
+    /// Bounded only where both are bounded: conjunction and disjunction.
+    pub fn join(self, other: Self) -> Self {
+        Reach {
+            lower: self.lower.max(other.lower),
+            upper: self.upper.max(other.upper),
+        }
+    }
+
+    /// Negation swaps the bounds, so it swaps the lags.
+    pub fn swap(self) -> Self {
+        Reach {
+            lower: self.upper,
+            upper: self.lower,
+        }
+    }
+
+    /// Delays the lower bound by `lower` and the upper bound by `upper`.
+    pub fn delayed(self, lower: Duration, upper: Duration) -> Self {
+        Reach {
+            lower: self.lower + lower,
+            upper: self.upper + upper,
+        }
+    }
+
+    /// Reads `value` at time `at` given the newest timestamp `frontier`. Bounds not yet
+    /// reached by `at` read as unbounded.
+    pub fn mask<Y: RobustnessSemantics>(self, value: Y, at: Duration, frontier: Duration) -> Y {
+        // `and` with unknown drops the lower bound, `or` drops the upper one.
+        match (at + self.lower <= frontier, at + self.upper <= frontier) {
+            (true, true) => value,
+            (false, true) => Y::and(value, Y::unknown()),
+            (true, false) => Y::or(value, Y::unknown()),
+            (false, false) => Y::unknown(),
+        }
     }
 }
 

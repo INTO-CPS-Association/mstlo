@@ -4,7 +4,7 @@
 //! Atomic operators evaluate one input sample and emit one output sample in the
 //! selected robustness domain `Y`.
 
-use crate::core::{RobustnessSemantics, SignalIdentifier, StlOperatorTrait, Variables};
+use crate::core::{Reach, RobustnessSemantics, SignalIdentifier, StlOperatorTrait, Variables};
 use crate::ring_buffer::Step;
 use crate::synchronizer::SignalInterpolation;
 use std::collections::HashSet;
@@ -244,8 +244,8 @@ where
         Duration::ZERO
     }
 
-    fn frontier_lag(&self) -> Duration {
-        Duration::ZERO
+    fn reach(&self) -> Reach {
+        Reach::ZERO
     }
 
     fn reset(&mut self) {

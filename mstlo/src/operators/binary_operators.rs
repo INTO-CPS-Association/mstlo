@@ -7,7 +7,7 @@
 //! - refinable interval semantics (`IS_ROSI = true`).
 
 use crate::core::{
-    RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
+    Reach, RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
 };
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
 use std::collections::{HashSet, VecDeque};
@@ -260,9 +260,8 @@ where
         self.max_lookahead
     }
 
-    /// Bounded only where both operands are bounded.
-    fn frontier_lag(&self) -> Duration {
-        self.left.frontier_lag().max(self.right.frontier_lag())
+    fn reach(&self) -> Reach {
+        self.left.reach().join(self.right.reach())
     }
 
     /// Eager output is gap-free up to the joint frontier. Other modes have no gaps.
@@ -497,9 +496,8 @@ where
         self.max_lookahead
     }
 
-    /// Bounded only where both operands are bounded.
-    fn frontier_lag(&self) -> Duration {
-        self.left.frontier_lag().max(self.right.frontier_lag())
+    fn reach(&self) -> Reach {
+        self.left.reach().join(self.right.reach())
     }
 
     /// Eager output is gap-free up to the joint frontier. Other modes have no gaps.

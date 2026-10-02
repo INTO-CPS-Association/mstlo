@@ -5,7 +5,7 @@
 //! const generics.
 
 use crate::core::{
-    RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
+    Reach, RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
     TimeInterval,
 };
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
@@ -21,8 +21,10 @@ struct WindowParams<'a> {
     /// Newest timestamp for which the operand's value is final. Equal to `frontier`
     /// outside RoSI. A window closes once this reaches its end.
     settled: Duration,
-    /// How far the operand's bounded output trails `frontier`.
-    /// See [`StlOperatorTrait::frontier_lag`].
+    /// How far the operand's bounds trail `frontier`. See [`StlOperatorTrait::reach`].
+    operand_reach: Reach,
+    /// The lag of the bound the aggregate needs to be bounded: the upper one for `F`, the
+    /// lower one for `G`.
     operand_lag: Duration,
     upper_bound: Option<Duration>,
     dominated_through: Option<Duration>,
@@ -76,10 +78,15 @@ where
         })
         .flatten();
 
-    // Under RoSI the value past the settled mark is still being refined, so it is unknown.
-    let unknown_at_start = IS_ROSI && in_range && window_start > window.settled;
-    let held_at_start = if unknown_at_start {
-        Some(Y::unknown())
+    // Under RoSI a value past the settled mark is still being refined. It is held across the
+    // stretch only on the sides the operand has bounded that far; the other side is unknown.
+    let unsettled_at_start = IS_ROSI && in_range && window_start > window.settled;
+    let held_at_start = if unsettled_at_start {
+        Some(held_entry.map_or_else(Y::unknown, |entry| {
+            window
+                .operand_reach
+                .mask(entry.value.clone(), window_start, window.frontier)
+        }))
     } else {
         held_entry.map(|entry| entry.value.clone())
     };
@@ -462,8 +469,11 @@ where
         self.max_lookahead
     }
 
-    fn frontier_lag(&self) -> Duration {
-        self.interval.start + self.operand.frontier_lag()
+    /// The output is bounded below from the window start and above once the window closes.
+    fn reach(&self) -> Reach {
+        self.operand
+            .reach()
+            .delayed(self.interval.start, self.interval.end)
     }
 
     fn total_size(&self) -> usize {
@@ -503,7 +513,8 @@ where
     /// - RoSI (`IS_ROSI = true`): can emit intermediate refinable values using `unknown()`.
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let sub_robustness_vec = self.operand.update(step);
-        let operand_lag = self.operand.frontier_lag();
+        let operand_reach = self.operand.reach();
+        let operand_lag = operand_reach.upper; // `F` needs the upper bound
         let operand_known_through = self.operand.known_through();
         let mut output_robustness = Vec::new();
         // Track the newest final operand value; see [`WindowParams::settled`].
@@ -534,6 +545,7 @@ where
                     } else {
                         frontier
                     },
+                    operand_reach,
                     operand_lag,
                     upper_bound: Some(split_key),
                     dominated_through: self.dominated_through,
@@ -569,6 +581,7 @@ where
                 } else {
                     cache_frontier(&self.cache, operand_known_through)
                 },
+                operand_reach,
                 operand_lag,
                 upper_bound: None,
                 dominated_through: self.dominated_through,
@@ -703,8 +716,11 @@ where
         self.max_lookahead
     }
 
-    fn frontier_lag(&self) -> Duration {
-        self.interval.start + self.operand.frontier_lag()
+    /// The output is bounded above from the window start and below once the window closes.
+    fn reach(&self) -> Reach {
+        self.operand
+            .reach()
+            .delayed(self.interval.end, self.interval.start)
     }
 
     fn total_size(&self) -> usize {
@@ -744,7 +760,8 @@ where
     /// - RoSI (`IS_ROSI = true`): can emit intermediate refinable values using `unknown()`.
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let sub_robustness_vec = self.operand.update(step);
-        let operand_lag = self.operand.frontier_lag();
+        let operand_reach = self.operand.reach();
+        let operand_lag = operand_reach.lower; // `G` needs the lower bound
         let operand_known_through = self.operand.known_through();
         let mut output_robustness = Vec::new();
         // Track the newest final operand value; see [`WindowParams::settled`].
@@ -775,6 +792,7 @@ where
                     } else {
                         frontier
                     },
+                    operand_reach,
                     operand_lag,
                     upper_bound: Some(split_key),
                     dominated_through: self.dominated_through,
@@ -810,6 +828,7 @@ where
                 } else {
                     cache_frontier(&self.cache, operand_known_through)
                 },
+                operand_reach,
                 operand_lag,
                 upper_bound: None,
                 dominated_through: self.dominated_through,
