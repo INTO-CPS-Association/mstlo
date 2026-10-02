@@ -168,6 +168,8 @@ A signal that is really sampled at $t=0$ overrides its initial value, provided t
 
 The [RoSI](signal_temporal_logic.md#robust-satisfaction-intervals-rosi) semantics are the only ones that answer a timestamp before the trace decides it. A verdict is emitted as soon as the timestamp exists, and re-emitted, narrower, as samples arrive; a bound sits at $\pm\infty$ for as long as the prefix admits a continuation that would move it. `verdicts()` keeps the newest interval per timestamp, `raw_outputs()` every refinement in the order produced.
 
+The two bounds tighten independently. In `G[0,10](x > 0)`, for instance, the first sample of $x$ in the window already caps the infimum, so the upper bound is finite from $t$ while the lower bound waits for $t+10$; `F` is the mirror image. In `phi U[a,b] psi`, a witness for `psi` that has not arrived yet still needs `phi` to hold up to it, so the upper bound follows the running minimum of `phi` and goes negative as soon as `phi` is violated, since future continuations would never satisfy it. 
+
 An interval collapses to a point once every signal is known at $t+h$, where $h$ is the formula's horizon: the interval upper bounds summed along its deepest chain of temporal operators. That point is the delayed robustness value, so the two semantics agree wherever the delayed one answers. For `G[0,1.5]((x > 0) -> F[0.5,2](y > 0))` the horizon is $1.5+2=3.5$, and feeding $x$ at $0,1,2,3.5$ and $y$ at $1,3.5$ gives $(-\infty,\infty)$ at $t=0$ on every update until the samples at $3.5$ arrive, which finalize it at $(1,1)$.
 
 ## Settings that can hurt performance
