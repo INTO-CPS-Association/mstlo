@@ -4,7 +4,7 @@
 //! [`RobustnessSemantics::not`] to each emitted value.
 
 use crate::core::{
-    RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
+    Reach, RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
 };
 use crate::ring_buffer::Step;
 use std::collections::HashSet;
@@ -44,6 +44,10 @@ where
 
     fn get_max_lookahead(&self) -> Duration {
         self.max_lookahead
+    }
+
+    fn reach(&self) -> Reach {
+        self.operand.reach().swap()
     }
 
     fn total_size(&self) -> usize {

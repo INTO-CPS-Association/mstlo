@@ -64,21 +64,21 @@ pub fn assert_verdict_at(
     rho: f64,
     on: &Step<f64>,
 ) {
-    assert_verdict_at_eager_on(formula, signal, at, rho, on, on);
+    assert_verdict_at_early_on(formula, signal, at, rho, on, on);
 }
 
 /// As [`assert_verdict_at`], but where the prefix decides `at` before the trace covers it, so
-/// the eager semantics answer on `eager_on` rather than on `on`.
-pub fn assert_verdict_at_eager_on(
+/// the eager and RoSI semantics answer on `early_on` rather than on `on`.
+pub fn assert_verdict_at_early_on(
     formula: FormulaDefinition,
     signal: &[Step<f64>],
     at: Duration,
     rho: f64,
     on: &Step<f64>,
-    eager_on: &Step<f64>,
+    early_on: &Step<f64>,
 ) {
     let context = format!("{formula} at {at:?}");
-    let eager_on = eager_on.clone();
+    let early_on = early_on.clone();
     let on = on.clone();
     assert_eq!(
         verdict_at(&formula, signal, DelayedQualitative, at),
@@ -92,12 +92,12 @@ pub fn assert_verdict_at_eager_on(
     );
     assert_eq!(
         verdict_at(&formula, signal, EagerQualitative, at),
-        Some((eager_on, rho > 0.0)),
+        Some((early_on.clone(), rho > 0.0)),
         "EagerQualitative, {context}"
     );
     assert_eq!(
         verdict_at(&formula, signal, Rosi, at),
-        Some((on, RobustnessInterval(rho, rho))),
+        Some((early_on, RobustnessInterval(rho, rho))),
         "Rosi, {context}"
     );
 }

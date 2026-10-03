@@ -55,6 +55,13 @@ pub trait StlOperatorTrait<T: Clone>: DynClone + Display + SignalIdentifier {
     /// lookahead; for atomic operators this is zero.
     fn get_max_lookahead(&self) -> Duration;
 
+    /// How far each bound of the output trails the newest timestamp seen. See [`Reach`].
+    ///
+    /// The default assumes both bounds need the full lookahead: always sound, never tight.
+    fn reach(&self) -> Reach {
+        Reach::from_lookahead(self.get_max_lookahead())
+    }
+
     /// Resets all internal caches and evaluation state to their initial (empty) values.
     ///
     /// Configuration (interval bounds, signal identifiers, max lookahead) is preserved.
@@ -208,6 +215,71 @@ impl Max for RobustnessInterval {
     }
 }
 
+/// How far the bounds of an operator's output trail the newest timestamp seen. Only RoSI
+/// reads it: the two bounds of an interval can settle at different times, and tracking
+/// them separately lets one bound tighten while the other is still open.
+///
+/// An output at time `s` is bounded on a side once the newest timestamp reaches `s` plus that
+/// side's lag. For instance, `G[a, b]` has a lower lag of `b`, since any later sample can still lower the
+/// infimum, but an upper lag of only `a`, since the first sample caps it. `F[a, b]` is the
+/// mirror image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reach {
+    /// Lag of the lower bound.
+    pub lower: Duration,
+    /// Lag of the upper bound.
+    pub upper: Duration,
+}
+
+impl Reach {
+    /// An operator that needs no data to be bounded, like an atomic predicate.
+    pub const ZERO: Self = Self::from_lookahead(Duration::ZERO);
+
+    /// Both sides lag by `lookahead`. Safe for any operator, tight for none.
+    pub const fn from_lookahead(lookahead: Duration) -> Self {
+        Reach {
+            lower: lookahead,
+            upper: lookahead,
+        }
+    }
+
+    /// Bounded only where both are bounded: conjunction and disjunction.
+    pub fn join(self, other: Self) -> Self {
+        Reach {
+            lower: self.lower.max(other.lower),
+            upper: self.upper.max(other.upper),
+        }
+    }
+
+    /// Negation swaps the bounds, so it swaps the lags.
+    pub fn swap(self) -> Self {
+        Reach {
+            lower: self.upper,
+            upper: self.lower,
+        }
+    }
+
+    /// Delays the lower bound by `lower` and the upper bound by `upper`.
+    pub fn delayed(self, lower: Duration, upper: Duration) -> Self {
+        Reach {
+            lower: self.lower + lower,
+            upper: self.upper + upper,
+        }
+    }
+
+    /// Reads a value carried forward to time `at`, given the newest timestamp `frontier`.
+    /// A side the operand has not reached at `at` could still move, so it reads as unbounded.
+    pub fn mask<Y: RobustnessSemantics>(self, value: Y, at: Duration, frontier: Duration) -> Y {
+        // `and` with unknown drops the lower bound, `or` drops the upper one.
+        match (at + self.lower <= frontier, at + self.upper <= frontier) {
+            (true, true) => value,
+            (false, true) => Y::and(value, Y::unknown()),
+            (true, false) => Y::or(value, Y::unknown()),
+            (false, false) => Y::unknown(),
+        }
+    }
+}
+
 /// Semantic operations required by STL operators for a robustness domain.
 ///
 /// This trait abstracts the algebra used by boolean, quantitative (`f64`), and
@@ -330,7 +402,8 @@ impl RobustnessSemantics for bool {
         value < c
     }
     fn unknown() -> Self {
-        // In the boolean case, we can represent "unknown" as false
+        // In the boolean case, we can represent "unknown" as false,
+        // although a 3-value logic would probably be better
         false
     }
     fn prune_dominated(old: Self, new: Self, is_max: bool) -> bool {

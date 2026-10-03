@@ -5,7 +5,7 @@
 //! const generics.
 
 use crate::core::{
-    RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
+    Reach, RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
     TimeInterval,
 };
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
@@ -21,6 +21,8 @@ struct WindowParams<'a> {
     /// Newest timestamp for which the operand's value is final. Equal to `frontier`
     /// outside RoSI. A window closes once this reaches its end.
     settled: Duration,
+    /// How far the operand's bounds trail `frontier`. See [`StlOperatorTrait::reach`].
+    operand_reach: Reach,
     upper_bound: Option<Duration>,
     dominated_through: Option<Duration>,
 }
@@ -73,10 +75,15 @@ where
         })
         .flatten();
 
-    // Under RoSI the value past the settled mark is still being refined, so it is unknown.
-    let unknown_at_start = IS_ROSI && in_range && window_start > window.settled;
-    let held_at_start = if unknown_at_start {
-        Some(Y::unknown())
+    // Under RoSI a value past the settled mark can still be split by a late breakpoint, so
+    // only the bounds the operand has already reached at `window_start` carry over.
+    let unsettled_at_start = IS_ROSI && in_range && window_start > window.settled;
+    let held_at_start = if unsettled_at_start {
+        Some(held_entry.map_or_else(Y::unknown, |entry| {
+            window
+                .operand_reach
+                .mask(entry.value.clone(), window_start, window.frontier)
+        }))
     } else {
         held_entry.map(|entry| entry.value.clone())
     };
@@ -157,8 +164,15 @@ where
             output_robustness.push(Step::new("output", windowed_value, t_eval));
             n_finalized += 1;
         } else if IS_ROSI {
-            // Window still open: emit a refinable verdict and keep the entry pending.
-            let intermediate_value = (op.combine)(windowed_value, Y::unknown());
+            // Window still open: emit a refinable verdict and keep the entry pending. The
+            // unseen rest of the window is read like a held value: it contributes only the
+            // bounds the operand has reached at `window_end`. Whichever side the aggregate
+            // depends on (upper for `F`, lower for `G`) widens until that bound is reached.
+            let unseen =
+                window
+                    .operand_reach
+                    .mask(windowed_value.clone(), window_end, window.frontier);
+            let intermediate_value = (op.combine)(windowed_value, unseen);
             output_robustness.push(Step::new("output", intermediate_value, t_eval));
         } else {
             break;
@@ -453,6 +467,14 @@ where
         self.max_lookahead
     }
 
+    /// One sample in the window already lower-bounds the supremum, but only the whole window
+    /// bounds it from above.
+    fn reach(&self) -> Reach {
+        self.operand
+            .reach()
+            .delayed(self.interval.start, self.interval.end)
+    }
+
     fn total_size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.cache.heap_size()
@@ -490,6 +512,7 @@ where
     /// - RoSI (`IS_ROSI = true`): can emit intermediate refinable values using `unknown()`.
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let sub_robustness_vec = self.operand.update(step);
+        let operand_reach = self.operand.reach();
         let operand_known_through = self.operand.known_through();
         let mut output_robustness = Vec::new();
         // Track the newest final operand value; see [`WindowParams::settled`].
@@ -520,6 +543,7 @@ where
                     } else {
                         frontier
                     },
+                    operand_reach,
                     upper_bound: Some(split_key),
                     dominated_through: self.dominated_through,
                 },
@@ -554,6 +578,7 @@ where
                 } else {
                     cache_frontier(&self.cache, operand_known_through)
                 },
+                operand_reach,
                 upper_bound: None,
                 dominated_through: self.dominated_through,
             },
@@ -687,6 +712,14 @@ where
         self.max_lookahead
     }
 
+    /// One sample in the window already upper-bounds the infimum, but only the whole window
+    /// bounds it from below.
+    fn reach(&self) -> Reach {
+        self.operand
+            .reach()
+            .delayed(self.interval.end, self.interval.start)
+    }
+
     fn total_size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.cache.heap_size()
@@ -724,6 +757,7 @@ where
     /// - RoSI (`IS_ROSI = true`): can emit intermediate refinable values using `unknown()`.
     fn update(&mut self, step: &Step<T>) -> Vec<Step<Self::Output>> {
         let sub_robustness_vec = self.operand.update(step);
+        let operand_reach = self.operand.reach();
         let operand_known_through = self.operand.known_through();
         let mut output_robustness = Vec::new();
         // Track the newest final operand value; see [`WindowParams::settled`].
@@ -754,6 +788,7 @@ where
                     } else {
                         frontier
                     },
+                    operand_reach,
                     upper_bound: Some(split_key),
                     dominated_through: self.dominated_through,
                 },
@@ -788,6 +823,7 @@ where
                 } else {
                     cache_frontier(&self.cache, operand_known_through)
                 },
+                operand_reach,
                 upper_bound: None,
                 dominated_through: self.dominated_through,
             },
