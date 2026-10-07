@@ -157,3 +157,31 @@ fn eager_verdicts_are_chronological() {
         assert_eq!(verdicts, [(0, false), (1, true), (2, true)]);
     }
 }
+
+/// Eager `Until` reads its operands as far as they are known, not only up to the input
+/// that triggered it. `y < 0` holds from 0.5s, so `x @0.5s` lets `||` settle 2.5s and 3s,
+/// and `Until` must pass them on at once.
+#[test]
+fn eager_until_follows_operands_past_the_current_input() {
+    let steps = [
+        step!("y", -1.0, Duration::from_millis(500)),
+        step!("y", -1.0, Duration::from_millis(2500)),
+        step!("y", -1.0, Duration::from_millis(3000)),
+        step!("x", 1.0, Duration::from_millis(500)),
+    ];
+    let mut monitor = StlMonitor::builder()
+        .formula(stl! { (y < 0) U[0, 0] ((x > 0) || (y < 0)) })
+        .semantics(EagerQualitative)
+        .initialize_signals_to_zero()
+        .build()
+        .unwrap();
+    let verdicts: Vec<_> = steps
+        .iter()
+        .map(|step| monitor.update(step).verdicts())
+        .collect();
+    let on_last: Vec<_> = verdicts[3]
+        .iter()
+        .map(|verdict| (verdict.timestamp.as_millis(), verdict.value))
+        .collect();
+    assert_eq!(on_last, [(500, true), (2500, true), (3000, true)]);
+}

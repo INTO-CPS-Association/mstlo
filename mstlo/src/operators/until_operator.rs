@@ -313,9 +313,15 @@ where
             let mut max_robustness: Option<Y> = None;
             let mut falsified = false;
 
-            // We can only evaluate up to the data we have.
-            // We must use the minimum of the current time and the window end.
-            let effective_end_time = current_time.min(window_end_t_eval);
+            // We can only evaluate up to the data we have. An eager operand can be known
+            // past the current input, so eager takes the furthest frontier. Each operand
+            // reads as unknown past its own.
+            let known_until = if IS_EAGER && !IS_ROSI {
+                current_time.max(self.t_max.0).max(self.t_max.1)
+            } else {
+                current_time
+            };
+            let effective_end_time = known_until.min(window_end_t_eval);
 
             // Case 1 gate: both operands are settled through the end of the window.
             let window_covered =

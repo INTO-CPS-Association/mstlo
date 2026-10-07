@@ -44,8 +44,8 @@ where
 /// the window.
 ///
 /// Past `dominated_through` the cache is monotone, so the first entry is the extremum.
-/// Otherwise, and always under RoSI, the window is aggregated. An empty window falls back
-/// to the next surviving entry, which carries the extremum.
+/// Otherwise, and always under RoSI, the window is aggregated. A window without an entry
+/// inside it is the value held at its start.
 fn window_value<C, Y, FCombine, const IS_ROSI: bool>(
     cache: &C,
     window_start: Duration,
@@ -91,17 +91,11 @@ where
     let mut entries = entries
         .take_while(|entry| entry.timestamp <= window_end)
         .map(|entry| entry.value.clone());
-    let mut in_window = if !IS_ROSI && window.dominated_through.is_none_or(|t| window_start > t) {
+    let in_window = if !IS_ROSI && window.dominated_through.is_none_or(|t| window_start > t) {
         entries.next()
     } else {
         entries.reduce(&op.combine)
     };
-    if in_window.is_none() && !IS_ROSI {
-        in_window = cache
-            .iter()
-            .nth(first_in_window)
-            .map(|entry| entry.value.clone());
-    }
 
     match (held_at_start, in_window) {
         (Some(held), Some(inside)) => Some((op.combine)(held, inside)),

@@ -178,6 +178,20 @@ fn dominated_entry_kept_for_a_pending_window() {
     assert_verdict_at(eventually_globally(), &signal, secs(0.1), 1.0, &signal[2]);
 }
 
+/// A window with no breakpoint inside it is the held value alone: the next entry past the
+/// window end must not leak in. The implication holds from 1.5s and fails at 3s, and the
+/// punctual `G[1,1]` at 1.5s reads only 2.5s.
+#[test]
+fn empty_window_ignores_the_entry_past_its_end() {
+    let signal = [
+        step!("x", 1.0, secs(1.5)),
+        step!("x", -1.0, secs(3.0)),
+        step!("x", -1.0, secs(5.0)),
+    ];
+    let formula = stl!(G[1, 1]((!(G[0, 2](x < 0.0))) || (x > 0.0)));
+    assert_verdict_at(formula, &signal, secs(1.5), 1.0, &signal[2]);
+}
+
 /// Eager `||` does not run ahead on `y` past a stretch `G` can still change. `y > 2` from
 /// 5.15s decides `[4.25, 6.25]`, but `(2.25, 4.25)` is still open then; `[2.15, 4.15]` sees
 /// `y = 1` and inner windows reaching the negative `x` at 3.15s.
