@@ -120,3 +120,68 @@ fn conjunction_answers_every_joint_timestamp() {
         assert!(answered.contains(&ts), "missing verdict at {ts:?}");
     }
 }
+
+/// Eager reports verdicts in timestamp order, so each one holds until the next. `x > 0`
+/// decides 2s alone in both traces, but the verdict at 1s is still open then.
+#[test]
+fn eager_verdicts_are_chronological() {
+    let lagging_signal = [
+        step!("x", 0.0, Duration::from_secs(0)),
+        step!("y", 0.0, Duration::from_secs(0)),
+        step!("x", 1.0, Duration::from_secs(2)),
+        step!("y", 1.0, Duration::from_secs(1)),
+        step!("y", 1.0, Duration::from_secs(2)),
+    ];
+    let lookahead = [
+        step!("x", -1.0, Duration::from_secs(0)),
+        step!("x", 1.0, Duration::from_secs(2)),
+        step!("x", -1.0, Duration::from_secs(3)),
+        step!("x", -1.0, Duration::from_secs(4)),
+    ];
+
+    for (formula, steps) in [
+        (stl! { (x > 0) || (y > 0) }, &lagging_signal[..]),
+        (stl! { (x > 0) || (G[2, 2](x < 0)) }, &lookahead[..]),
+    ] {
+        let mut monitor = StlMonitor::builder()
+            .formula(formula)
+            .semantics(EagerQualitative)
+            .initialize_signals(initial_values(steps))
+            .build()
+            .unwrap();
+        let verdicts: Vec<_> = steps
+            .iter()
+            .flat_map(|step| monitor.update(step).verdicts())
+            .map(|verdict| (verdict.timestamp.as_secs(), verdict.value))
+            .collect();
+        assert_eq!(verdicts, [(0, false), (1, true), (2, true)]);
+    }
+}
+
+/// Eager `Until` reads its operands as far as they are known, not only up to the input
+/// that triggered it. `y < 0` holds from 0.5s, so `x @0.5s` lets `||` settle 2.5s and 3s,
+/// and `Until` must pass them on at once.
+#[test]
+fn eager_until_follows_operands_past_the_current_input() {
+    let steps = [
+        step!("y", -1.0, Duration::from_millis(500)),
+        step!("y", -1.0, Duration::from_millis(2500)),
+        step!("y", -1.0, Duration::from_millis(3000)),
+        step!("x", 1.0, Duration::from_millis(500)),
+    ];
+    let mut monitor = StlMonitor::builder()
+        .formula(stl! { (y < 0) U[0, 0] ((x > 0) || (y < 0)) })
+        .semantics(EagerQualitative)
+        .initialize_signals_to_zero()
+        .build()
+        .unwrap();
+    let verdicts: Vec<_> = steps
+        .iter()
+        .map(|step| monitor.update(step).verdicts())
+        .collect();
+    let on_last: Vec<_> = verdicts[3]
+        .iter()
+        .map(|verdict| (verdict.timestamp.as_millis(), verdict.value))
+        .collect();
+    assert_eq!(on_last, [(500, true), (2500, true), (3000, true)]);
+}
