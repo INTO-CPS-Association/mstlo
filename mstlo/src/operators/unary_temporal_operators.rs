@@ -279,13 +279,7 @@ fn register_sub_steps<C, Y, const IS_ROSI: bool>(
                 finalized_ts,
             );
             let oldest_pending = eval_buffer.front().copied();
-            pop_dominated_values(
-                cache,
-                &sub_step,
-                is_max,
-                oldest_pending,
-                interval.end,
-            );
+            pop_dominated_values(cache, &sub_step, is_max, oldest_pending, interval.end);
             // A dominated back that survived was kept for a pending window.
             if let Some(back) = cache.get_back()
                 && Y::prune_dominated(back.value.clone(), sub_step.value.clone(), is_max)

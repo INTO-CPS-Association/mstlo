@@ -91,14 +91,22 @@ struct Operand<'a, C> {
     cache: &'a C,
     /// Newest timestamp the operand has produced a value for.
     frontier: Option<Duration>,
-    /// The operand's [`StlOperatorTrait::get_max_lookahead`].
-    lookahead: Duration,
+    /// Newest timestamp the operand has produced a *final* value for. Under RoSI a
+    /// non-final interval may still be refined, so a held value past this mark is
+    /// re-masked (see [`read_operand`]).
+    settled: Option<Duration>,
+    /// The operand's [`StlOperatorTrait::reach`], used to mask RoSI bounds.
+    reach: Reach,
 }
 
 /// Reads the operand's value at `ts` from its cache under zero-order hold.
 ///
-/// `None` past the operand's frontier. Under RoSI, a `ts` within `lookahead` of the
-/// frontier may still be refined and reads as [`RobustnessSemantics::unknown`].
+/// `None` past the operand's frontier. Under RoSI, a value held from an earlier entry
+/// (`entry.timestamp < ts`) is only trusted where the operand has settled; past that
+/// mark its bounds whose [`Reach`] lag has not elapsed are widened to
+/// [`RobustnessSemantics::unknown`]. A fresh emission at `ts`, or one within the settled
+/// region, is used as-is, so a settled bound (e.g. a positive `F` lower bound read by an
+/// `or`) is never discarded.
 ///
 /// `newest` is the operand's newest entry at or before `ts`, tracked by the caller's walk.
 fn read_operand<C, Y, const IS_ROSI: bool>(
@@ -110,19 +118,12 @@ where
     C: RingBufferTrait<Value = Y>,
     Y: RobustnessSemantics + Copy,
 {
-    if !within(operand.frontier, ts) {
-        return None;
+    let frontier = operand.frontier.filter(|bound| ts <= *bound)?;
+    let entry = newest.filter(|entry| entry.held_until > ts)?;
+    if IS_ROSI && entry.timestamp < ts && operand.settled.is_none_or(|settled| ts > settled) {
+        return Some(operand.reach.mask(entry.value, ts, frontier));
     }
-    if IS_ROSI
-        && operand
-            .frontier
-            .is_some_and(|bound| ts + operand.lookahead > bound)
-    {
-        return Some(Y::unknown());
-    }
-    newest
-        .filter(|entry| entry.held_until > ts)
-        .map(|entry| entry.value)
+    Some(entry.value)
 }
 
 /// A unified binary processor that handles Delayed, Eager, and Refinable (RoSI) semantics correctly.
@@ -236,6 +237,9 @@ pub struct And<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     /// Newest timestamp each operand has produced a value for.
     left_frontier: Option<Duration>,
     right_frontier: Option<Duration>,
+    /// Newest timestamp each operand has produced a *final* value for.
+    left_settled: Option<Duration>,
+    right_settled: Option<Duration>,
     /// Eager only: see [`eager_known_through`].
     known: Option<Duration>,
     left_signals_set: HashSet<&'static str>,
@@ -267,6 +271,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> And<T, C, Y, IS_EAGER, 
             last_eval_time: None,
             left_frontier: None,
             right_frontier: None,
+            left_settled: None,
+            right_settled: None,
             known: None,
             left_signals_set: HashSet::new(),
             right_signals_set: HashSet::new(),
@@ -308,6 +314,8 @@ where
         self.last_eval_time = None;
         self.left_frontier = None;
         self.right_frontier = None;
+        self.left_settled = None;
+        self.right_settled = None;
         self.known = None;
         self.left.reset();
         self.right.reset();
@@ -344,6 +352,9 @@ where
             self.left_frontier = self.left_frontier.max(Some(last.timestamp));
         }
         for update in &left_updates {
+            if update.value.is_final() {
+                self.left_settled = self.left_settled.max(Some(update.timestamp));
+            }
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.left_cache.update_step(update.clone())
             {
@@ -363,6 +374,9 @@ where
             self.right_frontier = self.right_frontier.max(Some(last.timestamp));
         }
         for update in &right_updates {
+            if update.value.is_final() {
+                self.right_settled = self.right_settled.max(Some(update.timestamp));
+            }
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.right_cache.update_step(update.clone())
             {
@@ -375,12 +389,14 @@ where
             &Operand {
                 cache: &self.left_cache,
                 frontier: self.left_frontier,
-                lookahead: self.left.get_max_lookahead(),
+                settled: self.left_settled,
+                reach: self.left.reach(),
             },
             &Operand {
                 cache: &self.right_cache,
                 frontier: self.right_frontier,
-                lookahead: self.right.get_max_lookahead(),
+                settled: self.right_settled,
+                reach: self.right.reach(),
             },
             if IS_ROSI { None } else { self.last_eval_time },
             Y::and,
@@ -459,6 +475,9 @@ pub struct Or<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     /// Newest timestamp each operand has produced a value for.
     left_frontier: Option<Duration>,
     right_frontier: Option<Duration>,
+    /// Newest timestamp each operand has produced a *final* value for.
+    left_settled: Option<Duration>,
+    right_settled: Option<Duration>,
     /// Eager only: see [`eager_known_through`].
     known: Option<Duration>,
     left_signals_set: HashSet<&'static str>,
@@ -490,6 +509,8 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Or<T, C, Y, IS_EAGER, I
             last_eval_time: None,
             left_frontier: None,
             right_frontier: None,
+            left_settled: None,
+            right_settled: None,
             known: None,
             left_signals_set: HashSet::new(),
             right_signals_set: HashSet::new(),
@@ -531,6 +552,8 @@ where
         self.last_eval_time = None;
         self.left_frontier = None;
         self.right_frontier = None;
+        self.left_settled = None;
+        self.right_settled = None;
         self.known = None;
         self.left.reset();
         self.right.reset();
@@ -567,6 +590,9 @@ where
             self.left_frontier = self.left_frontier.max(Some(last.timestamp));
         }
         for update in &left_updates {
+            if update.value.is_final() {
+                self.left_settled = self.left_settled.max(Some(update.timestamp));
+            }
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.left_cache.update_step(update.clone())
             {
@@ -586,6 +612,9 @@ where
             self.right_frontier = self.right_frontier.max(Some(last.timestamp));
         }
         for update in &right_updates {
+            if update.value.is_final() {
+                self.right_settled = self.right_settled.max(Some(update.timestamp));
+            }
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.right_cache.update_step(update.clone())
             {
@@ -598,12 +627,14 @@ where
             &Operand {
                 cache: &self.left_cache,
                 frontier: self.left_frontier,
-                lookahead: self.left.get_max_lookahead(),
+                settled: self.left_settled,
+                reach: self.left.reach(),
             },
             &Operand {
                 cache: &self.right_cache,
                 frontier: self.right_frontier,
-                lookahead: self.right.get_max_lookahead(),
+                settled: self.right_settled,
+                reach: self.right.reach(),
             },
             if IS_ROSI { None } else { self.last_eval_time },
             Y::or,
