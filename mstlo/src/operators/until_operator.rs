@@ -135,7 +135,7 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Until<T, C, Y, IS_EAGER
         let is_late = cache
             .get_back()
             .is_some_and(|back| step.timestamp < back.timestamp);
-        // An eager child can emit out of order, so insert rather than append.
+        // A RoSI child can emit out of order, so insert rather than append.
         cache.insert_step(step);
         is_late
     }
@@ -187,22 +187,6 @@ where
         self.right.reset();
     }
 
-    /// Eager output is gap-free up to `finalized_ts`, further capped by the operands' own
-    /// bounds shifted back by `interval.end`. Delayed and RoSI emit in order and have no gaps.
-    fn known_through(&self) -> Option<Duration> {
-        if !IS_EAGER || IS_ROSI {
-            return None;
-        }
-        let answered = self.finalized_ts.unwrap_or(Duration::ZERO);
-        let operand_bound = match (self.left.known_through(), self.right.known_through()) {
-            (None, None) => return Some(answered),
-            (left, right) => left
-                .unwrap_or(Duration::MAX)
-                .min(right.unwrap_or(Duration::MAX)),
-        };
-        Some(answered.min(operand_bound.saturating_sub(self.interval.end)))
-    }
-
     /// Updates the operator with one input sample and emits newly available outputs.
     ///
     /// High-level flow:
@@ -238,15 +222,6 @@ where
         }
         if let Some(last_right) = right_updates.last() {
             self.t_max.1 = self.t_max.1.max(last_right.timestamp);
-        }
-
-        // Cap each frontier at how far the operand is gap-free. This bound can decrease,
-        // so it is applied after the `max`.
-        if let Some(bound) = self.left.known_through() {
-            self.t_max.0 = self.t_max.0.min(bound);
-        }
-        if let Some(bound) = self.right.known_through() {
-            self.t_max.1 = self.t_max.1.min(bound);
         }
 
         let t_max_combined = self.t_max.0.min(self.t_max.1);

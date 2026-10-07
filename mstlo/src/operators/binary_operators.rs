@@ -10,7 +10,7 @@ use crate::core::{
     Reach, RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
 };
 use crate::ring_buffer::{RingBufferTrait, Step, guarded_prune};
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
@@ -19,16 +19,47 @@ fn joint_frontier(left: Option<Duration>, right: Option<Duration>) -> Option<Dur
     Some(left?.min(right?))
 }
 
-/// Caps a frontier by what the operand reports as gap-free; see
-/// [`StlOperatorTrait::known_through`].
+/// How far eager output is settled: the joint frontier, extended for as long as the
+/// leading operand holds `short_circuit_val` without interruption from there on.
 ///
-/// This bound can decrease, so apply it after taking the max with the newest emitted
-/// timestamp.
-fn clamp_to_known(frontier: Option<Duration>, known: Option<Duration>) -> Option<Duration> {
-    match known {
-        Some(bound) => Some(frontier?.min(bound)),
-        None => frontier,
+/// The lagging operand cannot change the output over that stretch.
+fn eager_known_through<C, Y>(
+    left: (&C, Option<Duration>),
+    right: (&C, Option<Duration>),
+    short_circuit_val: Y,
+) -> Option<Duration>
+where
+    C: RingBufferTrait<Value = Y>,
+    Y: PartialEq,
+{
+    let (cache, frontier) = if left.1 > right.1 { left } else { right };
+    // Until the lagging operand reports at all, the stretch starts at the leading
+    // operand's first entry: nothing is pruned before then, and the output is undefined
+    // earlier.
+    let joint = joint_frontier(left.1, right.1).or_else(|| {
+        cache
+            .iter()
+            .next()
+            .filter(|entry| entry.value == short_circuit_val)
+            .map(|entry| entry.timestamp)
+    })?;
+    let held_at_joint = cache
+        .partition_point(|entry| entry.timestamp <= joint)
+        .saturating_sub(1);
+
+    let mut known = joint;
+    let mut covered = joint;
+    for entry in cache.iter().skip(held_at_joint) {
+        if entry.timestamp > covered
+            || Some(entry.timestamp) > frontier
+            || entry.value != short_circuit_val
+        {
+            break;
+        }
+        known = known.max(entry.timestamp);
+        covered = entry.held_until;
     }
+    Some(known)
 }
 
 /// Whether `ts` lies inside the region both operands have reported on.
@@ -38,14 +69,13 @@ fn within(joint: Option<Duration>, ts: Duration) -> bool {
 
 /// Settles the emission watermark for eager mode after a batch of output.
 ///
-/// Advances it to the newest output at or below the joint frontier. Timestamps
-/// short-circuited past that frontier are recorded separately, since the lagging operand
-/// can still deliver an earlier breakpoint.
+/// Advances it to the newest output at or below the joint frontier. Outputs
+/// short-circuited past that frontier do not move it, since the lagging operand still has
+/// to be read there.
 fn settle_eager_watermark<Y>(
     output: &[Step<Y>],
     joint: Option<Duration>,
     last_eval_time: &mut Option<Duration>,
-    answered_beyond_joint: &mut VecDeque<Duration>,
 ) {
     if let Some(eval_time) = output
         .iter()
@@ -53,18 +83,6 @@ fn settle_eager_watermark<Y>(
         .rfind(|ts| within(joint, *ts))
     {
         *last_eval_time = Some(eval_time);
-    }
-
-    answered_beyond_joint.extend(
-        output
-            .iter()
-            .map(|step| step.timestamp)
-            .filter(|ts| !within(joint, *ts)),
-    );
-
-    // Timestamps the watermark has caught up with no longer need tracking.
-    if let Some(last) = *last_eval_time {
-        answered_beyond_joint.retain(|ts| *ts > last);
     }
 }
 
@@ -113,7 +131,8 @@ where
 /// operand under zero-order hold.
 ///
 /// A timestamp is answered once both operands are known there. Eager mode may also
-/// short-circuit on one operand alone past the joint frontier, in timestamp order.
+/// short-circuit on one operand alone past the joint frontier, but only as far as
+/// [`eager_known_through`], so output is always emitted in timestamp order.
 fn process_binary<C, Y, F, const IS_EAGER: bool, const IS_ROSI: bool>(
     left: &Operand<'_, C>,
     right: &Operand<'_, C>,
@@ -136,6 +155,16 @@ where
     };
     let Some(horizon) = horizon else {
         return output_robustness;
+    };
+    // Eager only short-circuits past the joint frontier over this stretch, so the lagging
+    // operand can never deliver a breakpoint that changes an earlier output.
+    let settled = match short_circuit_val {
+        Some(value) if IS_EAGER && !IS_ROSI => eager_known_through(
+            (left.cache, left.frontier),
+            (right.cache, right.frontier),
+            value,
+        ),
+        _ => None,
     };
 
     // Skip breakpoints already answered. RoSI passes `None`, since it refines past outputs.
@@ -182,7 +211,7 @@ where
             (Some(_), None) | (None, Some(_)) if joint.is_some_and(|frontier| ts <= frontier) => {}
             // Eager past the joint frontier: short-circuit if possible, otherwise wait.
             (Some(value), None) | (None, Some(value)) => {
-                if short_circuit_val != Some(value) {
+                if short_circuit_val != Some(value) || settled.is_none_or(|bound| ts > bound) {
                     break;
                 }
                 output_robustness.push(Step::new("output", value, ts));
@@ -204,12 +233,11 @@ pub struct And<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_cache: C,
     right_cache: C,
     last_eval_time: Option<Duration>,
-    /// Timestamps eager answered ahead of the joint frontier; see
-    /// [`settle_eager_watermark`].
-    answered_beyond_joint: VecDeque<Duration>,
     /// Newest timestamp each operand has produced a value for.
     left_frontier: Option<Duration>,
     right_frontier: Option<Duration>,
+    /// Eager only: see [`eager_known_through`].
+    known: Option<Duration>,
     left_signals_set: HashSet<&'static str>,
     right_signals_set: HashSet<&'static str>,
     max_lookahead: Duration,
@@ -237,9 +265,9 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> And<T, C, Y, IS_EAGER, 
             left_cache: left_cache.unwrap_or_else(|| C::new()),
             right_cache: right_cache.unwrap_or_else(|| C::new()),
             last_eval_time: None,
-            answered_beyond_joint: VecDeque::new(),
             left_frontier: None,
             right_frontier: None,
+            known: None,
             left_signals_set: HashSet::new(),
             right_signals_set: HashSet::new(),
             max_lookahead,
@@ -264,19 +292,10 @@ where
         self.left.reach().join(self.right.reach())
     }
 
-    /// Eager output is gap-free up to the joint frontier. Other modes have no gaps.
-    fn known_through(&self) -> Option<Duration> {
-        if !IS_EAGER || IS_ROSI {
-            return None;
-        }
-        Some(joint_frontier(self.left_frontier, self.right_frontier).unwrap_or(Duration::ZERO))
-    }
-
     fn total_size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.left_cache.heap_size()
             + self.right_cache.heap_size()
-            + self.answered_beyond_joint.capacity() * std::mem::size_of::<Duration>()
             + self.left_signals_set.capacity() * (std::mem::size_of::<&str>() + 1)
             + self.right_signals_set.capacity() * (std::mem::size_of::<&str>() + 1)
             + self.left.total_size()
@@ -287,9 +306,9 @@ where
         self.left_cache.clear();
         self.right_cache.clear();
         self.last_eval_time = None;
-        self.answered_beyond_joint.clear();
         self.left_frontier = None;
         self.right_frontier = None;
+        self.known = None;
         self.left.reset();
         self.right.reset();
     }
@@ -324,7 +343,6 @@ where
         if let Some(last) = left_updates.last() {
             self.left_frontier = self.left_frontier.max(Some(last.timestamp));
         }
-        self.left_frontier = clamp_to_known(self.left_frontier, self.left.known_through());
         for update in &left_updates {
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.left_cache.update_step(update.clone())
@@ -344,7 +362,6 @@ where
         if let Some(last) = right_updates.last() {
             self.right_frontier = self.right_frontier.max(Some(last.timestamp));
         }
-        self.right_frontier = clamp_to_known(self.right_frontier, self.right.known_through());
         for update in &right_updates {
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.right_cache.update_step(update.clone())
@@ -375,13 +392,17 @@ where
             output.retain(|step| step.timestamp > last_time);
         }
 
-        // Drop repeats of timestamps already short-circuited beyond the joint frontier.
-        if IS_EAGER && !IS_ROSI && !self.answered_beyond_joint.is_empty() {
-            output.retain(|step| !self.answered_beyond_joint.contains(&step.timestamp));
-        }
-
         let lookahead = self.get_max_lookahead();
         let joint = joint_frontier(self.left_frontier, self.right_frontier);
+        if IS_EAGER && !IS_ROSI {
+            // A late breakpoint inside the settled stretch repeats the held value.
+            output.retain(|step| self.known.is_none_or(|known| step.timestamp > known));
+            self.known = eager_known_through(
+                (&self.left_cache, self.left_frontier),
+                (&self.right_cache, self.right_frontier),
+                Y::atomic_false(),
+            );
+        }
 
         // we protect up to the minimum of the last known timestamps minus lookahead
         // we can safely prune it if both sides have verdict and are beyond lookahead
@@ -397,12 +418,7 @@ where
                 self.last_eval_time = Some(eval_time);
             }
         } else if IS_EAGER {
-            settle_eager_watermark(
-                &output,
-                joint,
-                &mut self.last_eval_time,
-                &mut self.answered_beyond_joint,
-            );
+            settle_eager_watermark(&output, joint, &mut self.last_eval_time);
         } else {
             // For delayed/bool, we track the *end* because everything before is finalized
             if let Some(eval_time) = output.last().map(|step| step.timestamp) {
@@ -440,12 +456,11 @@ pub struct Or<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> {
     left_cache: C,
     right_cache: C,
     last_eval_time: Option<Duration>,
-    /// Timestamps eager answered ahead of the joint frontier; see
-    /// [`settle_eager_watermark`].
-    answered_beyond_joint: VecDeque<Duration>,
     /// Newest timestamp each operand has produced a value for.
     left_frontier: Option<Duration>,
     right_frontier: Option<Duration>,
+    /// Eager only: see [`eager_known_through`].
+    known: Option<Duration>,
     left_signals_set: HashSet<&'static str>,
     right_signals_set: HashSet<&'static str>,
     max_lookahead: Duration,
@@ -473,9 +488,9 @@ impl<T, C, Y, const IS_EAGER: bool, const IS_ROSI: bool> Or<T, C, Y, IS_EAGER, I
             left_cache: left_cache.unwrap_or_else(|| C::new()),
             right_cache: right_cache.unwrap_or_else(|| C::new()),
             last_eval_time: None,
-            answered_beyond_joint: VecDeque::new(),
             left_frontier: None,
             right_frontier: None,
+            known: None,
             left_signals_set: HashSet::new(),
             right_signals_set: HashSet::new(),
             max_lookahead,
@@ -500,19 +515,10 @@ where
         self.left.reach().join(self.right.reach())
     }
 
-    /// Eager output is gap-free up to the joint frontier. Other modes have no gaps.
-    fn known_through(&self) -> Option<Duration> {
-        if !IS_EAGER || IS_ROSI {
-            return None;
-        }
-        Some(joint_frontier(self.left_frontier, self.right_frontier).unwrap_or(Duration::ZERO))
-    }
-
     fn total_size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.left_cache.heap_size()
             + self.right_cache.heap_size()
-            + self.answered_beyond_joint.capacity() * std::mem::size_of::<Duration>()
             + self.left_signals_set.capacity() * (std::mem::size_of::<&str>() + 1)
             + self.right_signals_set.capacity() * (std::mem::size_of::<&str>() + 1)
             + self.left.total_size()
@@ -523,9 +529,9 @@ where
         self.left_cache.clear();
         self.right_cache.clear();
         self.last_eval_time = None;
-        self.answered_beyond_joint.clear();
         self.left_frontier = None;
         self.right_frontier = None;
+        self.known = None;
         self.left.reset();
         self.right.reset();
     }
@@ -560,7 +566,6 @@ where
         if let Some(last) = left_updates.last() {
             self.left_frontier = self.left_frontier.max(Some(last.timestamp));
         }
-        self.left_frontier = clamp_to_known(self.left_frontier, self.left.known_through());
         for update in &left_updates {
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.left_cache.update_step(update.clone())
@@ -580,7 +585,6 @@ where
         if let Some(last) = right_updates.last() {
             self.right_frontier = self.right_frontier.max(Some(last.timestamp));
         }
-        self.right_frontier = clamp_to_known(self.right_frontier, self.right.known_through());
         for update in &right_updates {
             if check_relevance(update.timestamp, self.last_eval_time)
                 && !self.right_cache.update_step(update.clone())
@@ -611,13 +615,17 @@ where
             output.retain(|step| step.timestamp > last_time);
         }
 
-        // Drop repeats of timestamps already short-circuited beyond the joint frontier.
-        if IS_EAGER && !IS_ROSI && !self.answered_beyond_joint.is_empty() {
-            output.retain(|step| !self.answered_beyond_joint.contains(&step.timestamp));
-        }
-
         let lookahead = self.get_max_lookahead();
         let joint = joint_frontier(self.left_frontier, self.right_frontier);
+        if IS_EAGER && !IS_ROSI {
+            // A late breakpoint inside the settled stretch repeats the held value.
+            output.retain(|step| self.known.is_none_or(|known| step.timestamp > known));
+            self.known = eager_known_through(
+                (&self.left_cache, self.left_frontier),
+                (&self.right_cache, self.right_frontier),
+                Y::atomic_true(),
+            );
+        }
 
         // we protect up to the minimum of the last known timestamps minus lookahead
         // we can safely prune it if both sides have verdict and are beyond lookahead
@@ -633,12 +641,7 @@ where
                 self.last_eval_time = Some(eval_time);
             }
         } else if IS_EAGER {
-            settle_eager_watermark(
-                &output,
-                joint,
-                &mut self.last_eval_time,
-                &mut self.answered_beyond_joint,
-            );
+            settle_eager_watermark(&output, joint, &mut self.last_eval_time);
         } else {
             // For delayed/bool, we track the *end* because everything before is finalized
             if let Some(eval_time) = output.last().map(|step| step.timestamp) {

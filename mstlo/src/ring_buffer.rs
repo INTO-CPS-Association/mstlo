@@ -113,7 +113,7 @@ pub trait RingBufferTrait {
     /// Inserts a step at its timestamp-ordered position.
     ///
     /// Use this instead of [`Self::add_step`] when steps may arrive out of order, as they
-    /// can from an eager `And`/`Or`.
+    /// can under RoSI.
     fn insert_step(&mut self, step: Step<Self::Value>);
     /// Replaces a step with matching timestamp.
     ///

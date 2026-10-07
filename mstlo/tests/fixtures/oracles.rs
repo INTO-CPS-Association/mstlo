@@ -261,13 +261,15 @@ pub fn exp_f8_s4_bool_eager() -> Vec<Vec<Step<bool>>> {
         vec![],                                               // y@t=1
         vec![],                                               // x@t=2
         vec![],                                               // y@t=2
+        vec![step!("output", true, Duration::from_secs(1))], // x@t=3
+        vec![],                                              // y@t=3
+        // `y < 5` fails at 2s and 3s, but `G` may still report between 1s and 2s, so
+        // these wait for it to reach 2s.
         vec![
-            step!("output", true, Duration::from_secs(1)), // x@t=3
-            step!("output", false, Duration::from_secs(2)),
+            step!("output", false, Duration::from_secs(2)), // x@t=4
+            step!("output", false, Duration::from_secs(3)),
         ],
-        vec![step!("output", false, Duration::from_secs(3))], // y@t=3
-        vec![],                                               // x@t=4
-        vec![],                                               // y@t=4
+        vec![], // y@t=4
         vec![],                                               // x@t=5
         vec![],                                               // y@t=5
         vec![step!("output", true, Duration::from_secs(4))],  // x@t=6

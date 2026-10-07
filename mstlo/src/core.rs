@@ -68,15 +68,6 @@ pub trait StlOperatorTrait<T: Clone>: DynClone + Display + SignalIdentifier {
     /// The default implementation is a no-op, suitable for stateless operators like `Atomic`.
     fn reset(&mut self) {}
 
-    /// The timestamp through which this operator's output stream is gap-free, or `None`
-    /// if it has no gaps.
-    ///
-    /// Eager `And`/`Or` can emit ahead of an earlier breakpoint that arrives later.
-    /// Consumers only close windows up to this bound.
-    fn known_through(&self) -> Option<Duration> {
-        None
-    }
-
     /// Returns estimated total memory (stack + heap) in bytes consumed by this
     /// operator and all its children recursively.
     ///
