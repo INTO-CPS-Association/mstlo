@@ -1,0 +1,9 @@
+[project]
+name = "mstlo-live-demo"
+version = "0.1.0"
+description = "Live STL monitoring demo (four semantics) for the RV tool showcase"
+requires-python = ">=3.13"
+dependencies = [
+    "mstlo-python>=0.2.2",
+    "bokeh>=3.6",
+]
