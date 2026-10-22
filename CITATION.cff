@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use mstlo in your research, please cite our paper."
+title: "mstlo: Efficient Online Monitoring of Signal Temporal Logic"
+type: software
+repository-code: "https://github.com/INTO-CPS-Association/mstlo"
+authors: &authors
+  - family-names: Thomsen
+    given-names: Andreas Kaag
+  - family-names: Madsen
+    given-names: Niels Viggo Stark
+  - family-names: Evans
+    given-names: Valdemar Tang
+  - family-names: Wright
+    given-names: Thomas
+  - family-names: Esterle
+    given-names: Lukas
+  - family-names: Larsen
+    given-names: Peter Gorm
+
+preferred-citation:
+  type: conference-paper
+  title: "mstlo: Efficient Online Monitoring of Signal Temporal Logic"
+  authors: *authors
+  editors:
+    - family-names: Kauffman
+      given-names: Sean
+    - family-names: Pedrielli
+      given-names: Giulia
+  collection-title: Runtime Verification
+  collection-type: proceedings
+  publisher:
+    name: Springer Nature Switzerland
+    address: Cham
+  year: 2027
+  start: 19
+  end: 29
+  doi: "10.1007/978-3-032-41160-0_2"
+  isbn: "978-3-032-41160-0"

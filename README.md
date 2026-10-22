@@ -23,6 +23,7 @@ mstlo (_mistletoe_) is a Rust library for online monitoring of Signal Temporal L
     - [Python](#python)
   - [Documentation](#documentation)
   - [Building from Source](#building-from-source)
+  - [Citing](#citing)
   - [License](#license)
 
 <!-- /TOC -->
@@ -135,6 +136,23 @@ pip install maturin pytest
 maturin develop
 pytest
 ```
+
+## Citing
+
+If you use mstlo in your research, please cite the following paper:
+
+```bibtex
+@InProceedings{10.1007/978-3-032-41160-0_2,
+  author = {Thomsen, Andreas Kaag and Madsen, Niels Viggo Stark and Evans, Valdemar Tang and Wright, Thomas and Esterle, Lukas and Larsen, Peter Gorm},
+  title = {mstlo: Efficient Online Monitoring of Signal Temporal Logic},
+  booktitle = {Runtime Verification},
+  year = {2027},
+  pages = {19--29},
+  doi = {10.1007/978-3-032-41160-0_2}
+}
+```
+
+For citation metadata, see [`CITATION.cff`](CITATION.cff).
 
 ## License
 
