@@ -75,11 +75,13 @@ pub fn exp_f2_s2_bool_eager() -> Vec<Vec<Step<bool>>> {
         vec![
             step!("output", false, Duration::from_secs(4)),
             step!("output", false, Duration::from_secs(5)),
+            // phi = G[0,2](x > 0) is false at 6, so 6 is false the moment it is known.
+            step!("output", false, Duration::from_secs(6)),
         ],
-        vec![],
-        vec![step!("output", false, Duration::from_secs(6))],
         vec![step!("output", false, Duration::from_secs(7))],
         vec![step!("output", false, Duration::from_secs(8))],
+        vec![],
+        vec![],
     ]
 }
 

@@ -364,8 +364,10 @@ where
                 .take_while(|entry| entry.timestamp <= effective_end_time)
                 .map(|entry| entry.timestamp)
                 .peekable();
-            // Lazy, deduplicated merge of the window start and both breakpoint runs.
-            let t_primes = (window_start_t_eval <= effective_end_time)
+            // Lazy, deduplicated merge of the window start and both breakpoint runs. Eager
+            // always visits the window start, so phi dying before it falsifies the window
+            // even when no operand has reached it.
+            let t_primes = (IS_EAGER && !IS_ROSI || window_start_t_eval <= effective_end_time)
                 .then_some(window_start_t_eval)
                 .into_iter()
                 .chain(std::iter::from_fn(|| {
@@ -399,6 +401,24 @@ where
                 .skip(right_from.saturating_sub(1))
                 .peekable();
             let mut psi_held: Option<&Step<Y>> = None;
+            // Whether psi is known false at every t' visited so far.
+            let mut psi_known_false = true;
+
+            // Eager only: the newest emitted t before t_eval. Emitting t_eval asserts that
+            // verdict on every t between the two, which phi is constant over. If phi held
+            // there and dies at `died` past psi's frontier, those t are only decided when
+            // `died` is within `a` of all of them.
+            let previous = newest_answered.or(self.finalized_ts);
+            let between_decided = |died: Duration| {
+                self.t_max.1 >= died
+                    || previous.is_none_or(|p| {
+                        died <= p + self.interval.start
+                            || self
+                                .left_cache
+                                .zoh_at(p)
+                                .is_some_and(|entry| entry.value == Y::atomic_false())
+                    })
+            };
 
             for t_prime in t_primes {
                 // 1. Fold phi samples in (t_eval, t'] into the cumulative min.
@@ -425,25 +445,29 @@ where
                 while let Some(entry) = psi_iter.next_if(|entry| entry.timestamp <= t_prime) {
                     psi_held = Some(entry);
                 }
-                let robustness_psi_right = (t_prime <= self.t_max.1)
+                let psi_known = (t_prime <= self.t_max.1)
                     .then(|| psi_held.filter(|entry| entry.held_until > t_prime))
-                    .flatten()
-                    .map_or_else(Y::unknown, |entry| {
-                        held_value::<Y, IS_ROSI>(
-                            entry,
-                            t_prime,
-                            right_settled,
-                            right_reach,
-                            self.t_max.1,
-                        )
-                    });
+                    .flatten();
+                if IS_EAGER {
+                    psi_known_false &= psi_known.is_some_and(|e| e.value == Y::atomic_false());
+                }
+                let robustness_psi_right = psi_known.map_or_else(Y::unknown, |entry| {
+                    held_value::<Y, IS_ROSI>(
+                        entry,
+                        t_prime,
+                        right_settled,
+                        right_reach,
+                        self.t_max.1,
+                    )
+                });
 
                 // 3. Eager falsification: once phi has died at `d`, no witness at or after
                 //    `d` is possible. The window is false if psi is also known up to `d`,
-                //    ruling out earlier witnesses, or if `d` precedes the window start.
-                let psi_rules_out_earlier_witnesses = phi_died_at
-                    .is_some_and(|died| died < window_start_t_eval || self.t_max.1 >= died);
-                if IS_EAGER && psi_rules_out_earlier_witnesses && t_max_combined >= t_eval {
+                //    ruling out earlier witnesses, or if `d` is at or before the window start.
+                let psi_rules_out_earlier_witnesses = phi_died_at.is_some_and(|died| {
+                    (died <= window_start_t_eval || self.t_max.1 >= died) && between_decided(died)
+                });
+                if IS_EAGER && psi_rules_out_earlier_witnesses {
                     falsified = true;
                     max_robustness = or_into(max_robustness, Y::atomic_false());
                     break;
@@ -452,6 +476,18 @@ where
                 // 4. Combine: min(rho_psi(t'), robustness_phi_left)
                 let robustness_t_prime = Y::and(robustness_psi_right, robustness_phi_left);
                 max_robustness = or_into(max_robustness, robustness_t_prime);
+            }
+
+            // Eager falsification without phi dying: psi is known false on the whole window.
+            // Every t since the previous verdict must be false too, whatever phi turns out
+            // to be, so psi must also be false where it holds on (previous + a, t_eval + a).
+            if IS_EAGER && !IS_ROSI && !falsified && psi_known_false {
+                falsified = self.t_max.1 >= window_end_t_eval
+                    && previous.is_none_or(|p| {
+                        self.right_cache
+                            .zoh_at(p + self.interval.start)
+                            .is_some_and(|entry| entry.value == Y::atomic_false())
+                    });
             }
 
             let Some(max_robustness) = max_robustness else {
