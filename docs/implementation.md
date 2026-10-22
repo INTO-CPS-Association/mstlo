@@ -127,26 +127,28 @@ When several signals are monitored, the formula's verdict can change at any samp
 
 Let the formula be `(a > 0) && (b > 0)`, with $a=[1,-1,1]$ observed at $t_a=[0,2,4]$ and $b=[1,1]$ at $t_b=[0,5]$. The monitor outputs:
 
-| Input       | Delayed               | Eager      |
-| ----------- | --------------------- | ---------- |
-| $a=1$ at 0  | –                     | –          |
-| $b=1$ at 0  | 0: `true`             | 0: `true`  |
-| $a=-1$ at 2 | –                     | 2: `false` |
-| $a=1$ at 4  | –                     | –          |
-| $b=1$ at 5  | 2: `false`, 4: `true` | 4: `true`  |
+| Input       | Delayed               | Eager                 |
+| ----------- | --------------------- | --------------------- |
+| $a=1$ at 0  | –                     | –                     |
+| $b=1$ at 0  | 0: `true`             | 0: `true`             |
+| $a=-1$ at 2 | –                     | –                     |
+| $a=1$ at 4  | –                     | –                     |
+| $b=1$ at 5  | 2: `false`, 4: `true` | 2: `false`, 4: `true` |
 
-Under the delayed semantics the verdict at $0$ is given as soon as both signals are known there, but the verdicts at $2$ and $4$ wait for the sample of $b$ at $5$: until it arrives, $b$ could have changed anywhere after $0$. The eager semantics answer $2$ already at $a=-1$, since one false conjunct decides the conjunction on its own; $4$ still waits, since a true conjunct does not. Under both semantics the verdict at $5$ waits for the next sample of $a$.
+The verdict at $0$ is given as soon as both signals are known there, but the verdicts at $2$ and $4$ wait for the sample of $b$ at $5$: until it arrives, $b$ could have changed anywhere after $0$. The eager semantics cannot answer $2$ earlier either. A false conjunct decides the conjunction on its own, but $a$ holds on $(0,2)$, so the conjunction is undecided there, and eager verdicts are emitted in [timestamp order](signal_temporal_logic.md#chronological-verdicts). Under both semantics the verdict at $5$ waits for the next sample of $a$.
 
-Since a sample answers the timestamps that it decides rather than the ones that precede them, verdicts under the eager semantics need not be emitted in timestamp order. Let $a=[7,-4]$ be observed at $t_a=[0,2]$ and $b=[7,4]$ at $t_b=[0,1]$, arriving in the order $a(0), b(0), a(2), b(1)$:
+The eager semantics run ahead where the signal that is ahead decides the formula from the point where both are known. Let $a=[1,-1,-1]$ be observed at $t_a=[0,2,4]$ and $b=[1,1,1]$ at $t_b=[0,3,5]$:
 
-| Input       | Verdicts emitted |
-| ----------- | ---------------- |
-| $a=7$ at 0  | –                |
-| $b=7$ at 0  | 0: `true`        |
-| $a=-4$ at 2 | 2: `false`       |
-| $b=4$ at 1  | 1: `true`        |
+| Input       | Delayed    | Eager                  |
+| ----------- | ---------- | ---------------------- |
+| $a=1$ at 0  | –          | –                      |
+| $b=1$ at 0  | 0: `true`  | 0: `true`              |
+| $a=-1$ at 2 | –          | –                      |
+| $b=1$ at 3  | 2: `false` | 2: `false`             |
+| $a=-1$ at 4 | 3: `false` | 3: `false`, 4: `false` |
+| $b=1$ at 5  | 4: `false` | –                      |
 
-The verdict at $1$ is emitted last, after the verdict at $2$, because it is the sample $b(1)$ that decides it.
+At $a=-1$ at 4, $b$ is known up to $3$ and $a$ is false from $2$ on, so the conjunction is false at $4$ whatever $b$ does.
 
 ### Initialization of Signals
 
