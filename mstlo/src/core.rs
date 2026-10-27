@@ -32,7 +32,36 @@ impl TimeInterval {
     pub fn window_length(&self) -> Duration {
         self.end - self.start
     }
+
+    /// Builds an interval from bounds in seconds, failing instead of panicking on a bound that
+    /// is not finite, is negative or exceeds [`Duration::MAX`], or if `start > end`.
+    pub fn try_from_secs_f64(start: f64, end: f64) -> Result<Self, String> {
+        let bound = |which: &str, secs: f64| {
+            Duration::try_from_secs_f64(secs).map_err(|_| {
+                format!("interval {which} bound {secs:?} s must be finite, non-negative and at most ~1.8e19 s")
+            })
+        };
+        let interval = TimeInterval {
+            start: bound("lower", start)?,
+            end: bound("upper", end)?,
+        };
+        if interval.start > interval.end {
+            return Err(format!(
+                "interval lower bound {start:?} s exceeds upper bound {end:?} s"
+            ));
+        }
+        Ok(interval)
+    }
 }
+
+/// Largest formula temporal depth (the sum of interval upper bounds along the deepest nesting of
+/// temporal operators) that [`StlMonitorBuilder::build`](crate::StlMonitorBuilder::build) accepts.
+///
+/// Operators add up to this depth to sample timestamps, so the range of [`Duration`] (~2^64 s) is
+/// split evenly between depth and timestamps. The value itself is a convention; any split works.
+/// Timestamps are not checked: the monitor cannot overflow as long as they stay below 2^63 s
+/// (~2.9e11 years), and above that a formula near this depth may panic on overflow.
+pub const MAX_TEMPORAL_DEPTH: Duration = Duration::from_secs(1 << 63);
 
 /// Common trait for all executable STL operators.
 ///

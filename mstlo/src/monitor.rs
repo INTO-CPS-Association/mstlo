@@ -10,7 +10,8 @@
 //! semantic selection markers used for type-driven output inference.
 
 use crate::core::{
-    RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier, StlOperatorTrait,
+    MAX_TEMPORAL_DEPTH, RobustnessSemantics, SignalIdentifier, StlOperatorAndSignalIdentifier,
+    StlOperatorTrait, TimeInterval,
 };
 use crate::formula_definition::FormulaDefinition;
 use crate::naive_operators::{StlFormula, StlOperator};
@@ -838,13 +839,22 @@ where
 
     /// Builds a fully configured [`StlMonitor`].
     ///
-    /// Returns an error if no formula was provided or when an unsupported
-    /// algorithm/semantics combination is requested.
+    /// Returns an error if no formula was provided, when an unsupported
+    /// algorithm/semantics combination is requested, or when an interval has
+    /// `start > end` or the formula's temporal depth exceeds [`MAX_TEMPORAL_DEPTH`].
     pub fn build(self) -> Result<StlMonitor<T, Y>, &'static str> {
         let formula_def = self
             .formula
             .clone()
             .ok_or("Formula definition is required")?;
+
+        // Checked before any operator is built, as their constructors sum lookaheads unchecked.
+        if !checked_temporal_depth(&formula_def).is_some_and(|d| d <= MAX_TEMPORAL_DEPTH) {
+            return Err(
+                "Invalid formula: an interval has start > end, or the temporal depth \
+                 exceeds MAX_TEMPORAL_DEPTH (2^63 s).",
+            );
+        }
 
         let signal_interpolation = self.signal_interpolation;
 
@@ -931,6 +941,35 @@ where
             formula_enum,
             RingBuffer::new(),
         ))
+    }
+}
+
+/// The formula's temporal depth, as `get_max_lookahead` computes it, or `None` if an interval has
+/// `start > end` or the sum overflows.
+fn checked_temporal_depth(formula: &FormulaDefinition) -> Option<Duration> {
+    let delayed = |i: &TimeInterval, operand: Duration| {
+        i.end.checked_add(operand).filter(|_| i.start <= i.end)
+    };
+    match formula {
+        FormulaDefinition::GreaterThan(..)
+        | FormulaDefinition::LessThan(..)
+        | FormulaDefinition::GreaterThanVar(..)
+        | FormulaDefinition::LessThanVar(..)
+        | FormulaDefinition::True
+        | FormulaDefinition::False => Some(Duration::ZERO),
+        FormulaDefinition::Not(f) => checked_temporal_depth(f),
+        FormulaDefinition::And(l, r)
+        | FormulaDefinition::Or(l, r)
+        | FormulaDefinition::Implies(l, r) => {
+            Some(checked_temporal_depth(l)?.max(checked_temporal_depth(r)?))
+        }
+        FormulaDefinition::Eventually(i, f) | FormulaDefinition::Globally(i, f) => {
+            delayed(i, checked_temporal_depth(f)?)
+        }
+        FormulaDefinition::Until(i, l, r) => delayed(
+            i,
+            checked_temporal_depth(l)?.max(checked_temporal_depth(r)?),
+        ),
     }
 }
 
@@ -1095,6 +1134,23 @@ mod tests {
         // We can assert types in the test
         assert_eq!(output.input_value(), Some(&10.0)); // T=f64
         // output.latest_verdict_at(...) returns Option<&Step<Option<bool>>>
+    }
+
+    #[test]
+    fn test_checked_temporal_depth_matches_operators() {
+        // Must not drift from the operators' `get_max_lookahead` recursion.
+        for (_, formula) in crate::get_formulas(&[]) {
+            let monitor = StlMonitor::builder()
+                .formula(formula.clone())
+                .semantics(Rosi)
+                .build()
+                .unwrap();
+            assert_eq!(
+                checked_temporal_depth(&formula),
+                Some(monitor.temporal_depth()),
+                "{formula}"
+            );
+        }
     }
 
     #[test]
