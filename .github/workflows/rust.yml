@@ -56,6 +56,12 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
 
+      # pyo3 links the mstlo-python test binary against libpython.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
