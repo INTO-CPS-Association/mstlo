@@ -1037,6 +1037,68 @@ class TestMonitorOutputFormatting:
         assert output.input_value == 42.5
 
 
+    def test_verdict_at(self):
+        monitor = mstlo.Monitor(mstlo.Formula.gt("x", 5.0), semantics="DelayedQualitative")
+        output = monitor.update_batch({"x": [(10.0, 0.0), (1.0, 1.0)]})
+
+        assert output.verdict_at(0.0) is True
+        assert output.verdict_at(1.0) is False
+        assert output.verdict_at(0.5) is None
+
+    @pytest.mark.parametrize("timestamp", [-1.0, float("nan"), float("inf")])
+    def test_verdict_at_rejects_invalid_timestamp(self, timestamp):
+        monitor = mstlo.Monitor(mstlo.Formula.gt("x", 5.0))
+        output = monitor.update("x", 10.0, 0.0)
+
+        with pytest.raises(ValueError):
+            output.verdict_at(timestamp)
+
+    def test_verdict_at_returns_most_refined_rosi_interval(self):
+        formula = mstlo.parse_formula("F[0, 2](x > 0)")
+        monitor = mstlo.Monitor(formula, semantics="Rosi")
+        monitor.update("x", -1.0, 0.0)
+        monitor.update("x", -2.0, 1.0)
+        output = monitor.update_batch([("x", -3.0, 2.0)])
+
+        refinements = [value for ts, value in output.raw_outputs() if ts == 0.0]
+        assert refinements
+        assert output.verdict_at(0.0) == refinements[-1]
+        assert output.verdict_at(0.0) == dict(output.verdicts())[0.0]
+
+    def test_latest_verdict(self):
+        monitor = mstlo.Monitor(mstlo.Formula.gt("x", 5.0), semantics="DelayedQuantitative")
+
+        assert monitor.update_batch([]).latest_verdict() is None
+
+        output = monitor.update_batch({"x": [(10.0, 0.0), (1.0, 1.0)]})
+        assert output.latest_verdict() == (1.0, -4.0)
+
+    def test_raw_outputs_include_rosi_refinements(self):
+        formula = mstlo.parse_formula("G[0, 2](x > 0)")
+        monitor = mstlo.Monitor(formula, semantics="Rosi")
+        output = monitor.update_batch({"x": [(1.0, 0.0), (2.0, 1.0), (3.0, 2.0)]})
+
+        raw = output.raw_outputs()
+        assert len(raw) == output.total_raw_outputs()
+        assert len(raw) > len(output.verdicts())
+        assert output.all_raw_outputs() == raw
+
+    def test_iteration_yields_raw_outputs(self):
+        monitor = mstlo.Monitor(mstlo.Formula.gt("x", 5.0), semantics="DelayedQualitative")
+        output = monitor.update_batch({"x": [(10.0, 0.0), (1.0, 1.0)]})
+
+        assert list(output) == output.raw_outputs() == [(0.0, True), (1.0, False)]
+
+    def test_equality(self):
+        def run(semantics):
+            monitor = mstlo.Monitor(mstlo.Formula.gt("x", 5.0), semantics=semantics)
+            return monitor.update("x", 10.0, 0.0)
+
+        assert run("DelayedQuantitative") == run("DelayedQuantitative")
+        assert run("DelayedQuantitative") != run("DelayedQualitative")
+        assert run("DelayedQuantitative") != "not an output"
+
+
 class TestMonitorGetSignalIdentifiers:
     """Test getting signal identifiers from the monitor."""
 
