@@ -493,6 +493,9 @@ class Formula:
         Returns:
             Formula representing: `G[start,end](child)`
 
+        Raises:
+            ValueError: If a bound is not a valid duration or start > end.
+
         Examples:
             >>> # For the next 5 seconds, x must be > 0.5
             >>> Formula.always(0, 5, Formula.gt('x', 0.5))
@@ -514,6 +517,9 @@ class Formula:
 
         Returns:
             Formula representing: `F[start,end](child)`
+
+        Raises:
+            ValueError: If a bound is not a valid duration or start > end.
 
         Examples:
             >>> # Within 3 seconds, y must drop below 0.8
@@ -537,6 +543,9 @@ class Formula:
 
         Returns:
             Formula representing: `left U[start,end] right`
+
+        Raises:
+            ValueError: If a bound is not a valid duration or start > end.
 
         Examples:
             >>> # x > 0 must hold until y < 0.5 (within 5 seconds)
@@ -853,6 +862,9 @@ class Monitor:
             * Methods: has_verdicts(), total_raw_outputs(), is_pending(), verdicts()
             * Structured data access via `to_dict()`
 
+        Raises:
+            ValueError: If the timestamp is not a valid duration.
+
         Note:
             * Evaluations list may be empty if data is being buffered
             * For multi-signal formulas, the synchronizer may produce interpolated steps
@@ -1045,7 +1057,8 @@ class Monitor:
             the batch was empty.
 
         Raises:
-            ValueError: If the batch is not one of the two accepted forms.
+            ValueError: If the batch is not one of the two accepted forms, or a
+                timestamp is not a valid duration.
 
         Note:
             Steps are sorted by timestamp before evaluation, because the

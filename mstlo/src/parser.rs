@@ -48,7 +48,6 @@
 use crate::core::TimeInterval;
 use crate::formula_definition::FormulaDefinition;
 use crate::intern;
-use std::time::Duration;
 
 /// Error type for STL formula parsing.
 #[derive(Debug, Clone)]
@@ -246,7 +245,8 @@ impl<'a> Parser<'a> {
 
     /// Parses an interval literal `[start, end]` into [`TimeInterval`].
     ///
-    /// Interval bounds must be non-negative and satisfy `start <= end`.
+    /// Interval bounds must be non-negative, satisfy `start <= end` and fit in a
+    /// [`Duration`](std::time::Duration).
     fn parse_interval(&mut self) -> Result<TimeInterval, ParseError> {
         self.consume_char('[')?;
         let start = self.parse_number()?;
@@ -269,9 +269,9 @@ impl<'a> Parser<'a> {
             });
         }
 
-        Ok(TimeInterval {
-            start: Duration::from_secs_f64(start),
-            end: Duration::from_secs_f64(end),
+        TimeInterval::try_from_secs_f64(start, end).map_err(|message| ParseError {
+            message,
+            position: self.pos,
         })
     }
 
@@ -605,6 +605,7 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_simple_greater_than() {
@@ -1093,6 +1094,16 @@ mod tests {
         assert!(result.is_err());
         let error = format!("{}", result.err().unwrap());
         assert!(error.contains("Invalid interval"));
+    }
+
+    #[test]
+    fn test_parse_error_interval_bound_not_a_duration() {
+        // Used to panic in `Duration::from_secs_f64`.
+        let error = parse_stl("G[0, 99999999999999999999999](x > 0)").unwrap_err();
+        assert!(error.message.contains("upper bound 1e23 s must be finite"));
+        // A long enough digit string parses to inf.
+        let huge = "9".repeat(400);
+        assert!(parse_stl(&format!("G[0, {huge}](x > 0)")).is_err());
     }
 
     #[test]

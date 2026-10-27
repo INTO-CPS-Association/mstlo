@@ -646,6 +646,35 @@ class TestErrorHandling:
                 formula, semantics="DelayedQualitative", synchronization="invalid"
             )
 
+    @pytest.mark.parametrize(
+        "start, end", [(0.0, float("inf")), (float("nan"), 5.0), (-1.0, 5.0), (5.0, 1.0), (0.0, 1e23)]
+    )
+    def test_invalid_interval_bounds(self, start, end):
+        """Test that temporal constructors raise instead of panicking on invalid bounds."""
+        x = mstlo.Formula.gt("x", 0.0)
+        for make in (mstlo.Formula.always, mstlo.Formula.eventually):
+            with pytest.raises(ValueError):
+                make(start, end, x)
+        with pytest.raises(ValueError):
+            mstlo.Formula.until(start, end, x, x)
+
+    def test_temporal_depth_too_large(self):
+        """Test that a formula whose temporal depth overflows is rejected at build time."""
+        inner = mstlo.Formula.eventually(0.0, 1.8e19, mstlo.Formula.gt("x", 0.0))
+        with pytest.raises(ValueError, match="MAX_TEMPORAL_DEPTH"):
+            mstlo.Monitor(mstlo.Formula.always(0.0, 10.0, inner))
+
+    @pytest.mark.parametrize("timestamp", [float("inf"), float("nan"), -1.0, 1e23])
+    def test_invalid_timestamp(self, timestamp):
+        """Test that update and update_batch raise instead of panicking on invalid timestamps."""
+        monitor = mstlo.Monitor(mstlo.Formula.gt("x", 0.0))
+        with pytest.raises(ValueError):
+            monitor.update("x", 1.0, timestamp)
+        with pytest.raises(ValueError):
+            monitor.update_batch([("x", 1.0, timestamp)])
+        with pytest.raises(ValueError):
+            monitor.update_batch({"x": [(1.0, timestamp)]})
+
 
 class TestDeprecatedSynchronization:
     """`synchronization` is deprecated and does nothing but name an interpolation.

@@ -96,7 +96,8 @@ mod ring_buffer;
 mod synchronizer;
 
 pub use core::{
-    RobustnessInterval, RobustnessSemantics, SignalIdentifier, TimeInterval, Variables,
+    MAX_TEMPORAL_DEPTH, RobustnessInterval, RobustnessSemantics, SignalIdentifier, TimeInterval,
+    Variables,
 };
 pub use formula_definition::FormulaDefinition;
 pub use formulas::get_formulas;

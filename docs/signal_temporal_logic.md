@@ -20,7 +20,9 @@ This page covers the logic mstlo monitors and the four online semantics it can e
 
 Signal Temporal Logic (STL) [3] is a formalism for specifying properties of real-valued signals that evolve over time, providing a compact language to describe the desired behaviors of dynamic systems. STL evaluates properties over signals, which are defined as functions mapping a time domain (such as nonnegative real numbers, $\mathbb{R}_{\ge0}$) to a value domain.
 
-mstlo focuses on bounded STL, meaning all temporal operators are constrained by finite time intervals of the form $[a, b]$, where $0 \le a < b$.
+mstlo focuses on bounded STL, meaning all temporal operators are constrained by finite time intervals of the form $[a, b]$, where $0 \le a \le b$. A point interval $a = b$ is allowed. Unbounded intervals such as $[a, \infty)$ are not supported.
+
+Bounds are seconds stored as a Rust `Duration`, so each must be finite and at most about $1.8 \cdot 10^{19}$ s. Building a monitor fails if the formula's temporal depth $H(\varphi)$ (defined [below](#evaluation-semantics)) exceeds `MAX_TEMPORAL_DEPTH` ($2^{63}$ s). This limit splits the range of `Duration` evenly between formula depth and timestamps: the monitor's timestamp arithmetic cannot overflow as long as sample timestamps stay below $2^{63}$ s (about $2.9 \cdot 10^{11}$ years). Timestamps are not checked against this, so feeding larger ones to a formula near the depth limit may panic.
 
 The core syntax of STL is built from a minimal set of primitive operators:
 
@@ -54,7 +56,7 @@ All four semantics are evaluated over the signal prefix $x_{[0,i]}$, i.e. the sa
 
 In all four semantics, verdicts are emitted in timestamp order: the monitor gives a verdict at $\tau$ only once every earlier timestamp has one, so the output can be read as a piecewise-constant signal. For the delayed semantics this holds by construction, since a prefix that covers $\tau + H(\varphi)$ covers the depth of every earlier timestamp as well. RoSI gives an interval for every timestamp as soon as it exists, and later refinements of an earlier timestamp may follow verdicts for later ones. Only under the eager semantics does the order change which verdicts can be given, see [Chronological Verdicts](#chronological-verdicts).
 
-For the temporal operators, $I$ is an interval $[a,b]$ with $b>a \geq 0$, and $\tau + I = [\tau+a, \tau+b]$. The temporal depth $H(\varphi)$ of a formula is how far past $\tau$ its verdict at $\tau$ depends on the signal:
+For the temporal operators, $I$ is an interval $[a,b]$ with $b \geq a \geq 0$, and $\tau + I = [\tau+a, \tau+b]$. The temporal depth $H(\varphi)$ of a formula is how far past $\tau$ its verdict at $\tau$ depends on the signal:
 
 $$
 H(\mu) = 0 \qquad H(\neg\varphi) = H(\varphi) \qquad H(\varphi_1 \circ \varphi_2) = \max(H(\varphi_1), H(\varphi_2)) \text{ for } \circ \in \{\land, \lor, \rightarrow\}

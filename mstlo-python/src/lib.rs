@@ -17,6 +17,17 @@ fn py_parse_formula(formula_str: &str) -> PyResult<Formula> {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{}", e)))?;
     Ok(Formula { inner: formula })
 }
+
+fn interval_from_secs(start: f64, end: f64) -> PyResult<TimeInterval> {
+    TimeInterval::try_from_secs_f64(start, end).map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+fn timestamp_from_secs(timestamp: f64) -> PyResult<Duration> {
+    Duration::try_from_secs_f64(timestamp).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("invalid timestamp {timestamp:?}: {e}"))
+    })
+}
+
 #[pyclass(name = "Formula", module = "mstlo_python.mstlo_python", from_py_object)]
 #[derive(Clone)]
 struct Formula {
@@ -121,42 +132,33 @@ impl Formula {
 
     #[staticmethod]
     #[pyo3(text_signature = "(start, end, child)")]
-    fn always(start: f64, end: f64, child: &Formula) -> Self {
-        let interval = TimeInterval {
-            start: Duration::from_secs_f64(start),
-            end: Duration::from_secs_f64(end),
-        };
-        Formula {
+    fn always(start: f64, end: f64, child: &Formula) -> PyResult<Self> {
+        let interval = interval_from_secs(start, end)?;
+        Ok(Formula {
             inner: FormulaDefinition::Globally(interval, Box::new(child.inner.clone())),
-        }
+        })
     }
 
     #[staticmethod]
     #[pyo3(text_signature = "(start, end, child)")]
-    fn eventually(start: f64, end: f64, child: &Formula) -> Self {
-        let interval = TimeInterval {
-            start: Duration::from_secs_f64(start),
-            end: Duration::from_secs_f64(end),
-        };
-        Formula {
+    fn eventually(start: f64, end: f64, child: &Formula) -> PyResult<Self> {
+        let interval = interval_from_secs(start, end)?;
+        Ok(Formula {
             inner: FormulaDefinition::Eventually(interval, Box::new(child.inner.clone())),
-        }
+        })
     }
 
     #[staticmethod]
     #[pyo3(text_signature = "(start, end, left, right)")]
-    fn until(start: f64, end: f64, left: &Formula, right: &Formula) -> Self {
-        let interval = TimeInterval {
-            start: Duration::from_secs_f64(start),
-            end: Duration::from_secs_f64(end),
-        };
-        Formula {
+    fn until(start: f64, end: f64, left: &Formula, right: &Formula) -> PyResult<Self> {
+        let interval = interval_from_secs(start, end)?;
+        Ok(Formula {
             inner: FormulaDefinition::Until(
                 interval,
                 Box::new(left.inner.clone()),
                 Box::new(right.inner.clone()),
             ),
-        }
+        })
     }
 
     fn __str__(&self) -> String {
@@ -649,11 +651,11 @@ impl Monitor {
         }
     }
 
-    fn update(&mut self, signal: String, value: f64, timestamp: f64) -> PyMonitorOutput {
+    fn update(&mut self, signal: String, value: f64, timestamp: f64) -> PyResult<PyMonitorOutput> {
         let sig_ref = self.intern_signal_name(signal);
-        let step = Step::new(sig_ref, value, Duration::from_secs_f64(timestamp));
+        let step = Step::new(sig_ref, value, timestamp_from_secs(timestamp)?);
 
-        match &mut self.inner {
+        Ok(match &mut self.inner {
             InnerMonitor::Robustness(m) => {
                 let output = m.update(&step);
                 PyMonitorOutput {
@@ -672,7 +674,7 @@ impl Monitor {
                     inner: InnerMonitorOutput::Interval(output),
                 }
             }
-        }
+        })
     }
 
     fn get_signal_identifiers(&mut self) -> HashSet<&'static str> {
@@ -817,11 +819,7 @@ impl Monitor {
 
                 for sample in samples.try_iter()? {
                     let (value, timestamp) = extract_pair(&sample?, "(value, timestamp)")?;
-                    rust_steps.push(Step::new(
-                        sig_ref,
-                        value,
-                        Duration::from_secs_f64(timestamp),
-                    ));
+                    rust_steps.push(Step::new(sig_ref, value, timestamp_from_secs(timestamp)?));
                 }
             }
         } else {
@@ -849,7 +847,7 @@ impl Monitor {
                 rust_steps.push(Step::new(
                     sig_ref,
                     value,
-                    Duration::from_secs_f64(timestamp),
+                    timestamp_from_secs(timestamp)?,
                 ));
             }
         }

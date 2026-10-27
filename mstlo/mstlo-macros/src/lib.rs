@@ -858,6 +858,20 @@ fn parse_time_interval(input: ParseStream) -> Result<(Expr, Expr)> {
         }
     }
 
+    for (bound, which) in [(&start, "lower"), (&end, "upper")] {
+        if let Some(v) = try_eval_as_f64(bound)
+            && std::time::Duration::try_from_secs_f64(v).is_err()
+        {
+            return Err(syn::Error::new(
+                bound.span(),
+                format!(
+                    "invalid time interval: {which} bound ({v}) is not a valid duration\n  \
+                    help: interval bounds must be finite, non-negative and at most ~1.8e19 s"
+                ),
+            ));
+        }
+    }
+
     Ok((start, end))
 }
 
@@ -1303,4 +1317,17 @@ fn parse_predicate_value(input: ParseStream) -> Result<PredicateValue> {
         "expected a value (number, variable, $var reference, or parenthesized expression)\n  \
         help: valid values include: `5`, `3.14`, `-10`, `threshold`, `$threshold`, `(x + 1)`",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_literal_bound_that_is_not_a_duration() {
+        for input in ["G[0, 1e23](x > 0)", "G[0, 1e400](x > 0)", "G[0, -1](x > 0)"] {
+            let tokens: TokenStream2 = input.parse().unwrap();
+            assert!(parse_stl_formula(tokens).is_err(), "{input}");
+        }
+    }
 }
