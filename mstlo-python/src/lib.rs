@@ -6,7 +6,7 @@ use mstlo::parse_stl;
 use mstlo::{FormulaDefinition, RobustnessInterval, TimeInterval, Variables};
 use mstlo::{SignalInterpolation, Step, intern};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyFloat, PyList, PyTuple};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyIterator, PyList, PyTuple};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -286,73 +286,66 @@ impl PyMonitorOutput {
     fn verdicts(&self) -> PyResult<Py<PyList>> {
         Python::attach(|py| {
             let list = match &self.inner {
-                InnerMonitorOutput::Bool(o) => {
-                    let verdicts = o.verdicts();
-                    let items: Vec<_> = verdicts
-                        .iter()
-                        .map(|step| {
-                            PyTuple::new(
-                                py,
-                                [
-                                    step.timestamp
-                                        .as_secs_f64()
-                                        .into_pyobject(py)
-                                        .unwrap()
-                                        .into_any(),
-                                    PyBool::new(py, step.value).to_owned().into_any(),
-                                ],
-                            )
-                            .unwrap()
-                        })
-                        .collect();
-                    PyList::new(py, items).unwrap()
-                }
-                InnerMonitorOutput::Float(o) => {
-                    let verdicts = o.verdicts();
-                    let items: Vec<_> = verdicts
-                        .iter()
-                        .map(|step| {
-                            PyTuple::new(
-                                py,
-                                [
-                                    step.timestamp
-                                        .as_secs_f64()
-                                        .into_pyobject(py)
-                                        .unwrap()
-                                        .into_any(),
-                                    PyFloat::new(py, step.value).to_owned().into_any(),
-                                ],
-                            )
-                            .unwrap()
-                        })
-                        .collect();
-                    PyList::new(py, items).unwrap()
-                }
-                InnerMonitorOutput::Interval(o) => {
-                    let verdicts = o.verdicts();
-                    let items: Vec<_> = verdicts
-                        .iter()
-                        .map(|step| {
-                            let interval = PyTuple::new(py, [step.value.0, step.value.1]).unwrap();
-                            PyTuple::new(
-                                py,
-                                [
-                                    step.timestamp
-                                        .as_secs_f64()
-                                        .into_pyobject(py)
-                                        .unwrap()
-                                        .into_any(),
-                                    interval.into_any(),
-                                ],
-                            )
-                            .unwrap()
-                        })
-                        .collect();
-                    PyList::new(py, items).unwrap()
-                }
-            };
+                InnerMonitorOutput::Bool(o) => steps_to_list(py, &o.verdicts()),
+                InnerMonitorOutput::Float(o) => steps_to_list(py, &o.verdicts()),
+                InnerMonitorOutput::Interval(o) => steps_to_list(py, &o.verdicts()),
+            }?;
             Ok(list.unbind())
         })
+    }
+
+    /// Latest verdict at `timestamp` (in seconds), or `None` if there is none.
+    fn verdict_at(&self, py: Python<'_>, timestamp: f64) -> PyResult<Option<Py<PyAny>>> {
+        let timestamp = Duration::try_from_secs_f64(timestamp).map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "verdict_at() needs a finite, non-negative timestamp in seconds, got {timestamp}"
+            ))
+        })?;
+        let value = match &self.inner {
+            InnerMonitorOutput::Bool(o) => o.verdict_at(timestamp).map(|v| v.to_py(py)),
+            InnerMonitorOutput::Float(o) => o.verdict_at(timestamp).map(|v| v.to_py(py)),
+            InnerMonitorOutput::Interval(o) => o.verdict_at(timestamp).map(|v| v.to_py(py)),
+        };
+        value.transpose().map(|v| v.map(Bound::unbind))
+    }
+
+    /// Last emitted output as a `(timestamp, value)` tuple, or `None` if there is none.
+    fn latest_verdict(&self, py: Python<'_>) -> PyResult<Option<Py<PyTuple>>> {
+        let step = match &self.inner {
+            InnerMonitorOutput::Bool(o) => o.latest_verdict().map(|s| step_to_tuple(py, s)),
+            InnerMonitorOutput::Float(o) => o.latest_verdict().map(|s| step_to_tuple(py, s)),
+            InnerMonitorOutput::Interval(o) => o.latest_verdict().map(|s| step_to_tuple(py, s)),
+        };
+        step.transpose().map(|s| s.map(Bound::unbind))
+    }
+
+    /// All emitted outputs in evaluation order, including RoSI refinements.
+    fn raw_outputs(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let list = match &self.inner {
+            InnerMonitorOutput::Bool(o) => steps_to_list(py, o.raw_outputs()),
+            InnerMonitorOutput::Float(o) => steps_to_list(py, o.raw_outputs()),
+            InnerMonitorOutput::Interval(o) => steps_to_list(py, o.raw_outputs()),
+        }?;
+        Ok(list.unbind())
+    }
+
+    /// Alias of `raw_outputs()`, mirroring the Rust API.
+    fn all_raw_outputs(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        self.raw_outputs(py)
+    }
+
+    /// Iterates over the raw outputs, like iterating a `&MonitorOutput` in Rust.
+    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyIterator>> {
+        Ok(self.raw_outputs(py)?.bind(py).try_iter()?.unbind())
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        match (&self.inner, &other.inner) {
+            (InnerMonitorOutput::Bool(a), InnerMonitorOutput::Bool(b)) => a == b,
+            (InnerMonitorOutput::Float(a), InnerMonitorOutput::Float(b)) => a == b,
+            (InnerMonitorOutput::Interval(a), InnerMonitorOutput::Interval(b)) => a == b,
+            _ => false,
+        }
     }
 
     /// Deprecated: use verdicts() instead.
@@ -882,6 +875,54 @@ fn extract_pair(item: &Bound<'_, PyAny>, expected: &str) -> PyResult<(f64, f64)>
     }
 
     Ok((tuple.get_item(0)?.extract()?, tuple.get_item(1)?.extract()?))
+}
+
+/// Converts a verdict value to its Python form: `bool`, `float`, or a `(lower, upper)` tuple.
+trait ToPyVerdict {
+    fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
+}
+
+impl ToPyVerdict for bool {
+    fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        Ok(PyBool::new(py, *self).to_owned().into_any())
+    }
+}
+
+impl ToPyVerdict for f64 {
+    fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        Ok(PyFloat::new(py, *self).into_any())
+    }
+}
+
+impl ToPyVerdict for RobustnessInterval {
+    fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        Ok(PyTuple::new(py, [self.0, self.1])?.into_any())
+    }
+}
+
+/// Converts a verdict step to a `(timestamp_seconds, value)` tuple.
+fn step_to_tuple<'py, Y: ToPyVerdict>(
+    py: Python<'py>,
+    step: &Step<Y>,
+) -> PyResult<Bound<'py, PyTuple>> {
+    PyTuple::new(
+        py,
+        [
+            PyFloat::new(py, step.timestamp.as_secs_f64()).into_any(),
+            step.value.to_py(py)?,
+        ],
+    )
+}
+
+fn steps_to_list<'py, 'a, Y: ToPyVerdict + 'a>(
+    py: Python<'py>,
+    steps: impl IntoIterator<Item = &'a Step<Y>>,
+) -> PyResult<Bound<'py, PyList>> {
+    let items = steps
+        .into_iter()
+        .map(|step| step_to_tuple(py, step))
+        .collect::<PyResult<Vec<_>>>()?;
+    PyList::new(py, items)
 }
 
 fn convert_output_to_dict<Y: Clone, F>(

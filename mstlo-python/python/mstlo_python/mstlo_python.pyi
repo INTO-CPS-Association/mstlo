@@ -38,7 +38,7 @@ Examples using Formula builder methods:
     >>> print(repr(output))  # Debug format
 """
 
-from typing import Iterable, List, Literal, Mapping, Optional, Tuple, TypedDict, Union
+from typing import Iterable, Iterator, List, Literal, Mapping, Optional, Tuple, TypedDict, Union
 
 __version__: str
 
@@ -665,6 +665,64 @@ class MonitorOutput:
             * bool for qualitative semantics
             * float for robustness semantics
             * tuple[float, float] for Rosi semantics
+        """
+        ...
+
+    def verdict_at(self, timestamp: float) -> Optional[Union[bool, float, Tuple[float, float]]]:
+        """
+        Get the verdict at a timestamp.
+
+        When refinement produces several values at the same timestamp, the
+        last (most refined) one is returned.
+
+        Args:
+            timestamp: The timestamp in seconds. It must match a verdict's
+                timestamp exactly.
+
+        Returns:
+            The verdict value, or None if this output has none at `timestamp`.
+
+        Raises:
+            ValueError: If `timestamp` is negative or not finite.
+        """
+        ...
+
+    def latest_verdict(self) -> Optional[Tuple[float, Union[bool, float, Tuple[float, float]]]]:
+        """
+        Get the last emitted output as a (timestamp, value) tuple.
+
+        Returns:
+            The last raw output, or None if this output has none.
+        """
+        ...
+
+    def raw_outputs(self) -> List[Tuple[float, Union[bool, float, Tuple[float, float]]]]:
+        """
+        Get every emitted output in evaluation order, including intermediate
+        refinements (RoSI emits several values for the same timestamp).
+
+        Most users should prefer :meth:`verdicts` instead.
+
+        Returns:
+            List of (timestamp, value) tuples.
+        """
+        ...
+
+    def all_raw_outputs(self) -> List[Tuple[float, Union[bool, float, Tuple[float, float]]]]:
+        """
+        Alias of :meth:`raw_outputs`.
+        """
+        ...
+
+    def __iter__(self) -> Iterator[Tuple[float, Union[bool, float, Tuple[float, float]]]]:
+        """
+        Iterate over the raw outputs, see :meth:`raw_outputs`.
+        """
+        ...
+
+    def __eq__(self, other: object) -> bool:
+        """
+        Two outputs are equal if they have the same input step and evaluations.
         """
         ...
 
