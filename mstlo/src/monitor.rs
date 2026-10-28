@@ -491,6 +491,79 @@ impl<T: Clone + Interpolatable, Y> StlMonitor<T, Y> {
         self.process_step(step)
     }
 
+    /// Settles every pending verdict up to the newest input timestamp `t_end`.
+    ///
+    /// A verdict at `t` waits for input up to `t + depth`, with `depth` the
+    /// [temporal depth](Self::temporal_depth), so those on `(t_end - depth, t_end]` may
+    /// still be pending. This decides them by holding every signal at its last value (its
+    /// initial value, if it was never sampled) until `t_end + depth`.
+    ///
+    /// The held values become part of the trace, so later input must be newer than
+    /// `t_end + depth`; older input is ignored with a warning. Use [`reset`](Self::reset)
+    /// to monitor a new trace. Not supported under [`Algorithm::Naive`], where it warns
+    /// and returns an empty output.
+    ///
+    /// # Returns
+    ///
+    /// A [`MonitorOutput`] with the verdicts at `timestamp <= t_end`, and
+    /// [`MonitorOutput::input`] set to `None`. Under [`EagerQualitative`], verdicts are
+    /// breakpoints, so the output may end before `t_end` when the last emitted verdict
+    /// already holds through it. Empty if the monitor never received input.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mstlo::monitor::*;
+    /// use mstlo::{steps, stl};
+    ///
+    /// let mut monitor = StlMonitor::builder()
+    ///     .formula(stl!(G[0, 5](temperature < 30.0)))
+    ///     .semantics(DelayedQualitative)
+    ///     .build()
+    ///     .unwrap();
+    ///
+    /// monitor.update_batch(&steps! { "temperature": [(25.0, 0s), (26.0, 1s), (27.0, 2s)] });
+    /// // Nothing is decided yet: every window reaches past the last sample at 2s.
+    ///
+    /// let output = monitor.finish();
+    /// assert_eq!(output.verdicts().len(), 3); // t = 0s, 1s and 2s
+    /// assert!(output.verdicts().iter().all(|verdict| verdict.value));
+    /// ```
+    pub fn finish(&mut self) -> MonitorOutput<T, Y>
+    where
+        Y: RobustnessSemantics + Debug,
+    {
+        if self.algorithm == Algorithm::Naive {
+            eprintln!(
+                "Warning: finish() is not supported by the Naive algorithm. Use Algorithm::Incremental instead."
+            );
+            return MonitorOutput::empty();
+        }
+        let Some(end) = self.synchronizer.end_of_trace() else {
+            return MonitorOutput::empty();
+        };
+
+        // Hold every signal until `end`, so that every signal is known at `end`.
+        let mut evaluations = Vec::new();
+        for step in self.synchronizer.extension_to(end) {
+            evaluations.extend(self.process_step(&step).evaluations);
+        }
+
+        // Holding them for one temporal depth more settles every verdict up to `end`.
+        for step in self.synchronizer.extension_to(end + self.temporal_depth()) {
+            evaluations.extend(self.process_step(&step).evaluations);
+        }
+
+        // Verdicts past `end` are about the held values alone.
+        for evaluation in &mut evaluations {
+            evaluation.outputs.retain(|output| output.timestamp <= end);
+        }
+        MonitorOutput {
+            input: None,
+            evaluations,
+        }
+    }
+
     /// Updates the monitor with a batch of input steps.
     ///
     /// Each step already names its own signal, so the batch is simply a flat

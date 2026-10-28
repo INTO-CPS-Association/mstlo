@@ -781,6 +781,28 @@ impl Monitor {
         }
     }
 
+    /// Settles every pending verdict up to the newest input timestamp `t_end`.
+    ///
+    /// Every signal holds its last value until `t_end + depth`, which decides every
+    /// verdict up to `t_end`. The held values become part of the trace, so later input
+    /// must be newer than `t_end + depth`; older input is ignored with a warning. Use
+    /// `reset()` to monitor a new trace.
+    fn finish(&mut self) -> PyMonitorOutput {
+        match &mut self.inner {
+            InnerMonitor::Robustness(m) => PyMonitorOutput {
+                inner: InnerMonitorOutput::Float(m.finish()),
+            },
+            InnerMonitor::EagerQualitative(m) | InnerMonitor::DelayedQualitative(m) => {
+                PyMonitorOutput {
+                    inner: InnerMonitorOutput::Bool(m.finish()),
+                }
+            }
+            InnerMonitor::Rosi(m) => PyMonitorOutput {
+                inner: InnerMonitorOutput::Interval(m.finish()),
+            },
+        }
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "Monitor(semantics='{}', algorithm='{}', signal_interpolation='{}')",
