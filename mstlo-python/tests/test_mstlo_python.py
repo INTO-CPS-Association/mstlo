@@ -1649,5 +1649,60 @@ class TestMonitorReset:
         assert len(run) > 0  # Should produce verdicts without error
 
 
+class TestMonitorFinish:
+    """Tests for monitor.finish()."""
+
+    def _make_monitor(self, semantics="DelayedQuantitative"):
+        return mstlo.Monitor(mstlo.parse_formula("G[0, 5](x > 10)"), semantics=semantics)
+
+    def _feed(self, monitor, values=(15.0, 12.0, 11.0)):
+        for ts, value in enumerate(values):
+            monitor.update("x", value, float(ts))
+
+    def test_finish_settles_pending_verdicts(self):
+        """The last values are held, so every verdict up to the last input settles."""
+        monitor = self._make_monitor()
+        self._feed(monitor)
+        assert monitor.finish().verdicts() == [(0.0, 1.0), (1.0, 1.0), (2.0, 1.0)]
+
+    @pytest.mark.parametrize(
+        "semantics", ["DelayedQualitative", "EagerQualitative", "DelayedQuantitative", "Rosi"]
+    )
+    def test_finish_under_every_semantics(self, semantics):
+        """Every semantics settles a verdict at t=0 that agrees with the held trace."""
+        monitor = self._make_monitor(semantics)
+        self._feed(monitor, values=(15.0, 8.0, 11.0))
+        verdicts = dict(monitor.finish().verdicts())
+        expected = {
+            "DelayedQualitative": False,
+            "EagerQualitative": False,
+            "DelayedQuantitative": -2.0,
+            "Rosi": (-2.0, -2.0),
+        }[semantics]
+        if semantics == "EagerQualitative":
+            # Eager decided the violation at 1s already; finish() settles the rest.
+            assert all(ts <= 2.0 for ts in verdicts)
+        else:
+            assert verdicts[0.0] == expected
+
+    def test_input_before_the_held_values_end_is_ignored(self):
+        monitor = self._make_monitor()
+        self._feed(monitor)
+        monitor.finish()
+        assert not monitor.update("x", 20.0, 3.0).has_verdicts()
+
+    def test_reset_after_finish(self):
+        monitor = self._make_monitor()
+        self._feed(monitor)
+        first = monitor.finish().verdicts()
+        monitor.reset()
+        self._feed(monitor)
+        assert monitor.finish().verdicts() == first
+
+    def test_finish_on_empty_monitor(self):
+        monitor = self._make_monitor()
+        assert not monitor.finish().has_verdicts()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

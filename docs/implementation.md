@@ -174,6 +174,19 @@ The two bounds tighten independently. In `G[0,10](x > 0)`, for instance, the fir
 
 An interval collapses to a point once every signal is known at $t+h$, where $h$ is the formula's horizon: the interval upper bounds summed along its deepest chain of temporal operators. That point is the delayed robustness value, so the two semantics agree wherever the delayed one answers. For `G[0,1.5]((x > 0) -> F[0.5,2](y > 0))` the horizon is $1.5+2=3.5$, and feeding $x$ at $0,1,2,3.5$ and $y$ at $1,3.5$ gives $(-\infty,\infty)$ at $t=0$ on every update until the samples at $3.5$ arrive, which finalize it at $(1,1)$.
 
+### Ending a Trace
+
+A verdict at $t$ waits for every signal up to $t+h$, so when a trace ends at $t_{end}$, the verdicts on $(t_{end}-h, t_{end}]$ are never decided: the delayed semantics never emit them, and their RoSI intervals stay open. `finish()` decides them by holding every signal at its last value until $t_{end}+h$, the zero-order-hold extension of the trace, and reports the verdicts up to $t_{end}$. Those on $(t_{end}, t_{end}+h]$ read nothing but held values, so they are not reported:
+
+```rust
+monitor.update_batch(&steps! { "x": [(1.0, 0s), (1.0, 1s), (1.0, 2s)] });
+let output = monitor.finish(); // G[0,5](x > 0) is true at 0, 1 and 2
+```
+
+The output's `input` is `None`. Under the eager semantics the verdicts are breakpoints, so the output may end before $t_{end}$ when the last verdict already holds through it.
+
+Holding the last value is an assumption about the system, not an observation. A verdict whose window reaches past $t_{end}$ is read over the held value, so `F[0,5](x > 0)` is false at $t_{end}$ if $x$ ended non-positive, even if it would have become positive just after. The held values are part of the trace, which now ends at $t_{end}+h$. Later input continues it from there, and input at or before $t_{end}+h$ is ignored with a warning, like any out-of-order step. Call `reset()` to monitor a new trace. In Python, `finish()` works the same way. The naive algorithm does not support `finish()`: it warns and returns an empty output.
+
 ## Settings that can hurt performance
 
 There are certain settings where the combination of formula and signal characteristics can significantly impact performance.

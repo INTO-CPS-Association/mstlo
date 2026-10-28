@@ -1087,6 +1087,35 @@ class Monitor:
         """
         ...
 
+    def finish(self) -> MonitorOutput:
+        """
+        Settle every pending verdict up to the newest input timestamp t_end.
+
+        A verdict at t waits for input up to t + depth, with depth the temporal
+        depth, so those on (t_end - depth, t_end] are still pending. This decides
+        them by holding every signal at its last value (its initial value, if it
+        was never sampled) until t_end + depth.
+
+        The held values become part of the trace, so later input must be newer
+        than t_end + depth; older input is ignored with a warning. Use reset()
+        to monitor a new trace. Not supported by the Naive algorithm, which
+        warns and returns an empty output.
+
+        Returns:
+            MonitorOutput with the verdicts at or before t_end. Its input
+            properties are None. Under EagerQualitative, verdicts are
+            breakpoints, so the output may end before t_end when the last
+            verdict already holds through it. Empty if the monitor never
+            received input.
+
+        Examples:
+            >>> monitor = Monitor(parse_formula("G[0, 5](x > 0)"))
+            >>> for ts in range(3):
+            ...     monitor.update("x", 1.0, float(ts))
+            >>> monitor.finish().verdicts()  # [(0.0, 1.0), (1.0, 1.0), (2.0, 1.0)]
+        """
+        ...
+
     def update_batch(
         self,
         steps: Union[

@@ -84,8 +84,9 @@ impl Interpolatable for f64 {
 pub struct Synchronizer<T> {
     /// How signals are read between their own samples. Applied at the predicate layer.
     interpolation: SignalInterpolation,
-    /// Timestamp of the last admitted step per signal.
-    last_timestamps: HashMap<&'static str, Duration>,
+    /// Timestamp and value of the last admitted step per signal. The value is held by
+    /// [`Self::extension_to`].
+    last_samples: HashMap<&'static str, (Duration, T)>,
     /// Initial value per signal, as configured. Survives [`Self::reset`].
     initial_values: BTreeMap<&'static str, T>,
     /// Those of [`Self::initial_values`] not yet resolved, in emission order.
@@ -102,7 +103,7 @@ where
     pub fn new(interpolation: SignalInterpolation) -> Self {
         Self {
             interpolation,
-            last_timestamps: HashMap::new(),
+            last_samples: HashMap::new(),
             initial_values: BTreeMap::new(),
             pending_inits: BTreeMap::new(),
             pending: VecDeque::new(),
@@ -128,6 +129,34 @@ where
         !self.initial_values.is_empty()
     }
 
+    /// Newest timestamp admitted for any signal, or `None` if no step was ever admitted.
+    pub fn end_of_trace(&self) -> Option<Duration> {
+        self.last_samples.values().map(|(t, _)| *t).max()
+    }
+
+    /// The zero-order-hold extension of the trace to `at`: one step per known signal,
+    /// repeating its last value (its initial value, if it was never sampled) at `at`.
+    ///
+    /// Signals already sampled at or after `at` are skipped. Steps are sorted by signal name.
+    pub fn extension_to(&self, at: Duration) -> Vec<Step<T>> {
+        let mut signals: Vec<&'static str> = self
+            .last_samples
+            .keys()
+            .chain(self.initial_values.keys())
+            .copied()
+            .collect();
+        signals.sort_unstable();
+        signals.dedup();
+        signals
+            .into_iter()
+            .filter_map(|signal| match self.last_samples.get(signal) {
+                Some((t, _)) if *t >= at => None,
+                Some((_, value)) => Some(Step::new(signal, *value, at)),
+                None => Some(Step::new(signal, *self.initial_values.get(signal)?, at)),
+            })
+            .collect()
+    }
+
     /// Returns how this synchronizer reads signals between their own samples.
     pub fn interpolation(&self) -> SignalInterpolation {
         self.interpolation
@@ -141,7 +170,7 @@ where
     where
         T: Copy,
     {
-        self.last_timestamps.clear();
+        self.last_samples.clear();
         self.pending.clear();
         self.pending_inits = self.initial_values.clone();
     }
@@ -150,8 +179,8 @@ where
     /// internal data structures.
     pub fn heap_size(&self) -> usize {
         self.pending.capacity() * std::mem::size_of::<Step<T>>()
-            + self.last_timestamps.capacity()
-                * (std::mem::size_of::<&str>() + std::mem::size_of::<Duration>() + 1)
+            + self.last_samples.capacity()
+                * (std::mem::size_of::<&str>() + std::mem::size_of::<(Duration, T)>() + 1)
             + (self.initial_values.len() + self.pending_inits.len())
                 * (std::mem::size_of::<&str>() + std::mem::size_of::<T>() + 1)
     }
@@ -167,7 +196,7 @@ where
         let current_time = current_step.timestamp;
 
         // Validate that timestamp is strictly increasing for this signal
-        if let Some(prev_time) = self.last_timestamps.get(&signal_id)
+        if let Some((prev_time, _)) = self.last_samples.get(&signal_id)
             && current_time <= *prev_time
         {
             eprintln!(
@@ -185,14 +214,15 @@ where
                 // Past t=0 the prefix is fixed: every signal still without a sample takes
                 // its initial value from t=0.
                 for (signal, value) in std::mem::take(&mut self.pending_inits) {
-                    self.last_timestamps.insert(signal, Duration::ZERO);
+                    self.last_samples.insert(signal, (Duration::ZERO, value));
                     self.pending
                         .push_back(Step::new(signal, value, Duration::ZERO));
                 }
             }
         }
 
-        self.last_timestamps.insert(signal_id, current_time);
+        self.last_samples
+            .insert(signal_id, (current_time, current_step.value));
         self.pending.push_back(current_step);
     }
 }
